@@ -197,3 +197,5 @@ checkpoints/
 *.tmp
 .DS_Store
 Thumbs.db
+
+KAN_1_v_rest_ipynb/fast-kan/
