@@ -82,6 +82,9 @@ target/
 profile_default/
 ipython_config.py
 
+# PyPI configuration file
+.pypirc
+
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is
 #   intended to run in multiple environments; otherwise, check them in:
@@ -169,3 +172,28 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# 忽略实验数据文件
+*.csv
+*.npy
+*.mat
+*.nii
+*.h5
+*.pth
+*.ckpt
+
+# 忽略 TensorFlow / PyTorch checkpoint
+checkpoint/
+checkpoints/
+
+# VSCode & PyCharm 配置
+.vscode/
+.idea/
+
+# Jupyter Notebook 自动生成的 checkpoint 目录
+.ipynb_checkpoints/
+
+# 其他
+*.tmp
+.DS_Store
+Thumbs.db
