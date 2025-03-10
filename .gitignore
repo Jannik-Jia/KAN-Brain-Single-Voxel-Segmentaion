@@ -199,3 +199,13 @@ checkpoints/
 Thumbs.db
 
 KAN_1_v_rest_ipynb/fast-kan/
+
+KAN_1_v_rest_ipynb/figures/
+
+KAN_1_v_rest_ipynb/models/
+
+KAN_1_v_rest_ipynb/results/
+
+KAN_1_v_rest_ipynb/video_img/
+
+KAN_1_v_rest_ipynb/model/
