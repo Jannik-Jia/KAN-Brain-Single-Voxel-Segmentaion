@@ -15,6 +15,7 @@ from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bo
 from scipy.optimize import linear_sum_assignment
 import time
 from tqdm import tqdm
+from joblib import Parallel, delayed   
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,7 +27,7 @@ logger = get_logger(__name__)
 def analyze_optimal_clusters(data, min_clusters=2, max_clusters=10, methods=None, 
                            verbose=True, plot=True, save_name=None):
     """
-    分析最佳聚类数量和方法
+    分析最佳聚类数量和方法（并行版本）
     
     参数：
         data: 输入数据
@@ -40,6 +41,8 @@ def analyze_optimal_clusters(data, min_clusters=2, max_clusters=10, methods=None
     返回：
         best_results: 最佳聚类结果的字典
     """
+    from joblib import Parallel, delayed
+    
     if methods is None:
         methods = CLUSTERING['methods']
     
@@ -60,84 +63,110 @@ def analyze_optimal_clusters(data, min_clusters=2, max_clusters=10, methods=None
     davies_scores = {method: [] for method in methods}
     cluster_labels = {method: {} for method in methods}
     
-    # 尝试不同的聚类数量和方法
-    for n_clusters in tqdm(range(min_clusters, max_clusters+1), desc="聚类数量"):
-        if verbose:
-            logger.info(f"\n尝试 {n_clusters} 个聚类:")
-        
-        for method in methods:
-            start_time = time.time()
-            if verbose:
-                logger.info(f"  方法: {method}...", end="", flush=True)
-            
+    # 定义单个聚类评估任务
+    def evaluate_cluster(n_clusters, method):
+        try:
             # 创建聚类模型
             if method == 'kmeans':
                 cluster_model = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
             elif method == 'spectral':
                 cluster_model = SpectralClustering(n_clusters=n_clusters, random_state=42, 
-                                                  affinity='nearest_neighbors', 
-                                                  n_neighbors=min(30, data.shape[0]//100))
+                                                 affinity='nearest_neighbors', 
+                                                 n_neighbors=min(30, data.shape[0]//100))
             elif method == 'agglomerative':
                 cluster_model = AgglomerativeClustering(n_clusters=n_clusters)
             elif method == 'dbscan':
-                # DBSCAN不需要指定聚类数，但需要合适的eps和min_samples
-                # 在这里跳过，因为它不适合这种评估方式
-                continue
+                # DBSCAN不适合这种评估方式
+                return {'method': method, 'n_clusters': n_clusters, 'success': False}
             else:
-                if verbose:
-                    logger.warning(f"不支持的聚类方法: {method}")
-                continue
+                return {'method': method, 'n_clusters': n_clusters, 'success': False}
             
             # 执行聚类
-            try:
-                labels = cluster_model.fit_predict(data)
-                
-                # 存储标签
-                cluster_labels[method][n_clusters] = labels
-                
-                # 计算聚类评估指标
-                if len(np.unique(labels)) > 1:  # 确保至少有两个聚类
-                    # 为了加速，使用数据样本计算指标
-                    if data.shape[0] > 10000:
-                        sample_idx = np.random.choice(data.shape[0], 10000, replace=False)
-                        sample_data = data[sample_idx]
-                        sample_labels = labels[sample_idx]
-                        sil_score = silhouette_score(sample_data, sample_labels)
-                        cal_score = calinski_harabasz_score(sample_data, sample_labels)
-                        dav_score = davies_bouldin_score(sample_data, sample_labels)
-                    else:
-                        sil_score = silhouette_score(data, labels)
-                        cal_score = calinski_harabasz_score(data, labels)
-                        dav_score = davies_bouldin_score(data, labels)
-                    
-                    silhouette_scores[method].append(sil_score)
-                    calinski_scores[method].append(cal_score)
-                    davies_scores[method].append(dav_score)
-                    
-                    elapsed = time.time() - start_time
-                    if verbose:
-                        logger.info(f" 完成! ({elapsed:.1f}秒)")
-                        logger.info(f"    轮廓系数: {sil_score:.4f}")
-                        logger.info(f"    Calinski-Harabasz指数: {cal_score:.1f}")
-                        logger.info(f"    Davies-Bouldin指数: {dav_score:.4f}")
-                    
-                    # 统计不同类别的样本数
-                    unique, counts = np.unique(labels, return_counts=True)
-                    dist_str = ", ".join([f"类别{int(u)}:{c}" for u, c in zip(unique, counts)])
-                    if verbose:
-                        logger.info(f"    类别分布: {dist_str}")
+            labels = cluster_model.fit_predict(data)
+            
+            # 计算聚类评估指标
+            if len(np.unique(labels)) > 1:  # 确保至少有两个聚类
+                # 为了加速，使用数据样本计算指标
+                if data.shape[0] > 10000:
+                    sample_idx = np.random.choice(data.shape[0], 10000, replace=False)
+                    sample_data = data[sample_idx]
+                    sample_labels = labels[sample_idx]
+                    sil_score = silhouette_score(sample_data, sample_labels)
+                    cal_score = calinski_harabasz_score(sample_data, sample_labels)
+                    dav_score = davies_bouldin_score(sample_data, sample_labels)
                 else:
-                    if verbose:
-                        logger.warning(f" 警告: {method} 产生了单一聚类或空聚类")
-                    silhouette_scores[method].append(-1)
-                    calinski_scores[method].append(-1)
-                    davies_scores[method].append(float('inf'))
-            except Exception as e:
-                if verbose:
-                    logger.error(f" 评估指标计算错误: {e}")
-                silhouette_scores[method].append(-1)
-                calinski_scores[method].append(-1)
-                davies_scores[method].append(float('inf'))
+                    sil_score = silhouette_score(data, labels)
+                    cal_score = calinski_harabasz_score(data, labels)
+                    dav_score = davies_bouldin_score(data, labels)
+                
+                # 获取类别分布
+                unique, counts = np.unique(labels, return_counts=True)
+                
+                return {
+                    'method': method,
+                    'n_clusters': n_clusters,
+                    'silhouette': sil_score,
+                    'calinski': cal_score,
+                    'davies': dav_score,
+                    'labels': labels,
+                    'distribution': dict(zip(unique.tolist(), counts.tolist())),
+                    'success': True
+                }
+            else:
+                return {
+                    'method': method,
+                    'n_clusters': n_clusters,
+                    'silhouette': -1,
+                    'calinski': -1,
+                    'davies': float('inf'),
+                    'labels': labels,
+                    'success': False
+                }
+        except Exception as e:
+            return {
+                'method': method,
+                'n_clusters': n_clusters,
+                'error': str(e),
+                'success': False
+            }
+    
+    # 并行执行所有聚类任务
+    results = Parallel(n_jobs=-1)(
+        delayed(evaluate_cluster)(n_clusters, method)
+        for n_clusters in range(min_clusters, max_clusters+1)
+        for method in methods
+    )
+    
+    # 处理结果
+    for result in results:
+        method = result['method']
+        n_clusters = result['n_clusters']
+        
+        if result['success']:
+            silhouette_scores[method].append(result['silhouette'])
+            calinski_scores[method].append(result['calinski'])
+            davies_scores[method].append(result['davies'])
+            cluster_labels[method][n_clusters] = result['labels']
+            
+            if verbose:
+                logger.info(f"\n{method} 聚类数量 {n_clusters}:")
+                logger.info(f"  轮廓系数: {result['silhouette']:.4f}")
+                logger.info(f"  Calinski-Harabasz指数: {result['calinski']:.1f}")
+                logger.info(f"  Davies-Bouldin指数: {result['davies']:.4f}")
+                
+                # 输出类别分布
+                dist_str = ", ".join([f"类别{int(u)}:{c}" for u, c in result['distribution'].items()])
+                logger.info(f"  类别分布: {dist_str}")
+        else:
+            if verbose:
+                if 'error' in result:
+                    logger.warning(f"  {method} 聚类数量 {n_clusters} 评估失败: {result['error']}")
+                else:
+                    logger.warning(f"  {method} 聚类数量 {n_clusters} 产生了单一聚类或空聚类")
+            
+            silhouette_scores[method].append(-1)
+            calinski_scores[method].append(-1)
+            davies_scores[method].append(float('inf'))
     
     # 绘制评估指标
     if plot:
@@ -219,11 +248,45 @@ def analyze_optimal_clusters(data, min_clusters=2, max_clusters=10, methods=None
             logger.info(f"  类别分布: {dist_str}")
     
     return best_results
+def compute_confusion_matrix(labels1, labels2):
+    """
+    计算两组标签之间的混淆矩阵，使用矩阵运算优化
+    
+    参数:
+        labels1: 第一组标签
+        labels2: 第二组标签
+        
+    返回:
+        matrix: 混淆矩阵
+        unique1: labels1中的唯一标签
+        unique2: labels2中的唯一标签
+    """
+    # 获取唯一标签
+    unique1 = np.unique(labels1)
+    unique2 = np.unique(labels2)
+    
+    # 创建混淆矩阵
+    matrix = np.zeros((len(unique1), len(unique2)), dtype=int)
+    
+    # 为标签创建映射
+    label1_to_idx = {label: i for i, label in enumerate(unique1)}
+    
+    # 转换标签为索引值
+    index1 = np.array([label1_to_idx[label] for label in labels1])
+    
+    # 为每个标签2的值计算矩阵
+    for j, label2 in enumerate(unique2):
+        mask = (labels2 == label2)
+        # 使用np.bincount进行快速计数
+        counts = np.bincount(index1[mask], minlength=len(unique1))
+        matrix[:, j] = counts
+    
+    return matrix, unique1, unique2
 
 def visualize_cluster_vs_labels(cluster_labels, original_labels, cluster_method, 
                                big_class_names=None, verbose=True, plot=True, save_name=None):
     """
-    可视化聚类结果与原始标签的对应关系
+    可视化聚类结果与原始标签的对应关系（使用矩阵运算优化版本）
     
     参数：
         cluster_labels: 聚类标签
@@ -244,26 +307,21 @@ def visualize_cluster_vs_labels(cluster_labels, original_labels, cluster_method,
     if verbose:
         logger.info(f"\n分析 {cluster_method} 聚类结果与原始标签的对应关系...")
     
-    # 创建混淆矩阵
-    # 行是原始类别，列是聚类结果
-    unique_clusters = np.unique(cluster_labels)
-    unique_labels = np.unique(original_labels)
-    n_clusters = len(unique_clusters)
-    n_labels = len(unique_labels)
+    # 使用优化的混淆矩阵计算函数
+    matrix, unique_labels, unique_clusters = compute_confusion_matrix(
+        original_labels, cluster_labels
+    )
     
-    matrix = np.zeros((n_labels, n_clusters))
-    for i, label in enumerate(unique_labels):
-        for j, cluster in enumerate(unique_clusters):
-            # 计算同时属于此标签和此聚类的样本数
-            matrix[i, j] = np.sum((original_labels == label) & (cluster_labels == cluster))
+    n_labels = len(unique_labels)
+    n_clusters = len(unique_clusters)
     
     # 计算行归一化矩阵（每个原始类别的分布）
-    row_normalized = matrix.copy()
+    row_normalized = matrix.copy().astype(float)
     row_sums = row_normalized.sum(axis=1, keepdims=True)
     row_normalized = np.divide(row_normalized, row_sums, where=row_sums!=0)
     
     # 计算列归一化矩阵（每个聚类的分布）
-    col_normalized = matrix.copy()
+    col_normalized = matrix.copy().astype(float)
     col_sums = col_normalized.sum(axis=0, keepdims=True)
     col_normalized = np.divide(col_normalized, col_sums, where=col_sums!=0)
     
@@ -306,6 +364,9 @@ def visualize_cluster_vs_labels(cluster_labels, original_labels, cluster_method,
     
     # 计算一致性评分
     # 使用匈牙利算法找到最佳匹配
+    from scipy.optimize import linear_sum_assignment
+    
+    # 创建成本矩阵（要最大化一致性，所以取反）
     cost_matrix = -matrix.copy()
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
     

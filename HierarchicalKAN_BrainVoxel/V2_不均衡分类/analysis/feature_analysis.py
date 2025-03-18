@@ -80,7 +80,7 @@ def analyze_feature_importance(data, labels, feature_names=None, n_estimators=10
 
 def analyze_feature_group_combinations(feature_groups, labels, group_names=None, verbose=True, plot=True):
     """
-    分析不同特征组合的分类性能
+    分析不同特征组合的分类性能（并行版本）
     
     参数：
         feature_groups: 特征组字典
@@ -92,24 +92,35 @@ def analyze_feature_group_combinations(feature_groups, labels, group_names=None,
     返回：
         results: 不同组合的性能结果列表
     """
+    from joblib import Parallel, delayed
+    from itertools import combinations
+    
     if group_names is None:
         group_names = list(feature_groups.keys())
     
     if verbose:
         logger.info("分析不同特征组合的分类性能...")
     
-    # 初始化结果存储
-    results = []
-    
-    # 测试单个组
-    for i, group in enumerate(group_names):
+    # 定义评估单个特征组合的函数
+    def evaluate_combination(combination):
+        # 获取组合名称
+        if isinstance(combination, str):
+            combination = [combination]  # 单个特征组
+        
+        combination_str = ' + '.join(combination)
+        
         if verbose:
-            logger.info(f"\n测试单个特征组: {group}")
-        X = feature_groups[group]
+            logger.info(f"测试特征组合: {combination_str}")
+        
+        # 合并特征
+        features_list = [feature_groups[group] for group in combination]
+        X = np.hstack(features_list)
         
         # 使用随机森林评估性能
         rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
         cv_folds = EVALUATION['classification']['cv_folds']
+        
+        # 交叉验证评估
         acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='accuracy')
         balanced_acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='balanced_accuracy')
         f1_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='f1_weighted')
@@ -127,9 +138,9 @@ def analyze_feature_group_combinations(feature_groups, labels, group_names=None,
             logger.info(f"  加权F1分数: {f1_scores.mean():.4f} ± {f1_scores.std():.4f}")
             logger.info(f"  Cohen's Kappa: {kappa_scores.mean():.4f} ± {kappa_scores.std():.4f}")
         
-        # 存储结果
-        results.append({
-            'combination': [group],
+        # 返回结果
+        return {
+            'combination': list(combination),
             'accuracy': acc_scores.mean(),
             'accuracy_std': acc_scores.std(),
             'balanced_accuracy': balanced_acc_scores.mean(),
@@ -138,123 +149,28 @@ def analyze_feature_group_combinations(feature_groups, labels, group_names=None,
             'f1_weighted_std': f1_scores.std(),
             'kappa': kappa_scores.mean(),
             'kappa_std': kappa_scores.std()
-        })
+        }
     
-    # 测试组合（最多3个组的组合，以避免组合爆炸）
+    # 生成所有可能的组合
+    all_combinations = []
+    
+    # 单个特征组
+    all_combinations.extend(group_names)
+    
+    # 两个特征组的组合
     if len(group_names) >= 2:
-        # 测试两两组合
-        for i in range(len(group_names)):
-            for j in range(i+1, len(group_names)):
-                group_i = group_names[i]
-                group_j = group_names[j]
-                if verbose:
-                    logger.info(f"\n测试特征组合: {group_i} + {group_j}")
-                
-                # 合并特征
-                X = np.hstack([feature_groups[group_i], feature_groups[group_j]])
-                
-                # 评估性能
-                rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
-                acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='accuracy')
-                balanced_acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='balanced_accuracy')
-                f1_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='f1_weighted')
-                kappa_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring=cohen_kappa_scorer)
-                
-                if verbose:
-                    logger.info(f"  准确率: {acc_scores.mean():.4f} ± {acc_scores.std():.4f}")
-                    logger.info(f"  平衡准确率: {balanced_acc_scores.mean():.4f} ± {balanced_acc_scores.std():.4f}")
-                    logger.info(f"  加权F1分数: {f1_scores.mean():.4f} ± {f1_scores.std():.4f}")
-                    logger.info(f"  Cohen's Kappa: {kappa_scores.mean():.4f} ± {kappa_scores.std():.4f}")
-                
-                # 存储结果
-                results.append({
-                    'combination': [group_i, group_j],
-                    'accuracy': acc_scores.mean(),
-                    'accuracy_std': acc_scores.std(),
-                    'balanced_accuracy': balanced_acc_scores.mean(),
-                    'balanced_accuracy_std': balanced_acc_scores.std(),
-                    'f1_weighted': f1_scores.mean(),
-                    'f1_weighted_std': f1_scores.std(),
-                    'kappa': kappa_scores.mean(),
-                    'kappa_std': kappa_scores.std()
-                })
+        all_combinations.extend(combinations(group_names, 2))
     
-    # 测试三组组合（如果有3个或更多组）
+    # 三个特征组的组合
     if len(group_names) >= 3:
-        for i in range(len(group_names)):
-            for j in range(i+1, len(group_names)):
-                for k in range(j+1, len(group_names)):
-                    group_i = group_names[i]
-                    group_j = group_names[j]
-                    group_k = group_names[k]
-                    if verbose:
-                        logger.info(f"\n测试特征组合: {group_i} + {group_j} + {group_k}")
-                    
-                    # 合并特征
-                    X = np.hstack([feature_groups[group_i], feature_groups[group_j], feature_groups[group_k]])
-                    
-                    # 评估性能
-                    rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
-                    acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='accuracy')
-                    balanced_acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='balanced_accuracy')
-                    f1_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='f1_weighted')
-                    kappa_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring=cohen_kappa_scorer)
-                    
-                    if verbose:
-                        logger.info(f"  准确率: {acc_scores.mean():.4f} ± {acc_scores.std():.4f}")
-                        logger.info(f"  平衡准确率: {balanced_acc_scores.mean():.4f} ± {balanced_acc_scores.std():.4f}")
-                        logger.info(f"  加权F1分数: {f1_scores.mean():.4f} ± {f1_scores.std():.4f}")
-                        logger.info(f"  Cohen's Kappa: {kappa_scores.mean():.4f} ± {kappa_scores.std():.4f}")
-                    
-                    # 存储结果
-                    results.append({
-                        'combination': [group_i, group_j, group_k],
-                        'accuracy': acc_scores.mean(),
-                        'accuracy_std': acc_scores.std(),
-                        'balanced_accuracy': balanced_acc_scores.mean(),
-                        'balanced_accuracy_std': balanced_acc_scores.std(),
-                        'f1_weighted': f1_scores.mean(),
-                        'f1_weighted_std': f1_scores.std(),
-                        'kappa': kappa_scores.mean(),
-                        'kappa_std': kappa_scores.std()
-                    })
+        all_combinations.extend(combinations(group_names, 3))
     
-    # 如果有4个以上的特征组，测试所有特征组组合
+    # 所有特征组
     if len(group_names) >= 4:
-        if verbose:
-            logger.info("\n测试所有特征组组合")
-        
-        # 合并所有特征
-        all_features = []
-        for group in group_names:
-            all_features.append(feature_groups[group])
-        X = np.hstack(all_features)
-        
-        # 评估性能
-        rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
-        acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='accuracy')
-        balanced_acc_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='balanced_accuracy')
-        f1_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring='f1_weighted')
-        kappa_scores = cross_val_score(rf, X, labels, cv=cv_folds, scoring=cohen_kappa_scorer)
-        
-        if verbose:
-            logger.info(f"  准确率: {acc_scores.mean():.4f} ± {acc_scores.std():.4f}")
-            logger.info(f"  平衡准确率: {balanced_acc_scores.mean():.4f} ± {balanced_acc_scores.std():.4f}")
-            logger.info(f"  加权F1分数: {f1_scores.mean():.4f} ± {f1_scores.std():.4f}")
-            logger.info(f"  Cohen's Kappa: {kappa_scores.mean():.4f} ± {kappa_scores.std():.4f}")
-        
-        # 存储结果
-        results.append({
-            'combination': group_names,
-            'accuracy': acc_scores.mean(),
-            'accuracy_std': acc_scores.std(),
-            'balanced_accuracy': balanced_acc_scores.mean(),
-            'balanced_accuracy_std': balanced_acc_scores.std(),
-            'f1_weighted': f1_scores.mean(),
-            'f1_weighted_std': f1_scores.std(),
-            'kappa': kappa_scores.mean(),
-            'kappa_std': kappa_scores.std()
-        })
+        all_combinations.append(tuple(group_names))
+    
+    # 并行评估所有组合
+    results = Parallel(n_jobs=-1)(delayed(evaluate_combination)(combo) for combo in all_combinations)
     
     # 对结果排序（使用平衡准确率作为主要指标）
     results.sort(key=lambda x: x['balanced_accuracy'], reverse=True)
@@ -322,10 +238,9 @@ def analyze_feature_group_combinations(feature_groups, labels, group_names=None,
         plt.close()
     
     return results
-
 def analyze_class_separability(feature_groups, labels, verbose=True, use_sampling=False, sample_ratio=0.1):
     """
-    分析特征空间中的类别可分性
+    分析特征空间中的类别可分性（并行处理版本）
     
     参数：
         feature_groups: 处理后的特征组
@@ -342,6 +257,7 @@ def analyze_class_separability(feature_groups, labels, verbose=True, use_samplin
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import StratifiedShuffleSplit
     import time
+    from joblib import Parallel, delayed
     
     if verbose:
         logger.info("分析特征空间中的类别可分性...")
@@ -383,89 +299,108 @@ def analyze_class_separability(feature_groups, labels, verbose=True, use_samplin
     # 使用交叉验证分割器
     cv_splitter = StratifiedShuffleSplit(n_splits=3, test_size=0.3, random_state=42)
     
+    # 定义分类器
+    classifiers = {
+        'KNN': KNeighborsClassifier(n_neighbors=5),
+        'SVM': SVC(kernel='rbf', C=1, probability=True, class_weight='balanced'),
+        'RF': RandomForestClassifier(n_estimators=50, random_state=42, class_weight='balanced')
+    }
+    
+    # 定义单个分类器评估任务
+    def evaluate_classifier(group_name, group_data, clf_name, clf):
+        start_time = time.time()
+        if verbose:
+            print(f"  计算 {group_name} - {clf_name} 分类器性能...", flush=True)
+        
+        # 使用自定义的交叉验证
+        acc_scores = []
+        balanced_acc_scores = []
+        f1_scores = []
+        kappa_scores = []
+        
+        for train_idx, test_idx in cv_splitter.split(group_data, analysis_labels):
+            X_train, X_test = group_data[train_idx], group_data[test_idx]
+            y_train, y_test = analysis_labels[train_idx], analysis_labels[test_idx]
+            
+            clf.fit(X_train, y_train)
+            y_pred = clf.predict(X_test)
+            
+            acc_scores.append(accuracy_score(y_test, y_pred))
+            balanced_acc_scores.append(balanced_accuracy_score(y_test, y_pred))
+            f1_scores.append(f1_score(y_test, y_pred, average='weighted'))
+            kappa_scores.append(cohen_kappa_score(y_test, y_pred))
+        
+        # 计算平均分数
+        mean_acc = np.mean(acc_scores)
+        std_acc = np.std(acc_scores)
+        mean_balanced_acc = np.mean(balanced_acc_scores)
+        std_balanced_acc = np.std(balanced_acc_scores)
+        mean_f1 = np.mean(f1_scores)
+        std_f1 = np.std(f1_scores)
+        mean_kappa = np.mean(kappa_scores)
+        std_kappa = np.std(kappa_scores)
+        
+        elapsed = time.time() - start_time
+        if verbose:
+            logger.info(f"  {group_name} - {clf_name} 完成! ({elapsed:.1f}秒)")
+            logger.info(f"    准确率: {mean_acc:.4f} ± {std_acc:.4f}")
+            logger.info(f"    平衡准确率: {mean_balanced_acc:.4f} ± {std_balanced_acc:.4f}")
+            logger.info(f"    加权F1分数: {mean_f1:.4f} ± {std_f1:.4f}")
+            logger.info(f"    Cohen's Kappa: {mean_kappa:.4f} ± {std_kappa:.4f}")
+        
+        return group_name, clf_name, {
+            'accuracy': {'mean': mean_acc, 'std': std_acc},
+            'balanced_accuracy': {'mean': mean_balanced_acc, 'std': std_balanced_acc},
+            'f1_weighted': {'mean': mean_f1, 'std': std_f1},
+            'kappa': {'mean': mean_kappa, 'std': std_kappa}
+        }
+    
+    # 准备并行任务
+    tasks = []
     for group_name, group_data in analysis_groups.items():
-        if verbose:
-            logger.info(f"\n分析 {group_name} 特征组...")
-        
-        # 使用多个分类器评估可分性
-        classifiers = {
-            'KNN': KNeighborsClassifier(n_neighbors=5),
-            'SVM': SVC(kernel='rbf', C=1, probability=True, class_weight='balanced'),
-            'RF': RandomForestClassifier(n_estimators=50, random_state=42, class_weight='balanced')
-        }
-        
-        group_scores = {}
-        
-        # 计算随机猜测的基线性能
-        n_classes = len(np.unique(analysis_labels))
-        random_guess_acc = 1.0 / n_classes
-        
         for clf_name, clf in classifiers.items():
-            start_time = time.time()
-            if verbose:
-                logger.info(f"  计算 {clf_name} 分类器性能...", end="", flush=True)
-            
-            # 使用自定义的交叉验证
-            acc_scores = []
-            balanced_acc_scores = []
-            f1_scores = []
-            kappa_scores = []
-            
-            for train_idx, test_idx in cv_splitter.split(group_data, analysis_labels):
-                X_train, X_test = group_data[train_idx], group_data[test_idx]
-                y_train, y_test = analysis_labels[train_idx], analysis_labels[test_idx]
-                
-                clf.fit(X_train, y_train)
-                y_pred = clf.predict(X_test)
-                
-                acc_scores.append(clf.score(X_test, y_test))
-                balanced_acc_scores.append(balanced_accuracy_score(y_test, y_pred))
-                f1_scores.append(f1_score(y_test, y_pred, average='weighted'))
-                kappa_scores.append(cohen_kappa_score(y_test, y_pred))
-            
-            # 计算平均分数
-            mean_acc = np.mean(acc_scores)
-            std_acc = np.std(acc_scores)
-            mean_balanced_acc = np.mean(balanced_acc_scores)
-            std_balanced_acc = np.std(balanced_acc_scores)
-            mean_f1 = np.mean(f1_scores)
-            std_f1 = np.std(f1_scores)
-            mean_kappa = np.mean(kappa_scores)
-            std_kappa = np.std(kappa_scores)
-            
-            elapsed = time.time() - start_time
-            if verbose:
-                logger.info(f" 完成! ({elapsed:.1f}秒)")
-                logger.info(f"    准确率: {mean_acc:.4f} ± {std_acc:.4f}")
-                logger.info(f"    平衡准确率: {mean_balanced_acc:.4f} ± {std_balanced_acc:.4f}")
-                logger.info(f"    加权F1分数: {mean_f1:.4f} ± {std_f1:.4f}")
-                logger.info(f"    Cohen's Kappa: {mean_kappa:.4f} ± {std_kappa:.4f}")
-            
-            group_scores[clf_name] = {
-                'accuracy': {'mean': mean_acc, 'std': std_acc},
-                'balanced_accuracy': {'mean': mean_balanced_acc, 'std': std_balanced_acc},
-                'f1_weighted': {'mean': mean_f1, 'std': std_f1},
-                'kappa': {'mean': mean_kappa, 'std': std_kappa}
+            tasks.append((group_name, group_data, clf_name, clf))
+    
+    # 并行执行所有评估任务
+    results = Parallel(n_jobs=-1)(
+        delayed(evaluate_classifier)(group_name, group_data, clf_name, clf) 
+        for group_name, group_data, clf_name, clf in tasks
+    )
+    
+    # 处理结果
+    # 整理结果为嵌套字典
+    for group_name, clf_name, metrics in results:
+        if group_name not in separability_scores:
+            separability_scores[group_name] = {
+                'classifiers': {}
             }
-        
+        separability_scores[group_name]['classifiers'][clf_name] = metrics
+    
+    # 计算随机猜测基线
+    n_classes = len(np.unique(analysis_labels))
+    random_guess_acc = 1.0 / n_classes
+    
+    # 计算每个特征组的总体可分性得分
+    for group_name in separability_scores:
         # 计算平均得分作为总体可分性评分
-        mean_accuracy = np.mean([s['accuracy']['mean'] for s in group_scores.values()])
-        mean_balanced_accuracy = np.mean([s['balanced_accuracy']['mean'] for s in group_scores.values()])
-        mean_f1 = np.mean([s['f1_weighted']['mean'] for s in group_scores.values()])
-        mean_kappa = np.mean([s['kappa']['mean'] for s in group_scores.values()])
+        mean_accuracy = np.mean([separability_scores[group_name]['classifiers'][clf_name]['accuracy']['mean'] 
+                              for clf_name in classifiers])
+        mean_balanced_accuracy = np.mean([separability_scores[group_name]['classifiers'][clf_name]['balanced_accuracy']['mean'] 
+                                       for clf_name in classifiers])
+        mean_f1 = np.mean([separability_scores[group_name]['classifiers'][clf_name]['f1_weighted']['mean'] 
+                        for clf_name in classifiers])
+        mean_kappa = np.mean([separability_scores[group_name]['classifiers'][clf_name]['kappa']['mean'] 
+                           for clf_name in classifiers])
         
-        separability_scores[group_name] = {
-            'overall': mean_balanced_accuracy,  # 使用平衡准确率作为总体评分
-            'accuracy': mean_accuracy,
-            'balanced_accuracy': mean_balanced_accuracy,
-            'f1_weighted': mean_f1,
-            'kappa': mean_kappa,
-            'classifiers': group_scores,
-            'random_guess': random_guess_acc
-        }
+        separability_scores[group_name]['overall'] = mean_balanced_accuracy  # 使用平衡准确率作为总体评分
+        separability_scores[group_name]['accuracy'] = mean_accuracy
+        separability_scores[group_name]['balanced_accuracy'] = mean_balanced_accuracy
+        separability_scores[group_name]['f1_weighted'] = mean_f1
+        separability_scores[group_name]['kappa'] = mean_kappa
+        separability_scores[group_name]['random_guess'] = random_guess_acc
         
         if verbose:
-            logger.info(f"  总体可分性评分: {mean_balanced_accuracy:.4f}")
+            logger.info(f"\n{group_name} 特征组总体可分性评分: {mean_balanced_accuracy:.4f}")
             logger.info(f"  相对于随机猜测 ({random_guess_acc:.4f}) 的提升: {(mean_balanced_accuracy/random_guess_acc - 1)*100:.1f}%")
     
     # 可视化结果
@@ -473,7 +408,7 @@ def analyze_class_separability(feature_groups, labels, verbose=True, use_samplin
     
     # 准备数据
     groups = list(separability_scores.keys())
-    clf_names = list(separability_scores[groups[0]]['classifiers'].keys())
+    clf_names = list(classifiers.keys())
     metrics = ['balanced_accuracy', 'f1_weighted', 'kappa']
     metric_names = {'balanced_accuracy': 'Balanced Accuracy', 
                    'f1_weighted': 'Weighted F1 Score', 
@@ -496,9 +431,8 @@ def analyze_class_separability(feature_groups, labels, verbose=True, use_samplin
         
         # 如果是平衡准确率，绘制随机猜测基线
         if metric == 'balanced_accuracy':
-            random_acc = separability_scores[groups[0]]['random_guess']
-            plt.axhline(y=random_acc, color='r', linestyle='--', 
-                      label=f'Random Guessing ({random_acc:.4f})')
+            plt.axhline(y=random_guess_acc, color='r', linestyle='--', 
+                      label=f'Random Guessing ({random_guess_acc:.4f})')
         
         plt.xlabel('Feature Groups')
         plt.ylabel(metric_names[metric])

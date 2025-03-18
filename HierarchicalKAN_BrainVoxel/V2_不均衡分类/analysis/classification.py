@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, plot=True, save_name=None):
     """
-    比较不同分类模型的性能
+    比较不同分类模型的性能（并行版本）
     
     参数:
         X: 特征数据
@@ -43,6 +43,8 @@ def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, pl
     返回:
         results: 各分类器的性能评估结果字典
     """
+    from joblib import Parallel, delayed
+    
     if classifiers is None:
         classifiers = {
             'KNN': KNeighborsClassifier(n_neighbors=5),
@@ -54,13 +56,11 @@ def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, pl
     if verbose:
         logger.info(f"比较{len(classifiers)}种分类模型的性能...")
     
-    results = {}
-    
     # 使用层化K折交叉验证
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
     
-    for clf_name, clf in tqdm(classifiers.items(), desc="评估分类器"):
-        start_time = time.time()
+    # 定义单个分类器评估任务
+    def evaluate_classifier(clf_name, clf):
         if verbose:
             logger.info(f"\n评估 {clf_name} 分类器...")
         
@@ -76,10 +76,10 @@ def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, pl
         # 每个类别的单独指标
         class_metrics = {}
         for class_idx in np.unique(y):
-            class_metrics[class_idx] = {'precision': [], 'recall': [], 'f1': []}
+            class_metrics[int(class_idx)] = {'precision': [], 'recall': [], 'f1': []}
         
         # 对每个折叠进行评估
-        for fold_idx, (train_index, test_index) in enumerate(skf.split(X, y)):
+        for train_index, test_index in skf.split(X, y):
             X_train, X_test = X[train_index], X[test_index]
             y_train, y_test = y[train_index], y[test_index]
             
@@ -115,10 +115,8 @@ def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, pl
             mean_class_metrics[class_idx] = {metric: np.mean(scores) for metric, scores in metrics_dict.items()}
             std_class_metrics[class_idx] = {metric: np.std(scores) for metric, scores in metrics_dict.items()}
         
-        elapsed = time.time() - start_time
-        
         if verbose:
-            logger.info(f"  {clf_name} 评估完成 ({elapsed:.1f}秒)")
+            logger.info(f"  {clf_name} 评估完成")
             logger.info(f"  准确率: {mean_metrics['accuracy']:.4f} ± {std_metrics['accuracy']:.4f}")
             logger.info(f"  平衡准确率: {mean_metrics['balanced_accuracy']:.4f} ± {std_metrics['balanced_accuracy']:.4f}")
             logger.info(f"  加权F1分数: {mean_metrics['f1_weighted']:.4f} ± {std_metrics['f1_weighted']:.4f}")
@@ -131,13 +129,21 @@ def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, pl
                            f"精确率 = {mean_class_metrics[class_idx]['precision']:.4f}, "
                            f"召回率 = {mean_class_metrics[class_idx]['recall']:.4f}")
         
-        # 存储结果
-        results[clf_name] = {
+        # 返回结果
+        return clf_name, {
             'mean': mean_metrics,
             'std': std_metrics,
             'class_mean': mean_class_metrics,
             'class_std': std_class_metrics
         }
+    
+    # 并行执行所有分类器评估
+    clf_results = Parallel(n_jobs=-1)(
+        delayed(evaluate_classifier)(clf_name, clf) for clf_name, clf in classifiers.items()
+    )
+    
+    # 处理结果
+    results = dict(clf_results)
     
     # 绘制性能比较图
     if plot:

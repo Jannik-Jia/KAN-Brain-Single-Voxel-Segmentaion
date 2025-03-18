@@ -148,7 +148,7 @@ def apply_pca(data, n_components=None, variance_threshold=0.95, verbose=True, pl
 
 def select_discriminative_features(data, labels, group_name, k=20, method='f_classif', verbose=True, plot=True):
     """
-    选择最具区分性的特征
+    选择最具区分性的特征（矩阵运算优化版本）
     
     参数：
         data: 输入数据特征
@@ -170,26 +170,38 @@ def select_discriminative_features(data, labels, group_name, k=20, method='f_cla
     if verbose:
         logger.info(f"为 {group_name} 特征组选择 {k} 个最具区分性的特征，使用 {method} 方法")
     
-    # 选择评分函数
+    # 使用向量化操作计算特征重要性
     if method == 'f_classif':
-        score_func = f_classif
+        # F分类特征选择
+        # 使用sklearn的SelectKBest，内部使用了矩阵运算
+        selector = SelectKBest(f_classif, k=k)
+        selected_features = selector.fit_transform(data, labels)
+        feature_indices = selector.get_support(indices=True)
+        feature_scores = selector.scores_
+    
     elif method == 'mutual_info':
-        score_func = mutual_info_classif
+        # 互信息特征选择
+        selector = SelectKBest(mutual_info_classif, k=k)
+        selected_features = selector.fit_transform(data, labels)
+        feature_indices = selector.get_support(indices=True)
+        feature_scores = selector.scores_
+    
     elif method == 'chi2':
-        # 确保数据非负，chi2需要非负数据
+        # Chi2特征选择（确保数据非负）
         if np.min(data) < 0:
             if verbose:
                 logger.warning("chi2方法需要非负数据，将进行数据平移")
-            data = data - np.min(data) + 1e-6
-        score_func = chi2
+            data_non_neg = data - np.min(data, axis=0) + 1e-6
+        else:
+            data_non_neg = data
+            
+        selector = SelectKBest(chi2, k=k)
+        selected_features = selector.fit_transform(data_non_neg, labels)
+        feature_indices = selector.get_support(indices=True)
+        feature_scores = selector.scores_
+    
     else:
         raise ValueError(f"不支持的特征选择方法: {method}")
-    
-    # 使用F统计量计算特征重要性
-    selector = SelectKBest(score_func, k=k)
-    selected_features = selector.fit_transform(data, labels)
-    feature_indices = selector.get_support(indices=True)
-    feature_scores = selector.scores_
     
     if verbose:
         logger.info(f"\n{group_name} 特征组选择结果:")
@@ -206,6 +218,9 @@ def select_discriminative_features(data, labels, group_name, k=20, method='f_cla
     
     if plot:
         plt.figure(figsize=(12, 5))
+        
+        # 使用numpy的排序和索引功能进行高效处理
+        sorted_indices = np.argsort(feature_scores)[::-1]
         
         # Left plot: Importance distribution of all features
         plt.subplot(1, 2, 1)
