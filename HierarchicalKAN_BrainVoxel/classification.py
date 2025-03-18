@@ -235,189 +235,189 @@ def analyze_feature_group_combinations(feature_groups, labels, group_names=None,
     return results
 
 
-def analyze_class_separability(feature_groups, labels, save_path=None, use_sampling=True, sample_ratio=0.1, logger=None):
-    """
-    分析特征空间中的类别可分性
+# def analyze_class_separability(feature_groups, labels, save_path=None, use_sampling=True, sample_ratio=0.1, logger=None):
+#     """
+#     分析特征空间中的类别可分性
     
-    参数：
-        feature_groups: 处理后的特征组
-        labels: 类别标签
-        save_path: 结果保存路径
-        use_sampling: 是否使用采样来加速分析
-        sample_ratio: 采样比例
-        logger: 日志记录器
+#     参数：
+#         feature_groups: 处理后的特征组
+#         labels: 类别标签
+#         save_path: 结果保存路径
+#         use_sampling: 是否使用采样来加速分析
+#         sample_ratio: 采样比例
+#         logger: 日志记录器
         
-    返回：
-        separability_scores: 各特征组的可分性评分
-    """
-    from config import RANDOM_SEED
+#     返回：
+#         separability_scores: 各特征组的可分性评分
+#     """
+#     from config import RANDOM_SEED
     
-    separability_scores = {}
+#     separability_scores = {}
     
-    msg = "分析特征空间中的类别可分性..."
-    if logger:
-        logger.info(msg)
-    else:
-        print(msg)
+#     msg = "分析特征空间中的类别可分性..."
+#     if logger:
+#         logger.info(msg)
+#     else:
+#         print(msg)
     
-    # 如果使用采样，创建一个采样子集
-    if use_sampling:
-        msg = f"使用{sample_ratio*100:.1f}%的数据进行分析"
-        if logger:
-            logger.info(msg)
-        else:
-            print(msg)
+#     # 如果使用采样，创建一个采样子集
+#     if use_sampling:
+#         msg = f"使用{sample_ratio*100:.1f}%的数据进行分析"
+#         if logger:
+#             logger.info(msg)
+#         else:
+#             print(msg)
             
-        from sklearn.model_selection import train_test_split
+#         from sklearn.model_selection import train_test_split
         
-        # 使用分层采样保持类别分布
-        indices = np.arange(len(labels))
-        _, sampled_indices, _, sampled_labels = train_test_split(
-            indices, labels, test_size=sample_ratio, stratify=labels, random_state=RANDOM_SEED
-        )
+#         # 使用分层采样保持类别分布
+#         indices = np.arange(len(labels))
+#         _, sampled_indices, _, sampled_labels = train_test_split(
+#             indices, labels, test_size=sample_ratio, stratify=labels, random_state=RANDOM_SEED
+#         )
         
-        # 打印采样后的样本数量和类别分布
-        msg = f"原始数据: {len(labels)} 样本"
-        if logger:
-            logger.info(msg)
-        else:
-            print(msg)
+#         # 打印采样后的样本数量和类别分布
+#         msg = f"原始数据: {len(labels)} 样本"
+#         if logger:
+#             logger.info(msg)
+#         else:
+#             print(msg)
             
-        msg = f"采样后: {len(sampled_labels)} 样本"
-        if logger:
-            logger.info(msg)
-        else:
-            print(msg)
+#         msg = f"采样后: {len(sampled_labels)} 样本"
+#         if logger:
+#             logger.info(msg)
+#         else:
+#             print(msg)
             
-        unique, counts = np.unique(sampled_labels, return_counts=True)
-        msg = f"采样后类别分布: {len(unique)} 个唯一类别"
-        if logger:
-            logger.info(msg)
-        else:
-            print(msg)
+#         unique, counts = np.unique(sampled_labels, return_counts=True)
+#         msg = f"采样后类别分布: {len(unique)} 个唯一类别"
+#         if logger:
+#             logger.info(msg)
+#         else:
+#             print(msg)
         
-        # 对每个特征组进行采样
-        sampled_groups = {}
-        for group_name, group_data in feature_groups.items():
-            sampled_groups[group_name] = group_data[sampled_indices]
+#         # 对每个特征组进行采样
+#         sampled_groups = {}
+#         for group_name, group_data in feature_groups.items():
+#             sampled_groups[group_name] = group_data[sampled_indices]
         
-        # 使用采样后的数据
-        analysis_groups = sampled_groups
-        analysis_labels = sampled_labels
-    else:
-        # 使用全部数据
-        analysis_groups = feature_groups
-        analysis_labels = labels
+#         # 使用采样后的数据
+#         analysis_groups = sampled_groups
+#         analysis_labels = sampled_labels
+#     else:
+#         # 使用全部数据
+#         analysis_groups = feature_groups
+#         analysis_labels = labels
     
-    # 使用交叉验证分割器而不是完整的k折交叉验证
-    cv_splitter = StratifiedShuffleSplit(n_splits=3, test_size=0.3, random_state=RANDOM_SEED)
+#     # 使用交叉验证分割器而不是完整的k折交叉验证
+#     cv_splitter = StratifiedShuffleSplit(n_splits=3, test_size=0.3, random_state=RANDOM_SEED)
     
-    for group_name, group_data in analysis_groups.items():
-        msg = f"\n分析 {group_name} 特征组..."
-        if logger:
-            logger.info(msg)
-        else:
-            print(msg)
+#     for group_name, group_data in analysis_groups.items():
+#         msg = f"\n分析 {group_name} 特征组..."
+#         if logger:
+#             logger.info(msg)
+#         else:
+#             print(msg)
         
-        # 使用多个分类器评估可分性
-        classifiers = {
-            'KNN': KNeighborsClassifier(n_neighbors=5),
-            'SVM': SVC(kernel='rbf', C=1, probability=True),
-            'RF': RandomForestClassifier(n_estimators=50, random_state=RANDOM_SEED)
-        }
+#         # 使用多个分类器评估可分性
+#         classifiers = {
+#             'KNN': KNeighborsClassifier(n_neighbors=5),
+#             'SVM': SVC(kernel='rbf', C=1, probability=True),
+#             'RF': RandomForestClassifier(n_estimators=50, random_state=RANDOM_SEED)
+#         }
         
-        group_scores = {}
+#         group_scores = {}
         
-        for clf_name, clf in classifiers.items():
-            start_time = time.time()
-            msg = f"  计算 {clf_name} 分类器性能..."
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg, end="", flush=True)
+#         for clf_name, clf in classifiers.items():
+#             start_time = time.time()
+#             msg = f"  计算 {clf_name} 分类器性能..."
+#             if logger:
+#                 logger.info(msg)
+#             else:
+#                 print(msg, end="", flush=True)
             
-            # 使用自定义的交叉验证而不是完整的cross_val_score
-            scores = []
-            for train_idx, test_idx in cv_splitter.split(group_data, analysis_labels):
-                X_train, X_test = group_data[train_idx], group_data[test_idx]
-                y_train, y_test = analysis_labels[train_idx], analysis_labels[test_idx]
+#             # 使用自定义的交叉验证而不是完整的cross_val_score
+#             scores = []
+#             for train_idx, test_idx in cv_splitter.split(group_data, analysis_labels):
+#                 X_train, X_test = group_data[train_idx], group_data[test_idx]
+#                 y_train, y_test = analysis_labels[train_idx], analysis_labels[test_idx]
                 
-                clf.fit(X_train, y_train)
-                score = clf.score(X_test, y_test)
-                scores.append(score)
+#                 clf.fit(X_train, y_train)
+#                 score = clf.score(X_test, y_test)
+#                 scores.append(score)
             
-            mean_score = np.mean(scores)
-            std_score = np.std(scores)
+#             mean_score = np.mean(scores)
+#             std_score = np.std(scores)
             
-            elapsed = time.time() - start_time
+#             elapsed = time.time() - start_time
             
-            msg = f" 完成! ({elapsed:.1f}秒)"
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
+#             msg = f" 完成! ({elapsed:.1f}秒)"
+#             if logger:
+#                 logger.info(msg)
+#             else:
+#                 print(msg)
                 
-            msg = f"    结果: {mean_score:.4f} ± {std_score:.4f}"
-            if logger:
-                logger.info(msg)
-            else:
-                print(msg)
+#             msg = f"    结果: {mean_score:.4f} ± {std_score:.4f}"
+#             if logger:
+#                 logger.info(msg)
+#             else:
+#                 print(msg)
             
-            group_scores[clf_name] = {
-                'mean': mean_score,
-                'std': std_score
-            }
+#             group_scores[clf_name] = {
+#                 'mean': mean_score,
+#                 'std': std_score
+#             }
         
-        # 计算平均得分作为总体可分性评分
-        mean_separability = np.mean([s['mean'] for s in group_scores.values()])
-        separability_scores[group_name] = {
-            'overall': mean_separability,
-            'classifiers': group_scores
-        }
+#         # 计算平均得分作为总体可分性评分
+#         mean_separability = np.mean([s['mean'] for s in group_scores.values()])
+#         separability_scores[group_name] = {
+#             'overall': mean_separability,
+#             'classifiers': group_scores
+#         }
         
-        msg = f"  总体可分性评分: {mean_separability:.4f}"
-        if logger:
-            logger.info(msg)
-        else:
-            print(msg)
+#         msg = f"  总体可分性评分: {mean_separability:.4f}"
+#         if logger:
+#             logger.info(msg)
+#         else:
+#             print(msg)
     
-    # 可视化结果
-    plt.figure(figsize=(12, 8))
+#     # 可视化结果
+#     plt.figure(figsize=(12, 8))
     
-    # 准备数据
-    groups = list(separability_scores.keys())
-    clf_names = list(separability_scores[groups[0]]['classifiers'].keys())
+#     # 准备数据
+#     groups = list(separability_scores.keys())
+#     clf_names = list(separability_scores[groups[0]]['classifiers'].keys())
     
-    x = np.arange(len(groups))
-    width = 0.25
-    offsets = np.linspace(-width, width, len(clf_names))
+#     x = np.arange(len(groups))
+#     width = 0.25
+#     offsets = np.linspace(-width, width, len(clf_names))
     
-    # 绘制条形图
-    for i, clf_name in enumerate(clf_names):
-        means = [separability_scores[g]['classifiers'][clf_name]['mean'] for g in groups]
-        stds = [separability_scores[g]['classifiers'][clf_name]['std'] for g in groups]
+#     # 绘制条形图
+#     for i, clf_name in enumerate(clf_names):
+#         means = [separability_scores[g]['classifiers'][clf_name]['mean'] for g in groups]
+#         stds = [separability_scores[g]['classifiers'][clf_name]['std'] for g in groups]
         
-        plt.bar(x + offsets[i], means, width, label=clf_name, yerr=stds)
+#         plt.bar(x + offsets[i], means, width, label=clf_name, yerr=stds)
     
-    # 绘制随机猜测基线
-    plt.axhline(y=1/len(np.unique(labels)), color='r', linestyle='--', 
-           label=f'Random Guessing ({1/len(np.unique(labels)):.4f})')
+#     # 绘制随机猜测基线
+#     plt.axhline(y=1/len(np.unique(labels)), color='r', linestyle='--', 
+#            label=f'Random Guessing ({1/len(np.unique(labels)):.4f})')
 
-    plt.xlabel('Feature Groups')
-    plt.ylabel('Cross-Validation Accuracy')
-    plt.title('Class Separability of Different Feature Groups')
-    plt.xticks(x, groups)
-    plt.legend()
-    plt.grid(axis='y')
+#     plt.xlabel('Feature Groups')
+#     plt.ylabel('Cross-Validation Accuracy')
+#     plt.title('Class Separability of Different Feature Groups')
+#     plt.xticks(x, groups)
+#     plt.legend()
+#     plt.grid(axis='y')
 
     
-    if save_path:
-        if not os.path.exists(save_path):
-            os.makedirs(save_path, exist_ok=True)
-        plt.savefig(os.path.join(save_path, 'class_separability.png'))
-    plt.close()
+#     if save_path:
+#         if not os.path.exists(save_path):
+#             os.makedirs(save_path, exist_ok=True)
+#         plt.savefig(os.path.join(save_path, 'class_separability.png'))
+#     plt.close()
     
-    return separability_scores
+#     return separability_scores
 
 
 def explore_best_classification_strategy(feature_groups, labels, save_path=None, use_sampling=True, sample_ratio=0.1, logger=None):
