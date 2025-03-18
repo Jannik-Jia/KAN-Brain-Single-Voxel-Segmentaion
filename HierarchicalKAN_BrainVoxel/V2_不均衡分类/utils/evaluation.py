@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 from sklearn.metrics import cohen_kappa_score, confusion_matrix
 import json
-
+from imblearn.metrics import classification_report_imbalanced
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.config import RESULTS_DIR
@@ -337,16 +337,15 @@ def visualize_bigclass_distribution(big_labels, big_class_names=None, save_path=
     # 保存图表
     if save_path:
         plt.savefig(save_path, dpi=300)
-        logger.info(f"大类分布图表已保存至: {save_path}")
+        logger.info(f"Major category distribution chart saved to: {save_path}")
     
     plt.close()
     
     # 打印统计信息
-    logger.info("\n大类分布统计:")
+    logger.info("\nMajor category distribution statistics:")
     for label, count in zip(sorted_labels, sorted_counts):
         percentage = count / total * 100
-        logger.info(f"  {label}: {count} 样本 ({percentage:.1f}%)")
-    
+        logger.info(f"  {label}: {count} samples ({percentage:.1f}%)")
     return unique_labels, counts
 
 def plot_feature_group_importances(group_importances, save_path=None):
