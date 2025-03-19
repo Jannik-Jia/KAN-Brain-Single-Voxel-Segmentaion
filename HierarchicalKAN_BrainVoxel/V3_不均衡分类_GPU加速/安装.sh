@@ -1,5 +1,11 @@
-# 创建libcusparse.so.9.0的符号链接（如果libcusparse.so.11.7存在）
-sudo ln -s /usr/local/cuda/lib64/libcusparse.so.11.7 /usr/local/cuda/lib64/libcusparse.so.9.0
+# 创建一个目录来存放软链接（如果需要）
+mkdir -p ~/lib
 
-# 或者设置LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64
+# 创建软链接
+ln -s /opt/conda/pkgs/libcusparse-dev-11.7.5.86-0/lib/libcusparse.so ~/lib/libcusparse.so.9.0
+
+# 设置库路径
+export LD_LIBRARY_PATH=~/lib:$LD_LIBRARY_PATH
+
+# 运行你的程序
+python main.py
