@@ -33,8 +33,7 @@ if USE_GPU:
     try:
         from cuml.neighbors import KNeighborsClassifier
         from cuml.ensemble import RandomForestClassifier
-        # ThunderSVM 接口
-        from thundersvm import SVC
+        from cuml.svm import SVC 
         logger.info("使用GPU加速库")
     except ImportError:
         logger.warning("GPU加速库导入失败，将使用CPU版本")
@@ -75,7 +74,7 @@ def compare_classification_models(X, y, classifiers=None, cv=5, verbose=True, pl
         if USE_GPU:
             classifiers = {
                 'KNN': KNeighborsClassifier(n_neighbors=5),
-                'SVM': SVC(kernel='linear', C=1, probability=True),  # ThunderSVM接口
+                'SVM': SVC(kernel='linear', C=1, probability=True),  # cuML的SVC
                 'RF': RandomForestClassifier(n_estimators=100, random_state=42),
                 'MLP': MLPClassifier(hidden_layer_sizes=(100,), max_iter=1000, random_state=42)  # MLPClassifier仍使用sklearn
             }

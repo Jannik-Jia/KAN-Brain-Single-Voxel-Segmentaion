@@ -33,8 +33,7 @@ if USE_GPU:
     try:
         from cuml.neighbors import KNeighborsClassifier
         from cuml.ensemble import RandomForestClassifier
-        # ThunderSVM 接口
-        from thundersvm import SVC
+        from cuml.svm import SVC
         logger.info("使用GPU加速库")
     except ImportError:
         logger.warning("GPU加速库导入失败，将使用CPU版本")
@@ -504,7 +503,7 @@ def analyze_class_separability(feature_groups, labels, verbose=True, use_samplin
     if USE_GPU:
         classifiers = {
             'KNN': KNeighborsClassifier(n_neighbors=5),
-            'SVM': SVC(kernel='linear', C=1, probability=True),  # ThunderSVM
+            'SVM': SVC(kernel='linear', C=1, probability=True),  # cuML的SVC
             'RF': RandomForestClassifier(n_estimators=50, random_state=42)
         }
     else:
