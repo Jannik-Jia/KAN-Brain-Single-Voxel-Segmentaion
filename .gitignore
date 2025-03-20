@@ -181,6 +181,7 @@ cython_debug/
 *.h5
 *.pth
 *.ckpt
+*.pid 
 
 # 忽略 TensorFlow / PyTorch checkpoint
 checkpoint/
@@ -209,3 +210,14 @@ KAN_1_v_rest_ipynb/results/
 KAN_1_v_rest_ipynb/video_img/
 
 KAN_1_v_rest_ipynb/model/
+
+HierarchicalKAN_BrainVoxel/fast-kan/
+
+HierarchicalKAN_BrainVoxel/Results/
+
+HierarchicalKAN_BrainVoxel/V2_不均衡分类/output/
+
+HierarchicalKAN_BrainVoxel/V3_不均衡分类_GPU加速/output/
+
+HierarchicalKAN_BrainVoxel/fast-kan/
+
