@@ -104,8 +104,8 @@ def analyze_optimal_clusters(data, min_clusters=2, max_clusters=10, methods=None
         for method in methods:
             start_time = time.time()
             if verbose:
-                logger.info(f"  方法: {method}...", end="", flush=True)
-            
+                # logger.info(f"  方法: {method}...", end="", flush=True)
+                print(f"  方法: {method}...", end="", flush=True)
             # 创建聚类模型
             if method == 'kmeans':
                 if USE_GPU:

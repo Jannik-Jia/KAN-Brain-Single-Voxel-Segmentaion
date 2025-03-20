@@ -526,7 +526,7 @@ def analyze_class_separability(feature_groups, labels, verbose=True, use_samplin
         for clf_name, clf in classifiers.items():
             start_time = time.time()
             if verbose:
-                logger.info(f"  计算 {clf_name} 分类器性能...", end="", flush=True)
+                print(f"  计算 {clf_name} 分类器性能...", end="", flush=True)
             
             # 转换数据类型为GPU库所需格式（如需要）
             if USE_GPU and clf_name != 'MLP':
