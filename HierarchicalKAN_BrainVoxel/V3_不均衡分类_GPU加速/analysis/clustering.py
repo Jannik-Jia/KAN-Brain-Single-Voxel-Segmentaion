@@ -341,11 +341,26 @@ def visualize_cluster_vs_labels(cluster_labels, original_labels, cluster_method,
     if verbose:
         logger.info(f"\n分析 {cluster_method} 聚类结果与原始标签的对应关系...")
     
+
+
+    # 确保标签长度匹配
+    if len(cluster_labels) != len(original_labels):
+        # 如果聚类是在子样本上进行的，我们需要只比较相同索引的标签
+        if len(cluster_labels) < len(original_labels):
+            logger.warning(f"聚类标签长度({len(cluster_labels)})小于原始标签长度({len(original_labels)})，将截取原始标签子集")
+            # 假设下采样是随机的，我们只取前N个标签
+            original_labels = original_labels[:len(cluster_labels)]
+        else:
+            logger.warning(f"聚类标签长度({len(cluster_labels)})大于原始标签长度({len(original_labels)})，将截取聚类标签子集")
+            cluster_labels = cluster_labels[:len(original_labels)]
+    
     # 使用优化的混淆矩阵计算函数
     matrix, unique_labels, unique_clusters = compute_confusion_matrix(
         original_labels, cluster_labels
     )
-    
+
+
+
     n_labels = len(unique_labels)
     n_clusters = len(unique_clusters)
     
