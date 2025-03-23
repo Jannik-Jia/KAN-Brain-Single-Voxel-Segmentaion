@@ -516,5 +516,105 @@ def main():
     
     return report
 
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+针对聚类分析与标签比较问题的修复脚本
+"""
+
+import os
+import sys
+import numpy as np
+from datetime import datetime
+
+# 添加项目根目录到路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from config.config import *
+from data.data_loader import load_multiclass_data_from_dirs, define_big_classes, map_to_big_classes
+from data.preprocessing import preprocess_feature_groups
+from analysis.classification import compare_classification_models, evaluate_combined_features, visualize_confusion_matrix
+from utils.logging_utils import get_logger, log_section, log_execution_time
+from utils.model_utils import save_results
+
+# 获取日志记录器
+logger = get_logger("fix_analysis")
+
+def fix_and_continue():
+    """修复分析并继续"""
+    # 记录开始时间
+    start_time = datetime.now()
+    
+    # 输出配置信息
+    log_section(logger, "修复分析并继续")
+    
+    # 加载数据（只加载验证集）
+    logger.info("加载数据...")
+    dataset = load_multiclass_data_from_dirs(subset='val')
+    val_data, val_labels = dataset['val_samples'], dataset['val_labels']
+    
+    # 获取大类标签
+    fine_to_big, big_to_fine, big_class_names = define_big_classes()
+    big_labels = map_to_big_classes(val_labels, fine_to_big)
+    
+    # 预处理特征
+    logger.info("预处理特征...")
+    processed_groups, preprocessing_info = preprocess_feature_groups(
+        val_data, big_labels, verbose=True, plot=False
+    )
+    
+    # 跳过聚类分析，直接进行分类评估
+    log_section(logger, "分类评估")
+    
+    # 评估不同分类器
+    logger.info("比较不同分类器...")
+    if 'all_features' in processed_groups:
+        classifier_results = compare_classification_models(
+            processed_groups['all_features'], big_labels, verbose=True,
+            plot=True, save_name="all_features"
+        )
+    else:
+        # 使用第一个可用的特征组
+        first_group = list(processed_groups.keys())[0]
+        classifier_results = compare_classification_models(
+            processed_groups[first_group], big_labels, verbose=True,
+            plot=True, save_name=first_group
+        )
+    
+    # 评估特征组合
+    logger.info("评估最佳特征组合...")
+    best_combination, best_performance = evaluate_combined_features(
+        processed_groups, big_labels, verbose=True,
+        plot=True, save_name="feature_combinations"
+    )
+    
+    # 可视化混淆矩阵
+    logger.info("可视化最佳模型的混淆矩阵...")
+    X_best = np.hstack([processed_groups[group] for group in best_combination])
+    cm, best_clf = visualize_confusion_matrix(
+        X_best, big_labels, class_names=big_class_names, verbose=True,
+        save_name="confusion_matrix"
+    )
+    
+    # 生成最终报告
+    log_section(logger, "最终报告")
+    
+    report = {
+        'best_feature_combination': best_combination,
+        'best_performance': best_performance,
+        'best_classifier': max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0],
+        'recommendation': "由于跳过聚类分析，保持现有大类定义"
+    }
+    
+    # 保存结果
+    save_results(report, "final_report", format='json')
+    logger.info(f"最终报告已保存")
+    
+    # 记录结束时间
+    end_time = datetime.now()
+    log_execution_time(logger, start_time, end_time, "分析总执行时间")
+    
+    return report
+
 if __name__ == "__main__":
-    main()
+    fix_and_continue()
