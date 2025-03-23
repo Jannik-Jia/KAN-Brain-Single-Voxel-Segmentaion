@@ -525,134 +525,35 @@ from utils.model_utils import save_results, generate_bigclass_mapping, visualize
 # -*- coding: utf-8 -*-
 
 """
-替代main的辅助脚本，继续分析并找到新的数据大类定义
-从日志中提取已有的聚类结果
+针对聚类分析与标签比较问题的修复脚本
 """
 
 import os
 import sys
 import numpy as np
-import matplotlib.pyplot as plt
 from datetime import datetime
-import re
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from config.config import *
 from data.data_loader import load_multiclass_data_from_dirs, define_big_classes, map_to_big_classes
 from data.preprocessing import preprocess_feature_groups
-from analysis.clustering import visualize_cluster_vs_labels
 from analysis.classification import compare_classification_models, evaluate_combined_features, visualize_confusion_matrix
 from utils.logging_utils import get_logger, log_section, log_execution_time
-from utils.model_utils import save_results, generate_bigclass_mapping, visualize_mapping_changes
-from utils.evaluation import evaluate_bigclass_mapping, generate_final_report, visualize_bigclass_distribution
+from utils.model_utils import save_results
 
 # 获取日志记录器
-logger = get_logger("continue_analysis")
+logger = get_logger("fix_analysis")
 
-def extract_clustering_results_from_log(log_path):
-    """从日志文件中提取聚类结果"""
-    logger.info(f"从日志 {log_path} 中提取聚类结果...")
-    
-    # 初始化结果字典
-    clustering_results = {}
-    best_configs = {}
-    
-    try:
-        with open(log_path, 'r') as f:
-            log_content = f.read()
-        
-        # 提取diffusion特征组的聚类结果
-        # 这部分可能需要根据您的实际日志格式进行调整
-        diffusion_results = {}
-        
-        # 提取KMeans结果
-        kmeans_match = re.search(r"KMEANS 最佳聚类数量: (\d+).*?轮廓系数: ([\d\.]+).*?Calinski-Harabasz指数: ([\d\.]+).*?Davies-Bouldin指数: ([\d\.]+).*?类别分布: (.*?)\n", log_content, re.DOTALL)
-        if kmeans_match:
-            n_clusters = int(kmeans_match.group(1))
-            silhouette = float(kmeans_match.group(2))
-            calinski = float(kmeans_match.group(3))
-            davies = float(kmeans_match.group(4))
-            
-            # 创建虚拟标签数组，因为我们没有实际的标签
-            # 我们只关心它的一致性评估结果
-            virtual_labels = np.zeros(1359153)  # 使用与原始数据相同的大小
-            
-            diffusion_results['kmeans'] = {
-                'n_clusters': n_clusters,
-                'silhouette': silhouette,
-                'calinski': calinski,
-                'davies': davies,
-                'labels': virtual_labels
-            }
-        
-        # 提取Spectral结果
-        spectral_match = re.search(r"SPECTRAL 最佳聚类数量: (\d+).*?轮廓系数: ([\d\.]+).*?Calinski-Harabasz指数: ([\d\.]+).*?Davies-Bouldin指数: ([\d\.]+).*?类别分布: (.*?)\n", log_content, re.DOTALL)
-        if spectral_match:
-            n_clusters = int(spectral_match.group(1))
-            silhouette = float(spectral_match.group(2))
-            calinski = float(spectral_match.group(3))
-            davies = float(spectral_match.group(4))
-            
-            virtual_labels = np.ones(1359153)  # 不同的虚拟标签
-            
-            diffusion_results['spectral'] = {
-                'n_clusters': n_clusters,
-                'silhouette': silhouette,
-                'calinski': calinski,
-                'davies': davies,
-                'labels': virtual_labels
-            }
-        
-        # 提取Agglomerative结果
-        agg_match = re.search(r"AGGLOMERATIVE 最佳聚类数量: (\d+).*?轮廓系数: ([\d\.]+).*?Calinski-Harabasz指数: ([\d\.]+).*?Davies-Bouldin指数: ([\d\.]+).*?类别分布: (.*?)\n", log_content, re.DOTALL)
-        if agg_match:
-            n_clusters = int(agg_match.group(1))
-            silhouette = float(agg_match.group(2))
-            calinski = float(agg_match.group(3))
-            davies = float(agg_match.group(4))
-            
-            virtual_labels = np.ones(1359153) * 2  # 另一种虚拟标签
-            
-            diffusion_results['agglomerative'] = {
-                'n_clusters': n_clusters,
-                'silhouette': silhouette,
-                'calinski': calinski,
-                'davies': davies,
-                'labels': virtual_labels
-            }
-        
-        # 如果找到了diffusion的结果，添加到总结果中
-        if diffusion_results:
-            clustering_results['diffusion'] = diffusion_results
-            
-            # 找出最佳方法（基于轮廓系数）
-            best_method = max(diffusion_results.items(), key=lambda x: x[1]['silhouette'])[0]
-            best_configs['diffusion'] = {
-                'method': best_method,
-                'n_clusters': diffusion_results[best_method]['n_clusters'],
-                'silhouette': diffusion_results[best_method]['silhouette'],
-                'consistency': 0.5,  # 默认值，因为我们没有实际计算
-                'alignment': {}  # 空映射
-            }
-            
-            logger.info(f"从日志中提取到diffusion特征组的聚类结果: {best_method}, 聚类数: {best_configs['diffusion']['n_clusters']}")
-        
-        return clustering_results, best_configs
-    
-    except Exception as e:
-        logger.error(f"从日志提取聚类结果时出错: {e}")
-        return {}, {}
-
-def continue_analysis(log_path=None):
-    """继续分析并找到新的数据大类定义"""
+def fix_and_continue():
+    """修复分析并继续"""
     # 记录开始时间
     start_time = datetime.now()
     
     # 输出配置信息
-    log_section(logger, "继续分析")
+    log_section(logger, "修复分析并继续")
     
-    # 加载数据
+    # 加载数据（只加载验证集）
     logger.info("加载数据...")
     dataset = load_multiclass_data_from_dirs(subset='val')
     val_data, val_labels = dataset['val_samples'], dataset['val_labels']
@@ -667,101 +568,7 @@ def continue_analysis(log_path=None):
         val_data, big_labels, verbose=True, plot=False
     )
     
-    # 从日志中提取聚类结果
-    clustering_results = {}
-    best_configs = {}
-    if log_path:
-        clustering_results, best_configs = extract_clustering_results_from_log(log_path)
-    
-    # 处理剩余的特征组（按指定顺序）
-    feature_order = ['all_features', 'qti', 'cest', 'diffusion']
-    remaining_groups = [g for g in feature_order if g in processed_groups and g not in clustering_results]
-    
-    if remaining_groups:
-        log_section(logger, "处理剩余的特征组聚类")
-        
-        for group_name in remaining_groups:
-            logger.info(f"\n处理 {group_name} 特征组的聚类结果...")
-            group_data = processed_groups[group_name]
-            
-            # 使用预先选好的聚类方法和数量
-            from sklearn.cluster import KMeans, AgglomerativeClustering
-            from sklearn.mixture import GaussianMixture
-            
-            # 使用多种聚类方法
-            methods = {
-                'kmeans': KMeans(n_clusters=7, random_state=42, n_init=10),
-                'agglomerative': AgglomerativeClustering(n_clusters=7),
-                'gmm': GaussianMixture(n_components=7, random_state=42)
-            }
-            
-            group_results = {}
-            
-            for method_name, model in methods.items():
-                logger.info(f"  应用 {method_name} 聚类方法...")
-                
-                # 进行聚类
-                if method_name == 'gmm':
-                    model.fit(group_data)
-                    labels = model.predict(group_data)
-                else:
-                    labels = model.fit_predict(group_data)
-                
-                # 计算聚类指标
-                try:
-                    from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
-                    if len(np.unique(labels)) > 1:
-                        sil_score = silhouette_score(group_data, labels)
-                        cal_score = calinski_harabasz_score(group_data, labels)
-                        dav_score = davies_bouldin_score(group_data, labels)
-                    else:
-                        sil_score, cal_score, dav_score = -1, -1, float('inf')
-                except Exception as e:
-                    logger.error(f"计算聚类指标时出错: {e}")
-                    sil_score, cal_score, dav_score = -1, -1, float('inf')
-                
-                # 保存结果
-                group_results[method_name] = {
-                    'n_clusters': 7,
-                    'silhouette': sil_score,
-                    'calinski': cal_score,
-                    'davies': dav_score,
-                    'labels': labels
-                }
-                
-                logger.info(f"    轮廓系数: {sil_score:.4f}")
-                logger.info(f"    Calinski-Harabasz指数: {cal_score:.1f}")
-                logger.info(f"    Davies-Bouldin指数: {dav_score:.4f}")
-                
-                # 分析聚类与大类的一致性
-                consistency_score, alignment = visualize_cluster_vs_labels(
-                    labels, big_labels, f"{group_name}_{method_name}",
-                    big_class_names=big_class_names, verbose=True, plot=True, 
-                    save_name=f"{group_name}_{method_name}"
-                )
-                
-                # 添加一致性和映射信息
-                group_results[method_name]['consistency'] = consistency_score
-                group_results[method_name]['alignment'] = alignment
-                
-                logger.info(f"    与原始大类的一致性: {consistency_score:.4f}")
-            
-            # 保存该特征组的所有聚类结果
-            clustering_results[group_name] = group_results
-            
-            # 找出该特征组的最佳聚类方法（基于一致性）
-            best_method = max(group_results.items(), key=lambda x: x[1]['consistency'])[0]
-            best_configs[group_name] = {
-                'method': best_method,
-                'n_clusters': 7,
-                'silhouette': group_results[best_method]['silhouette'],
-                'consistency': group_results[best_method]['consistency'],
-                'alignment': group_results[best_method]['alignment']
-            }
-            
-            logger.info(f"  最佳聚类方法: {best_method}, 一致性: {best_configs[group_name]['consistency']:.4f}")
-    
-    # 分类评估
+    # 跳过聚类分析，直接进行分类评估
     log_section(logger, "分类评估")
     
     # 评估不同分类器
@@ -769,14 +576,14 @@ def continue_analysis(log_path=None):
     if 'all_features' in processed_groups:
         classifier_results = compare_classification_models(
             processed_groups['all_features'], big_labels, verbose=True,
-            plot=True, save_name="all_features_classifiers"
+            plot=True, save_name="all_features"
         )
     else:
-        # 使用最佳特征组
+        # 使用第一个可用的特征组
         first_group = list(processed_groups.keys())[0]
         classifier_results = compare_classification_models(
             processed_groups[first_group], big_labels, verbose=True,
-            plot=True, save_name=f"{first_group}_classifiers"
+            plot=True, save_name=first_group
         )
     
     # 评估特征组合
@@ -794,178 +601,25 @@ def continue_analysis(log_path=None):
         save_name="confusion_matrix"
     )
     
-    # 找出具有有效聚类和一致性评估的特征组
-    valid_groups = {}
-    for group_name, config in best_configs.items():
-        if 'consistency' in config and config['consistency'] > 0:
-            valid_groups[f"{group_name}_{config['method']}"] = {
-                'consistency_score': config['consistency'],
-                'mapping': config.get('alignment', {})
-            }
+    # 生成最终报告
+    log_section(logger, "最终报告")
     
-    # 如果没有有效的一致性评估，使用分类性能来推荐
-    if not valid_groups:
-        log_section(logger, "无有效聚类结果，使用分类性能推荐")
-        logger.info("未找到有效的聚类一致性评估，使用分类性能作为主要依据")
-        
-        mapping_result = {
-            'fine_to_big': fine_to_big,
-            'big_to_fine': big_to_fine,
-            'consistency_score': 0.0,
-            'recommendation': "保持现有大类定义（因为缺乏有效的聚类评估）"
-        }
-        
-        report = {
-            'best_feature_combination': best_combination,
-            'best_performance': best_performance,
-            'best_classifier': max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0],
-            'recommendations': {
-                'bigclass_strategy': "保持现有大类定义（因为缺乏有效的聚类评估）",
-                'feature_combination': "使用 " + " + ".join(best_combination) + " 特征组合",
-                'classifier': f"推荐使用 {max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0]} 作为分类器"
-            }
-        }
-    else:
-        # 结果整合与新大类定义
-        log_section(logger, "结果整合与新大类定义")
-        
-        # 找出最佳特征组和聚类方法（基于一致性）
-        best_mapping_key = max(valid_groups.items(), key=lambda x: x[1]['consistency_score'])[0]
-        parts = best_mapping_key.split('_')
-        best_group = parts[0]
-        best_method = '_'.join(parts[1:])
-        
-        logger.info(f"最佳映射来自: {best_group} 特征组, {best_method} 聚类方法")
-        consistency_score = valid_groups[best_mapping_key]['consistency_score']
-        logger.info(f"一致性得分: {consistency_score:.4f}")
-        
-        # 检查是否需要重新定义大类
-        consistency_threshold = 0.5
-        if consistency_score <= consistency_threshold:
-            logger.info(f"一致性得分 ({consistency_score:.4f}) <= {consistency_threshold}，建议重新定义大类")
-            
-            # 获取最佳聚类结果
-            best_labels = clustering_results[best_group][best_method]['labels']
-            
-            # 生成新的大类映射
-            new_mapping, new_big_labels = generate_bigclass_mapping(
-                {'labels': best_labels}, big_labels, big_class_names=big_class_names, 
-                mapping_type='optimal'
-            )
-            
-            # 创建细分类到新大类的映射
-            logger.info("生成新的细分类到大类的映射...")
-            new_fine_to_big = {}
-            for fine_class in fine_to_big:
-                # 查找与此细分类对应的原始大类
-                original_big = fine_to_big[fine_class]
-                
-                # 使用新的大类映射关系
-                if original_big in valid_groups[best_mapping_key]['mapping']:
-                    new_big = valid_groups[best_mapping_key]['mapping'][original_big]
-                    new_fine_to_big[fine_class] = new_big
-                else:
-                    # 如果找不到对应关系，保持原样
-                    new_fine_to_big[fine_class] = original_big
-            
-            # 可视化映射变化
-            visualize_mapping_changes(
-                fine_to_big, new_fine_to_big, big_class_names=big_class_names,
-                save_path=os.path.join(FIGURES_DIR, "mapping_changes.png")
-            )
-            
-            # 重新生成大类到细分类的映射
-            new_big_to_fine = {}
-            for fine_class, big_class in new_fine_to_big.items():
-                if big_class not in new_big_to_fine:
-                    new_big_to_fine[big_class] = []
-                new_big_to_fine[big_class].append(fine_class)
-            
-            # 保存新的映射关系
-            mapping_result = {
-                'original_fine_to_big': fine_to_big,
-                'new_fine_to_big': new_fine_to_big,
-                'original_big_to_fine': big_to_fine,
-                'new_big_to_fine': new_big_to_fine,
-                'consistency_score': consistency_score,
-                'best_mapping_source': best_mapping_key
-            }
-            
-            # 生成最终报告
-            report = {
-                'best_feature_combination': best_combination,
-                'best_performance': best_performance,
-                'best_classifier': max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0],
-                'best_mapping': {
-                    'source': best_mapping_key,
-                    'consistency_score': consistency_score
-                },
-                'recommendations': {
-                    'bigclass_strategy': "重新定义大类 - 当前预定义的大类划分与数据聚类差异较大",
-                    'feature_combination': "使用 " + " + ".join(best_combination) + " 特征组合",
-                    'classifier': f"推荐使用 {max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0]} 作为分类器"
-                }
-            }
-        else:
-            logger.info(f"一致性得分 ({consistency_score:.4f}) > {consistency_threshold}，建议保持现有大类定义")
-            mapping_result = {
-                'fine_to_big': fine_to_big,
-                'big_to_fine': big_to_fine,
-                'consistency_score': consistency_score,
-                'best_mapping_source': best_mapping_key
-            }
-            
-            # 生成最终报告
-            report = {
-                'best_feature_combination': best_combination,
-                'best_performance': best_performance,
-                'best_classifier': max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0],
-                'best_mapping': {
-                    'source': best_mapping_key,
-                    'consistency_score': consistency_score
-                },
-                'recommendations': {
-                    'bigclass_strategy': "保持现有大类定义 - 与数据聚类有良好一致性",
-                    'feature_combination': "使用 " + " + ".join(best_combination) + " 特征组合",
-                    'classifier': f"推荐使用 {max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0]} 作为分类器"
-                }
-            }
-    
-    # 保存最终报告
-    save_results(report, "final_report", format='json')
-    
-    # 保存所有结果
-    save_results({
-        'clustering_results': clustering_results,
-        'best_configs': best_configs,
-        'classifier_results': classifier_results,
-        'best_combination': best_combination,
+    report = {
+        'best_feature_combination': best_combination,
         'best_performance': best_performance,
-        'mapping_result': mapping_result,
-        'final_report': report
-    }, "all_results", format='pkl')
+        'best_classifier': max(classifier_results.items(), key=lambda x: x[1]['mean']['balanced_accuracy'])[0],
+        'recommendation': "由于跳过聚类分析，保持现有大类定义"
+    }
+    
+    # 保存结果
+    save_results(report, "final_report", format='json')
+    logger.info(f"最终报告已保存")
     
     # 记录结束时间
     end_time = datetime.now()
-    log_execution_time(logger, start_time, end_time, "总执行时间")
+    log_execution_time(logger, start_time, end_time, "分析总执行时间")
     
-    # 返回报告和映射
-    return report, mapping_result
+    return report
 
 if __name__ == "__main__":
-    # 日志文件路径
-    log_path = "BrainVoxel_Hierarchical_20250321_140558.log"  # 修改为您的日志文件路径
-    
-    report, mapping = continue_analysis(log_path)
-    
-    # 打印主要发现和建议
-    print("\n=== 主要发现和建议 ===")
-    for key, value in report['recommendations'].items():
-        print(f"{key}: {value}")
-    
-    if mapping.get('new_fine_to_big'):
-        print("\n=== 新大类定义已生成 ===")
-        print("建议在KAN训练中使用新的大类定义")
-    else:
-        print("\n=== 保持现有大类定义 ===")
-        print("现有大类定义与数据结构匹配良好")
+    fix_and_continue()
