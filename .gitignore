@@ -28,6 +28,34 @@ MANIFEST
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
+
+# 忽略检查点文件
+checkpoints/
+*.pkl
+*.npz
+
+# 结果和分析相关
+Results/*/
+analysis_*/
+*_report_*.txt
+*_analysis.png
+
+# 临时运行数据
+tmp/
+cache/
+.run/
+
+# 大型数据文件
+*.bin
+*.hdf5
+*.zarr
+*.arrow
+*.parquet
+
+# 缓存文件
+__cache__/
+.pkl_memoize_cache/
+
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
