@@ -5,7 +5,8 @@ import time
 import pickle
 import warnings
 
-from .bilingual_logger import BilingualLogger
+from src.bilingual_logger import BilingualLogger
+
 
 class PseudoInverseModel:
     """使用伪逆方法的线性模型类"""

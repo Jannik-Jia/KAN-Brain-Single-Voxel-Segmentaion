@@ -7,9 +7,7 @@ import seaborn as sns
 import warnings
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 from sklearn.metrics import classification_report, confusion_matrix, cohen_kappa_score
-
-from .bilingual_logger import BilingualLogger
-
+from src.bilingual_logger import BilingualLogger
 class ModelEvaluator:
     """模型评估类，用于评估模型性能并生成可视化结果"""
     

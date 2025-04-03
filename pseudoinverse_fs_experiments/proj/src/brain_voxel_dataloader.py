@@ -7,8 +7,10 @@ from tqdm import tqdm
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-from .bilingual_logger import BilingualLogger
-from .feature_selector import FeatureSelector
+# To:
+from src.bilingual_logger import BilingualLogger
+from src.feature_selector import FeatureSelector
+
 
 class BrainVoxelDataLoader:
     """脑体素数据加载类，处理训练、测试和验证数据"""

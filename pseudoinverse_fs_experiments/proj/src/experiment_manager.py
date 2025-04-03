@@ -11,11 +11,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 
-from .bilingual_logger import BilingualLogger
-from .feature_selector import FeatureSelector
-from .pseudoinverse_model import PseudoInverseModel
-from .model_evaluator import ModelEvaluator
-from .visualization_utils import (
+
+from src.bilingual_logger import BilingualLogger
+from src.feature_selector import FeatureSelector
+from src.pseudoinverse_model import PseudoInverseModel
+from src.model_evaluator import ModelEvaluator
+from src.visualization_utils import (
     visualize_feature_selection, 
     visualize_feature_stability, 
     visualize_feature_importance, 

@@ -5,10 +5,11 @@ import argparse
 import time
 from datetime import datetime
 
-from bilingual_logger import BilingualLogger
-from brain_voxel_dataloader import BrainVoxelDataLoader
-from experiment_manager import ExperimentManagerWithFeatureSelection
-from utils import create_feature_selection_param_grid, sample_parameter_combinations
+from src.bilingual_logger import BilingualLogger
+from src.brain_voxel_dataloader import BrainVoxelDataLoader
+from src.experiment_manager import ExperimentManagerWithFeatureSelection
+from src.utils import create_feature_selection_param_grid, sample_parameter_combinations
+
 
 def setup_args():
     """设置命令行参数"""

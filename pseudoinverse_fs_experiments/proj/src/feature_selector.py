@@ -11,7 +11,8 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.metrics import jaccard_score
 from sklearn.model_selection import KFold
 
-from .bilingual_logger import BilingualLogger
+
+from src.bilingual_logger import BilingualLogger
 
 class FeatureSelector:
     """使用LASSO或弹性网络进行特征选择的类"""
