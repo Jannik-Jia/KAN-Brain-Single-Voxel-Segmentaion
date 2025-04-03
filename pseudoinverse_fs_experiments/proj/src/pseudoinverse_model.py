@@ -106,7 +106,8 @@ class PseudoInverseModel:
         y_pred = self.predict(X)
         accuracy = accuracy_score(y, y_pred)
         self.logger.info(f"训练集准确率: {accuracy:.4f}", f"Training accuracy: {accuracy:.4f}")
-        
+        self.logger.info(f"矩阵运算类型检查: X_bias 类型 = {type(X_bias)}", 
+               f"Matrix operation type check: X_bias type = {type(X_bias)}")
         return self
     
     def predict(self, X):

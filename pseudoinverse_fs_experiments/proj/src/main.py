@@ -7,8 +7,7 @@ import numpy as np
 from datetime import datetime
 
 from src.bilingual_logger import BilingualLogger
-from src.brain_voxel_dataloader import BrainVoxelDataLoader
-from src.experiment_manager import ExperimentManagerWithFeatureSelection
+
 from src.utils import create_feature_selection_param_grid, sample_parameter_combinations
 from src.gpu_utils import init_gpu  # 导入GPU初始化函数
 
@@ -213,6 +212,16 @@ def main():
                    f"Trying to initialize GPU acceleration, memory limit: {args.gpu_memory_fraction}")
         
         gpu_available = init_gpu(use_gpu=args.use_gpu, memory_fraction=args.gpu_memory_fraction)
+    
+        from src.gpu_utils import USE_GPU
+        logger.info(f"GPU全局状态检查: USE_GPU = {USE_GPU}", 
+                f"Global GPU status check: USE_GPU = {USE_GPU}")
+
+        # 确保所有导入都在GPU初始化之后
+        from src.brain_voxel_dataloader import BrainVoxelDataLoader
+        from src.experiment_manager import ExperimentManagerWithFeatureSelection
+
+
         
         if gpu_available:
             logger.info("GPU初始化成功，将使用GPU加速计算", "GPU initialization successful, using GPU acceleration")

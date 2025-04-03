@@ -29,17 +29,28 @@ def init_gpu(use_gpu=True, memory_fraction=0.8):
     try:
         import cupy as cp
         
-        # 限制GPU内存使用
-        try:
-            cp.cuda.set_allocator(cp.cuda.MemoryPool(cp.cuda.malloc_managed).malloc)
-            cp.cuda.memory.set_limit_ratio(memory_fraction)
-            print(f"已设置GPU内存使用上限为{memory_fraction*100:.0f}%")
-        except Exception as e:
-            print(f"设置GPU内存限制时出错: {str(e)}")
-        
         # 检查CUDA是否可用
         if cp.cuda.is_available():
-            print(f"GPU初始化成功: {cp.cuda.runtime.getDeviceProperties(0)['name']}")
+            # 尝试设置内存池（不影响主要功能）
+            try:
+                cp.cuda.set_allocator(cp.cuda.MemoryPool().malloc)
+                # 注意：较新版本的CuPy可能没有set_limit_ratio方法
+                # 我们尝试使用替代方法或跳过这一步
+                try:
+                    cp.cuda.memory.set_limit_ratio(memory_fraction)
+                    print(f"已设置GPU内存使用上限为{memory_fraction*100:.0f}%")
+                except AttributeError:
+                    print(f"当前CuPy版本不支持set_limit_ratio方法，使用默认内存管理")
+                    # 可能的替代方法（取决于CuPy版本）
+                    if hasattr(cp.cuda, 'setMemoryFraction'):
+                        cp.cuda.setMemoryFraction(memory_fraction)
+                        print(f"使用setMemoryFraction设置内存比例为{memory_fraction}")
+            except Exception as e:
+                print(f"设置GPU内存管理时出错: {str(e)}，将使用默认内存管理")
+                
+            # 不管内存设置如何，我们仍然启用GPU
+            device_name = cp.cuda.runtime.getDeviceProperties(0)['name']
+            print(f"GPU初始化成功: {device_name}")
             USE_GPU = True
             xp = cp
             return True
@@ -51,7 +62,7 @@ def init_gpu(use_gpu=True, memory_fraction=0.8):
             
     except ImportError:
         print("未安装CuPy，切换到CPU模式")
-        warnings.warn("要使用GPU加速，请安装CuPy: pip install cupy-cuda11x (根据CUDA版本选择)")
+        print("要使用GPU加速，请安装CuPy: pip install cupy-cuda11x (根据CUDA版本选择)")
         USE_GPU = False
         xp = np
         return False
