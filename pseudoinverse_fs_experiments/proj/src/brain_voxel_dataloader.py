@@ -43,7 +43,7 @@ class BrainVoxelDataLoader:
         self.scaler = None
         
         gpu_status = "启用" if USE_GPU else "未启用"
-        self.logger.info(f"数据加载器初始化完成，GPU加速：{gpu_status}", 
+        self.logger.info(f"数据加载器初始化完成，GPU加速：{gpu_status}",
                         f"Data loader initialized, GPU acceleration: {gpu_status}")
     
     def _load_data_from_dir(self, directory, desc="加载数据"):
@@ -125,7 +125,7 @@ class BrainVoxelDataLoader:
             f"Validation set: {val_len} samples"
         )
     
-    def preprocess_data(self, apply_pca=False, n_components=50, 
+    def preprocess_data(self, apply_pca=False, n_components=50,
                        normalization='standard', class_balance=False,
                        target_samples=1000, random_state=42):
         """
@@ -152,7 +152,7 @@ class BrainVoxelDataLoader:
         
         # 1. 应用PCA降维（要在CPU上进行）
         if apply_pca and n_components > 0:
-            self.logger.info(f"应用PCA降维至{n_components}个组件", 
+            self.logger.info(f"应用PCA降维至{n_components}个组件",
                             f"Applying PCA reduction to {n_components} components")
             
             # 转换到CPU进行PCA处理
@@ -168,6 +168,48 @@ class BrainVoxelDataLoader:
             
             test_X_cpu = self.pca_model.transform(test_X_cpu)
             val_X_cpu = self.pca_model.transform(val_X_cpu)
+            
+            # 转回GPU
+            train_X = to_gpu(train_X_cpu)
+            test_X = to_gpu(test_X_cpu)
+            val_X = to_gpu(val_X_cpu)
+            
+            # 记录解释方差
+            explained_variance = np.sum(self.pca_model.explained_variance_ratio_)
+            self.logger.info(f"PCA解释方差: {explained_variance:.4f}",
+                            f"PCA explained variance: {explained_variance:.4f}")
+        
+        # 2. 应用标准化（要在CPU上进行）
+        if normalization == 'standard':
+            self.logger.info("应用标准化(Z-score)", "Applying standardization (Z-score)")
+            
+            # 转换到CPU
+            train_X_cpu = ensure_numpy(train_X)
+            test_X_cpu = ensure_numpy(test_X)
+            val_X_cpu = ensure_numpy(val_X)
+            
+            self.scaler = StandardScaler()
+            train_X_cpu = self.scaler.fit_transform(train_X_cpu)
+            test_X_cpu = self.scaler.transform(test_X_cpu)
+            val_X_cpu = self.scaler.transform(val_X_cpu)
+            
+            # 转回GPU
+            train_X = to_gpu(train_X_cpu)
+            test_X = to_gpu(test_X_cpu)
+            val_X = to_gpu(val_X_cpu)
+            
+        elif normalization == 'minmax':
+            self.logger.info("应用归一化(MinMax)", "Applying normalization (MinMax)")
+            
+            # 转换到CPU
+            train_X_cpu = ensure_numpy(train_X)
+            test_X_cpu = ensure_numpy(test_X)
+            val_X_cpu = ensure_numpy(val_X)
+            
+            self.scaler = MinMaxScaler()
+            train_X_cpu = self.scaler.fit_transform(train_X_cpu)
+            test_X_cpu = self.scaler.transform(test_X_cpu)
+            val_X_cpu = self.scaler.transform(val_X_cpu)
             
             # 转回GPU
             train_X = to_gpu(train_X_cpu)
@@ -239,7 +281,7 @@ class BrainVoxelDataLoader:
             train_X = to_gpu(train_X_cpu)
             train_y = to_gpu(train_y_cpu)
             
-            self.logger.info(f"类别平衡后训练集大小: {len(train_y_cpu)}", 
+            self.logger.info(f"类别平衡后训练集大小: {len(train_y_cpu)}",
                            f"Training set size after balancing: {len(train_y_cpu)}")
         
         # 保存处理后的数据
@@ -251,52 +293,8 @@ class BrainVoxelDataLoader:
         processed_data['val_y'] = val_y
         
         return processed_data
-
-
-class BrainVoxelSampler:
-    """脑体素数据采样器，提供多种采样策略"""
     
-    def __init__(self, data_dir):
-        """
-        初始化采样器
-        
-        参数:
-            data_dir: 数据集目录
-        """
-        self.data_dir = data_dir
-        self.label_info = self._load_label_index()
-        self.valid_labels = [label for label, info in self.label_info.items() if info['count'] > 0]
-    
-    def _load_label_index(self):
-        """加载标签索引文件"""
-        index_file = os.path.join(self.data_dir, "label_index.txt")
-        label_info = {}
-        
-        with open(index_file, 'r') as f:
-            # 跳过表头
-            next(f)
-            for line in f:
-                parts = line.strip().split(',')
-                if len(parts) >= 3:
-                    label_id = int(parts[0])
-                    voxel_count = int(parts[1])
-                    filename = parts[2] if parts[2] else None
-                    label_info[label_id] = {'count': voxel_count, 'filename': filename}
-        
-        return label_info
-    
-    def get_file_path(self, label_id):
-        """获取指定标签的文件路径"""
-        if label_id not in self.label_info:
-            return None
-        
-        filename = self.label_info[label_id]['filename']
-        if not filename:
-            return None
-            
-        return os.path.join(self.data_dir, filename)
-    
-    def preprocess_data_with_feature_selection(self, apply_pca=False, n_components=50, 
+    def preprocess_data_with_feature_selection(self, apply_pca=False, n_components=50,
                                               normalization='standard', class_balance=False,
                                               target_samples=1000, random_state=42,
                                               feature_selection=None, selection_mode='threshold',
@@ -359,7 +357,7 @@ class BrainVoxelSampler:
         
         # 拟合特征选择器并转换训练数据
         train_X_selected = selector.fit_transform(
-            processed_data['train_X'], 
+            processed_data['train_X'],
             processed_data['train_y']
         )
         
@@ -379,45 +377,47 @@ class BrainVoxelSampler:
                       f"Feature selection completed, selected {len(selected_indices)} features")
         
         return processed_data
-            val_X = to_gpu(val_X_cpu)
-            
-            # 记录解释方差
-            explained_variance = np.sum(self.pca_model.explained_variance_ratio_)
-            self.logger.info(f"PCA解释方差: {explained_variance:.4f}",
-                            f"PCA explained variance: {explained_variance:.4f}")
+
+
+class BrainVoxelSampler:
+    """脑体素数据采样器，提供多种采样策略"""
+    
+    def __init__(self, data_dir):
+        """
+        初始化采样器
         
-        # 2. 应用标准化（要在CPU上进行）
-        if normalization == 'standard':
-            self.logger.info("应用标准化(Z-score)", "Applying standardization (Z-score)")
+        参数:
+            data_dir: 数据集目录
+        """
+        self.data_dir = data_dir
+        self.label_info = self._load_label_index()
+        self.valid_labels = [label for label, info in self.label_info.items() if info['count'] > 0]
+    
+    def _load_label_index(self):
+        """加载标签索引文件"""
+        index_file = os.path.join(self.data_dir, "label_index.txt")
+        label_info = {}
+        
+        with open(index_file, 'r') as f:
+            # 跳过表头
+            next(f)
+            for line in f:
+                parts = line.strip().split(',')
+                if len(parts) >= 3:
+                    label_id = int(parts[0])
+                    voxel_count = int(parts[1])
+                    filename = parts[2] if parts[2] else None
+                    label_info[label_id] = {'count': voxel_count, 'filename': filename}
+        
+        return label_info
+    
+    def get_file_path(self, label_id):
+        """获取指定标签的文件路径"""
+        if label_id not in self.label_info:
+            return None
+        
+        filename = self.label_info[label_id]['filename']
+        if not filename:
+            return None
             
-            # 转换到CPU
-            train_X_cpu = ensure_numpy(train_X)
-            test_X_cpu = ensure_numpy(test_X)
-            val_X_cpu = ensure_numpy(val_X)
-            
-            self.scaler = StandardScaler()
-            train_X_cpu = self.scaler.fit_transform(train_X_cpu)
-            test_X_cpu = self.scaler.transform(test_X_cpu)
-            val_X_cpu = self.scaler.transform(val_X_cpu)
-            
-            # 转回GPU
-            train_X = to_gpu(train_X_cpu)
-            test_X = to_gpu(test_X_cpu)
-            val_X = to_gpu(val_X_cpu)
-            
-        elif normalization == 'minmax':
-            self.logger.info("应用归一化(MinMax)", "Applying normalization (MinMax)")
-            
-            # 转换到CPU
-            train_X_cpu = ensure_numpy(train_X)
-            test_X_cpu = ensure_numpy(test_X)
-            val_X_cpu = ensure_numpy(val_X)
-            
-            self.scaler = MinMaxScaler()
-            train_X_cpu = self.scaler.fit_transform(train_X_cpu)
-            test_X_cpu = self.scaler.transform(test_X_cpu)
-            val_X_cpu = self.scaler.transform(val_X_cpu)
-            
-            # 转回GPU
-            train_X = to_gpu(train_X_cpu)
-            test_X = to_gpu(test_X_cpu)
+        return os.path.join(self.data_dir, filename)
