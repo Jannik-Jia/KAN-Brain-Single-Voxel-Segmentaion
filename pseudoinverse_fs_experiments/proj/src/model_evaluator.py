@@ -35,7 +35,7 @@ class ModelEvaluator:
             包含各种评估指标的字典
         """
         self.logger.info(f"开始评估模型在{dataset_name}集上的性能", 
-                    f"Starting model evaluation on {dataset_name} set")
+                        f"Starting model evaluation on {dataset_name} set")
         
         # 获取预测
         y_pred = model.predict(X)
@@ -55,36 +55,36 @@ class ModelEvaluator:
         # 计算评估指标 (使用CPU数组)
         accuracy = accuracy_score(y_cpu, y_pred_cpu)
         balanced_acc = balanced_accuracy_score(y_cpu, y_pred_cpu)
-
+        
         # 处理可能的警告（某些类别可能没有样本）
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            f1_macro = f1_score(y, y_pred, average='macro')
-            f1_weighted = f1_score(y, y_pred, average='weighted')
-            class_f1 = f1_score(y, y_pred, average=None)
+            f1_macro = f1_score(y_cpu, y_pred_cpu, average='macro')
+            f1_weighted = f1_score(y_cpu, y_pred_cpu, average='weighted')
+            class_f1 = f1_score(y_cpu, y_pred_cpu, average=None)
             
         # 只有当所有类别都有样本时才计算Kappa
         try:
-            kappa = cohen_kappa_score(y, y_pred)
+            kappa = cohen_kappa_score(y_cpu, y_pred_cpu)
         except:
             kappa = float('nan')
         
         # 分类报告和混淆矩阵
         try:
-            report = classification_report(y, y_pred, output_dict=True)
+            report = classification_report(y_cpu, y_pred_cpu, output_dict=True)
         except:
             report = {}
         
         try:
-            conf_matrix = confusion_matrix(y, y_pred)
+            conf_matrix = confusion_matrix(y_cpu, y_pred_cpu)
         except:
             conf_matrix = np.array([])
         
         # 统计每个类别的样本数
         class_counts = {}
-        unique_classes = np.unique(y)
+        unique_classes = np.unique(y_cpu)
         for cls in unique_classes:
-            class_counts[int(cls)] = np.sum(y == cls)
+            class_counts[int(cls)] = np.sum(y_cpu == cls)
         
         # 将结果存储到字典中
         result = {
@@ -97,11 +97,11 @@ class ModelEvaluator:
             'report': report,
             'confusion_matrix': conf_matrix,
             'class_counts': class_counts,
-            'y_true': y,
-            'y_pred': y_pred,
-            'y_proba': y_proba
+            'y_true': y_cpu,
+            'y_pred': y_pred_cpu,
+            'y_proba': y_proba_cpu
         }
-        
+
         # 记录评估结果
         self.logger.info(
             f"{dataset_name}集评估结果:\n"

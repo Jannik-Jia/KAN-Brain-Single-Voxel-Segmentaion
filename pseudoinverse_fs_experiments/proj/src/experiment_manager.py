@@ -54,151 +54,151 @@ class ExperimentManager:
         self.logger.info(f"实验管理器初始化，基础目录: {base_dir}", 
                        f"Experiment manager initialized with base directory: {base_dir}")
     
-    def run_experiment(self, params, force_rerun=False):
-        """
-        运行单个实验
+    # def run_experiment(self, params, force_rerun=False):
+    #     """
+    #     运行单个实验
         
-        参数:
-            params: 实验参数字典
-            force_rerun: 是否强制重新运行已完成的实验
+    #     参数:
+    #         params: 实验参数字典
+    #         force_rerun: 是否强制重新运行已完成的实验
             
-        返回:
-            experiment_id: 实验ID
-            results: 实验结果
-        """
-        # 生成实验ID
-        experiment_id = self._generate_experiment_id(params)
-        experiment_dir = os.path.join(self.base_dir, experiment_id)
+    #     返回:
+    #         experiment_id: 实验ID
+    #         results: 实验结果
+    #     """
+    #     # 生成实验ID
+    #     experiment_id = self._generate_experiment_id(params)
+    #     experiment_dir = os.path.join(self.base_dir, experiment_id)
         
-        # 检查是否已完成实验
-        if os.path.exists(experiment_dir) and not force_rerun:
-            status_path = os.path.join(experiment_dir, "status.json")
-            if os.path.exists(status_path):
-                with open(status_path, 'r') as f:
-                    status = json.load(f)
-                    if status.get('status') == 'completed':
-                        self.logger.info(f"实验 {experiment_id} 已完成，跳过", 
-                                       f"Experiment {experiment_id} already completed, skipping")
-                        return experiment_id, self._load_results(experiment_dir)
+    #     # 检查是否已完成实验
+    #     if os.path.exists(experiment_dir) and not force_rerun:
+    #         status_path = os.path.join(experiment_dir, "status.json")
+    #         if os.path.exists(status_path):
+    #             with open(status_path, 'r') as f:
+    #                 status = json.load(f)
+    #                 if status.get('status') == 'completed':
+    #                     self.logger.info(f"实验 {experiment_id} 已完成，跳过", 
+    #                                    f"Experiment {experiment_id} already completed, skipping")
+    #                     return experiment_id, self._load_results(experiment_dir)
         
-        # 创建实验目录
-        os.makedirs(experiment_dir, exist_ok=True)
+    #     # 创建实验目录
+    #     os.makedirs(experiment_dir, exist_ok=True)
         
-        # 保存参数
-        with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
-            json.dump(params, f, indent=4)
+    #     # 保存参数
+    #     with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
+    #         json.dump(params, f, indent=4)
         
-        # 更新状态为运行中
-        with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-            json.dump({"status": "running", "start_time": str(datetime.now())}, f, indent=4)
+    #     # 更新状态为运行中
+    #     with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
+    #         json.dump({"status": "running", "start_time": str(datetime.now())}, f, indent=4)
         
-        # 记录实验开始
-        self.logger.info(f"开始实验 {experiment_id}", f"Starting experiment {experiment_id}")
-        self.logger.info(f"参数: {params}", f"Parameters: {params}")
+    #     # 记录实验开始
+    #     self.logger.info(f"开始实验 {experiment_id}", f"Starting experiment {experiment_id}")
+    #     self.logger.info(f"参数: {params}", f"Parameters: {params}")
         
-        try:
-            # 处理数据
-            start_time = time.time()
-            processed_data = self.data_loader.preprocess_data(
-                apply_pca=params.get('apply_pca', False),
-                n_components=params.get('n_components', 50),
-                normalization=params.get('normalization', None),
-                class_balance=params.get('class_balance', False),
-                target_samples=params.get('target_samples', 1000)
-            )
+    #     try:
+    #         # 处理数据
+    #         start_time = time.time()
+    #         processed_data = self.data_loader.preprocess_data(
+    #             apply_pca=params.get('apply_pca', False),
+    #             n_components=params.get('n_components', 50),
+    #             normalization=params.get('normalization', None),
+    #             class_balance=params.get('class_balance', False),
+    #             target_samples=params.get('target_samples', 1000)
+    #         )
             
-            # 训练模型
-            model = PseudoInverseModel(num_classes=102, logger=self.logger)
-            model.fit(
-                processed_data['train_X'], 
-                processed_data['train_y'],
-                regularization=params.get('regularization', None),
-                alpha=params.get('alpha', 0.0)
-            )
-            train_time = time.time() - start_time
+    #         # 训练模型
+    #         model = PseudoInverseModel(num_classes=102, logger=self.logger)
+    #         model.fit(
+    #             processed_data['train_X'], 
+    #             processed_data['train_y'],
+    #             regularization=params.get('regularization', None),
+    #             alpha=params.get('alpha', 0.0)
+    #         )
+    #         train_time = time.time() - start_time
             
-            # 保存模型
-            model.save(os.path.join(experiment_dir, "model.pkl"))
+    #         # 保存模型
+    #         model.save(os.path.join(experiment_dir, "model.pkl"))
             
-            # 评估模型
-            eval_start_time = time.time()
-            evaluator = ModelEvaluator(logger=self.logger)
+    #         # 评估模型
+    #         eval_start_time = time.time()
+    #         evaluator = ModelEvaluator(logger=self.logger)
             
-            # 评估训练集
-            train_result = evaluator.evaluate(
-                model, processed_data['train_X'], processed_data['train_y'], "train")
+    #         # 评估训练集
+    #         train_result = evaluator.evaluate(
+    #             model, processed_data['train_X'], processed_data['train_y'], "train")
             
-            # 评估测试集
-            test_result = evaluator.evaluate(
-                model, processed_data['test_X'], processed_data['test_y'], "test")
+    #         # 评估测试集
+    #         test_result = evaluator.evaluate(
+    #             model, processed_data['test_X'], processed_data['test_y'], "test")
             
-            # 评估验证集
-            val_result = evaluator.evaluate(
-                model, processed_data['val_X'], processed_data['val_y'], "val")
+    #         # 评估验证集
+    #         val_result = evaluator.evaluate(
+    #             model, processed_data['val_X'], processed_data['val_y'], "val")
             
-            evaluation_time = time.time() - eval_start_time
+    #         evaluation_time = time.time() - eval_start_time
             
-            # 生成可视化
-            evaluator.visualize_performance(save_dir=experiment_dir)
+    #         # 生成可视化
+    #         evaluator.visualize_performance(save_dir=experiment_dir)
             
-            # 特征重要性可视化
-            visualize_feature_importance(
-                model, top_n=30, 
-                save_path=os.path.join(experiment_dir, "feature_importance.png"))
+    #         # 特征重要性可视化
+    #         visualize_feature_importance(
+    #             model, top_n=30, 
+    #             save_path=os.path.join(experiment_dir, "feature_importance.png"))
             
-            # 权重分布可视化
-            visualize_weight_distribution(
-                model, save_path=os.path.join(experiment_dir, "weight_distribution.png"))
+    #         # 权重分布可视化
+    #         visualize_weight_distribution(
+    #             model, save_path=os.path.join(experiment_dir, "weight_distribution.png"))
             
-            # 保存评估结果
-            results = {
-                'train': train_result,
-                'test': test_result,
-                'val': val_result,
-                'train_time': train_time,
-                'evaluation_time': evaluation_time
-            }
+    #         # 保存评估结果
+    #         results = {
+    #             'train': train_result,
+    #             'test': test_result,
+    #             'val': val_result,
+    #             'train_time': train_time,
+    #             'evaluation_time': evaluation_time
+    #         }
 
-            # 保存评估结果
-            self._save_results(experiment_dir, results)
+    #         # 保存评估结果
+    #         self._save_results(experiment_dir, results)
 
-            # 更新状态为已完成
-            with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-                json.dump({
-                    "status": "completed", 
-                    "start_time": str(datetime.now()),
-                    "end_time": str(datetime.now()),
-                    "train_time": train_time,
-                    "evaluation_time": evaluation_time
-                }, f, indent=4)
+    #         # 更新状态为已完成
+    #         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
+    #             json.dump({
+    #                 "status": "completed", 
+    #                 "start_time": str(datetime.now()),
+    #                 "end_time": str(datetime.now()),
+    #                 "train_time": train_time,
+    #                 "evaluation_time": evaluation_time
+    #             }, f, indent=4)
             
-            # 更新实验日志
-            self._update_experiment_log(
-                experiment_id, params, train_result, test_result, val_result, 
-                train_time, evaluation_time, "completed")
+    #         # 更新实验日志
+    #         self._update_experiment_log(
+    #             experiment_id, params, train_result, test_result, val_result, 
+    #             train_time, evaluation_time, "completed")
             
-            self.logger.info(f"实验 {experiment_id} 完成", f"Experiment {experiment_id} completed")
+    #         self.logger.info(f"实验 {experiment_id} 完成", f"Experiment {experiment_id} completed")
             
-            return experiment_id, results
+    #         return experiment_id, results
             
-        except Exception as e:
-            # 记录错误
-            self.logger.error(f"实验 {experiment_id} 失败: {str(e)}", 
-                            f"Experiment {experiment_id} failed: {str(e)}")
+    #     except Exception as e:
+    #         # 记录错误
+    #         self.logger.error(f"实验 {experiment_id} 失败: {str(e)}", 
+    #                         f"Experiment {experiment_id} failed: {str(e)}")
             
-            # 更新状态为失败
-            with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-                json.dump({
-                    "status": "failed",
-                    "error": str(e),
-                    "traceback": traceback.format_exc()
-                }, f, indent=4)
+    #         # 更新状态为失败
+    #         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
+    #             json.dump({
+    #                 "status": "failed",
+    #                 "error": str(e),
+    #                 "traceback": traceback.format_exc()
+    #             }, f, indent=4)
             
-            # 更新实验日志
-            self._update_experiment_log(
-                experiment_id, params, None, None, None, 0, 0, "failed")
+    #         # 更新实验日志
+    #         self._update_experiment_log(
+    #             experiment_id, params, None, None, None, 0, 0, "failed")
             
-            raise e
+    #         raise e
     
     def run_batch_experiments(self, param_grid, max_experiments=None):
         """
