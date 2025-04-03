@@ -270,7 +270,10 @@ def visualize_weight_distribution(model, save_path=None):
         return
     
     # 将权重矩阵展平
-    weights = model.weights.flatten()
+    from src.gpu_utils import ensure_numpy
+
+    weights = ensure_numpy(model.weights.flatten())
+
     
     plt.figure(figsize=(10, 6))
     
