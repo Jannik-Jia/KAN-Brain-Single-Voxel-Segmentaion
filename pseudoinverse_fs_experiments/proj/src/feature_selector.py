@@ -11,11 +11,11 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.metrics import jaccard_score
 from sklearn.model_selection import KFold
 
-
 from src.bilingual_logger import BilingualLogger
+from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU
 
 class FeatureSelector:
-    """使用LASSO或弹性网络进行特征选择的类"""
+    """使用LASSO或弹性网络进行特征选择的类，支持GPU加速"""
     
     def __init__(self, method='lasso', selection_mode='threshold', selection_threshold=0.01,
                  max_features=100, l1_ratio=1.0, cv_folds=5, random_state=42,
@@ -58,10 +58,13 @@ class FeatureSelector:
         # 标准化器
         self.scaler = None
         
+        gpu_status = "启用" if USE_GPU else "未启用"
         self.logger.info(f"特征选择器初始化: 方法={method}, 选择模式={selection_mode}, "
-                      f"阈值/最大特征数={selection_threshold if selection_mode=='threshold' else max_features}",
+                      f"阈值/最大特征数={selection_threshold if selection_mode=='threshold' else max_features}, "
+                      f"GPU加速: {gpu_status}",
                       f"Feature selector initialized: method={method}, selection_mode={selection_mode}, "
-                      f"threshold/max_features={selection_threshold if selection_mode=='threshold' else max_features}")
+                      f"threshold/max_features={selection_threshold if selection_mode=='threshold' else max_features}, "
+                      f"GPU acceleration: {gpu_status}")
     
     def fit(self, X, y, class_weight=None):
         """
@@ -79,16 +82,20 @@ class FeatureSelector:
         self.logger.info(f"开始特征选择, 输入特征维度: {X.shape[1]}", 
                       f"Starting feature selection, input dimension: {X.shape[1]}")
         
+        # 将数据移到CPU，因为sklearn不支持GPU
+        X_cpu = ensure_numpy(X)
+        y_cpu = ensure_numpy(y)
+        
         # 标准化特征
         if self.scaling_before_selection:
             self.logger.info("应用标准化预处理", "Applying standardization preprocessing")
             self.scaler = StandardScaler()
-            X = self.scaler.fit_transform(X)
+            X_cpu = self.scaler.fit_transform(X_cpu)
         
         # 创建模型
         if self.method == 'lasso':
             # 对于多分类问题，使用OneVsRestClassifier包装LogisticRegression
-            if len(np.unique(y)) > 2:
+            if len(np.unique(y_cpu)) > 2:
                 base_model = LogisticRegression(
                     penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
                     random_state=self.random_state, class_weight=class_weight)
@@ -102,7 +109,7 @@ class FeatureSelector:
         
         elif self.method == 'elastic_net':
             # 对于多分类问题
-            if len(np.unique(y)) > 2:
+            if len(np.unique(y_cpu)) > 2:
                 base_model = LogisticRegression(
                     penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
                     l1_ratio=self.l1_ratio, random_state=self.random_state, 
@@ -117,7 +124,7 @@ class FeatureSelector:
                     class_weight=class_weight)
         
         # 拟合模型
-        self.model.fit(X, y)
+        self.model.fit(X_cpu, y_cpu)
         
         # 获取特征重要性
         if hasattr(self.model, 'coef_'):
@@ -140,15 +147,19 @@ class FeatureSelector:
             self.selected_indices = np.where(self.feature_importance > self.selection_threshold)[0]
         else:
             # 固定数量模式
-            if self.max_features < X.shape[1]:
+            if self.max_features < X_cpu.shape[1]:
                 # 选择top-k特征
                 self.selected_indices = np.argsort(self.feature_importance)[-self.max_features:]
             else:
                 # 如果max_features大于等于特征数，保留所有特征
-                self.selected_indices = np.arange(X.shape[1])
+                self.selected_indices = np.arange(X_cpu.shape[1])
         
         # 确保索引已排序
         self.selected_indices = np.sort(self.selected_indices)
+        
+        # 转换到GPU以便后续操作
+        self.feature_importance = to_gpu(self.feature_importance)
+        self.selected_indices = to_gpu(self.selected_indices)
         
         elapsed_time = time.time() - start_time
         self.logger.info(f"特征选择完成，选择了 {len(self.selected_indices)}/{X.shape[1]} 个特征，"
@@ -171,12 +182,21 @@ class FeatureSelector:
         if self.selected_indices is None:
             raise ValueError("模型尚未拟合，请先调用fit方法")
         
+        # 先移到CPU进行处理
+        X_cpu = ensure_numpy(X)
+        
         # 应用相同的标准化
         if self.scaling_before_selection and self.scaler is not None:
-            X = self.scaler.transform(X)
+            X_cpu = self.scaler.transform(X_cpu)
+        
+        # 获取所选特征的索引
+        selected_indices_cpu = ensure_numpy(self.selected_indices)
         
         # 选择特征
-        return X[:, self.selected_indices]
+        X_selected = X_cpu[:, selected_indices_cpu]
+        
+        # 结果转回GPU
+        return to_gpu(X_selected)
     
     def fit_transform(self, X, y, class_weight=None):
         """
@@ -203,8 +223,12 @@ class FeatureSelector:
         if self.selected_indices is None:
             raise ValueError("模型尚未拟合，请先调用fit方法")
         
-        support = np.zeros(self.feature_importance.shape[0], dtype=bool)
-        support[self.selected_indices] = True
+        # 将索引转到CPU
+        selected_indices_cpu = ensure_numpy(self.selected_indices)
+        feature_importance_cpu = ensure_numpy(self.feature_importance)
+        
+        support = np.zeros(feature_importance_cpu.shape[0], dtype=bool)
+        support[selected_indices_cpu] = True
         return support
     
     def get_feature_importance(self):
@@ -217,7 +241,7 @@ class FeatureSelector:
         if self.feature_importance is None:
             raise ValueError("模型尚未拟合，请先调用fit方法")
         
-        return self.feature_importance
+        return ensure_numpy(self.feature_importance)
     
     def get_selected_indices(self):
         """
@@ -229,7 +253,7 @@ class FeatureSelector:
         if self.selected_indices is None:
             raise ValueError("模型尚未拟合，请先调用fit方法")
         
-        return self.selected_indices
+        return ensure_numpy(self.selected_indices)
     
     def evaluate_stability(self, X, y, n_splits=None):
         """
@@ -249,12 +273,16 @@ class FeatureSelector:
         self.logger.info(f"评估特征选择稳定性，使用{n_splits}折交叉验证", 
                       f"Evaluating feature selection stability using {n_splits}-fold CV")
         
+        # 确保数据在CPU上
+        X_cpu = ensure_numpy(X)
+        y_cpu = ensure_numpy(y)
+        
         kf = KFold(n_splits=n_splits, shuffle=True, random_state=self.random_state)
         selected_features_masks = []
         
         # 在每个折上进行特征选择
-        for train_idx, _ in kf.split(X):
-            X_train, y_train = X[train_idx], y[train_idx]
+        for train_idx, _ in kf.split(X_cpu):
+            X_train, y_train = X_cpu[train_idx], y_cpu[train_idx]
             
             # 创建相同参数的选择器
             selector = FeatureSelector(
@@ -302,6 +330,9 @@ class FeatureSelector:
             'jaccard_matrix': jaccard_matrix
         }
         
+        self.selection_frequency = to_gpu(selection_frequency)
+        self.jaccard_matrix = to_gpu(jaccard_matrix)
+        
         self.logger.info(f"特征选择稳定性评估完成，平均Jaccard相似度: {avg_jaccard:.4f}",
                       f"Feature selection stability evaluation completed, "
                       f"average Jaccard similarity: {avg_jaccard:.4f}")
@@ -315,6 +346,12 @@ class FeatureSelector:
         参数:
             filepath: 保存路径
         """
+        # 确保数据在CPU上
+        selected_indices = ensure_numpy(self.selected_indices) if self.selected_indices is not None else None
+        feature_importance = ensure_numpy(self.feature_importance) if self.feature_importance is not None else None
+        selection_frequency = ensure_numpy(self.selection_frequency) if self.selection_frequency is not None else None
+        jaccard_matrix = ensure_numpy(self.jaccard_matrix) if self.jaccard_matrix is not None else None
+        
         model_data = {
             'method': self.method,
             'selection_mode': self.selection_mode,
@@ -325,8 +362,10 @@ class FeatureSelector:
             'random_state': self.random_state,
             'scaling_before_selection': self.scaling_before_selection,
             'selection_metric': self.selection_metric,
-            'selected_indices': self.selected_indices,
-            'feature_importance': self.feature_importance
+            'selected_indices': selected_indices,
+            'feature_importance': feature_importance,
+            'selection_frequency': selection_frequency,
+            'jaccard_matrix': jaccard_matrix
         }
         
         with open(filepath, 'wb') as f:
@@ -353,8 +392,17 @@ class FeatureSelector:
         self.random_state = model_data['random_state']
         self.scaling_before_selection = model_data['scaling_before_selection']
         self.selection_metric = model_data['selection_metric']
-        self.selected_indices = model_data['selected_indices']
-        self.feature_importance = model_data['feature_importance']
+        
+        # 转移数据到GPU
+        self.selected_indices = to_gpu(model_data['selected_indices'])
+        self.feature_importance = to_gpu(model_data['feature_importance'])
+        
+        # 加载稳定性评估结果（如果有的话）
+        if 'selection_frequency' in model_data and model_data['selection_frequency'] is not None:
+            self.selection_frequency = to_gpu(model_data['selection_frequency'])
+        
+        if 'jaccard_matrix' in model_data and model_data['jaccard_matrix'] is not None:
+            self.jaccard_matrix = to_gpu(model_data['jaccard_matrix'])
         
         self.logger.info(f"特征选择器已从 {filepath} 加载", f"Feature selector loaded from: {filepath}")
         

@@ -1,6 +1,8 @@
 # scripts/run_baseline.sh
 #!/bin/bash
 
+export PYTHONPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )"/.. && pwd )"
+
 # 设置日志文件
 LOG_FILE="baseline_experiment_$(date +%Y%m%d_%H%M%S).log"
 
@@ -12,6 +14,19 @@ VAL_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/re
 # 设置结果保存目录
 EXPERIMENT_DIR="pseudoinverse_baseline_experiments"
 
+# GPU相关设置
+USE_GPU=true                # 是否使用GPU加速（true/false）
+GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
+
+# 构建GPU参数
+GPU_ARGS=""
+if [ "$USE_GPU" = true ]; then
+    GPU_ARGS="--use_gpu --gpu_memory_fraction $GPU_MEMORY_FRACTION"
+    echo "启用GPU加速，内存使用上限：${GPU_MEMORY_FRACTION}（${GPU_MEMORY_FRACTION}*100%）"
+else
+    echo "仅使用CPU计算"
+fi
+
 # 运行基线实验
 echo "启动基线实验，日志将保存到 $LOG_FILE"
 nohup python -m src.main \
@@ -21,6 +36,7 @@ nohup python -m src.main \
     --exp_dir "$EXPERIMENT_DIR" \
     --fs_mode "global" \
     --run_baseline \
+    $GPU_ARGS \
     > "$LOG_FILE" 2>&1 &
 
 # 记录进程ID

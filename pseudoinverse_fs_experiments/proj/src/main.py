@@ -3,12 +3,14 @@
 import os
 import argparse
 import time
+import numpy as np
 from datetime import datetime
 
 from src.bilingual_logger import BilingualLogger
 from src.brain_voxel_dataloader import BrainVoxelDataLoader
 from src.experiment_manager import ExperimentManagerWithFeatureSelection
 from src.utils import create_feature_selection_param_grid, sample_parameter_combinations
+from src.gpu_utils import init_gpu  # 导入GPU初始化函数
 
 
 def setup_args():
@@ -29,6 +31,11 @@ def setup_args():
                         help='最大实验数量')
     parser.add_argument('--run_baseline', action='store_true', 
                         help='只运行基准实验')
+    
+    # GPU 设置
+    parser.add_argument('--use_gpu', action='store_true', help='使用GPU加速计算')
+    parser.add_argument('--gpu_memory_fraction', type=float, default=0.8, 
+                        help='GPU内存使用比例上限 (0.0-1.0)')
     
     return parser.parse_args()
 
@@ -199,7 +206,21 @@ def main():
 
     logger.info("开始伪逆线性模型实验（包含特征选择）", 
                "Starting pseudo-inverse linear model experiments with feature selection")
-
+    
+    # 初始化GPU支持
+    if args.use_gpu:
+        logger.info(f"尝试初始化GPU加速，内存使用限制: {args.gpu_memory_fraction}", 
+                   f"Trying to initialize GPU acceleration, memory limit: {args.gpu_memory_fraction}")
+        
+        gpu_available = init_gpu(use_gpu=args.use_gpu, memory_fraction=args.gpu_memory_fraction)
+        
+        if gpu_available:
+            logger.info("GPU初始化成功，将使用GPU加速计算", "GPU initialization successful, using GPU acceleration")
+        else:
+            logger.warning("GPU初始化失败，将使用CPU进行计算", "GPU initialization failed, using CPU for computation")
+    else:
+        logger.info("不使用GPU加速，所有计算将在CPU上进行", "Not using GPU acceleration, all computation will be done on CPU")
+        init_gpu(use_gpu=False)
 
     # 打印实验参数
     logger.info(f"实验参数：\n"
@@ -208,7 +229,8 @@ def main():
                f"  验证数据目录：{args.val_dir}\n"
                f"  实验结果目录：{args.exp_dir}\n"
                f"  特征选择模式：{args.fs_mode}\n"
-               f"  最大实验数量：{args.max_experiments}", 
+               f"  最大实验数量：{args.max_experiments}\n"
+               f"  使用GPU加速：{args.use_gpu}", 
                
                f"Experiment parameters:\n"
                f"  Train directory: {args.train_dir}\n"
@@ -216,7 +238,8 @@ def main():
                f"  Validation directory: {args.val_dir}\n"
                f"  Experiment directory: {args.exp_dir}\n"
                f"  Feature selection mode: {args.fs_mode}\n"
-               f"  Maximum number of experiments: {args.max_experiments}")
+               f"  Maximum number of experiments: {args.max_experiments}\n"
+               f"  Use GPU acceleration: {args.use_gpu}")
                
     # 创建数据加载器
     data_loader = BrainVoxelDataLoader(args.train_dir, args.test_dir, args.val_dir, logger=logger)
