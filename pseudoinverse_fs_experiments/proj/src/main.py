@@ -47,7 +47,8 @@ def run_baseline_experiments(experiment_manager, logger):
         'apply_pca': False,
         'n_components': 50,
         'normalization': 'standard',
-        'class_balance': False,
+        'class_balance': True,
+        'target_samples': 5000,  # 每类最多500个样本
         'regularization': None,
         'alpha': 0.01,
         'feature_selection': None,

@@ -35,21 +35,27 @@ class ModelEvaluator:
             包含各种评估指标的字典
         """
         self.logger.info(f"开始评估模型在{dataset_name}集上的性能", 
-                       f"Starting model evaluation on {dataset_name} set")
+                    f"Starting model evaluation on {dataset_name} set")
         
         # 获取预测
         y_pred = model.predict(X)
         
+        # 确保转换为NumPy数组
+        from src.gpu_utils import ensure_numpy
+        y_cpu = ensure_numpy(y)
+        y_pred_cpu = ensure_numpy(y_pred)
+        
         try:
             # 计算概率预测（可选）
             y_proba = model.predict_proba(X)
+            y_proba_cpu = ensure_numpy(y_proba) if y_proba is not None else None
         except:
-            y_proba = None
+            y_proba_cpu = None
         
-        # 计算评估指标
-        accuracy = accuracy_score(y, y_pred)
-        balanced_acc = balanced_accuracy_score(y, y_pred)
-        
+        # 计算评估指标 (使用CPU数组)
+        accuracy = accuracy_score(y_cpu, y_pred_cpu)
+        balanced_acc = balanced_accuracy_score(y_cpu, y_pred_cpu)
+
         # 处理可能的警告（某些类别可能没有样本）
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

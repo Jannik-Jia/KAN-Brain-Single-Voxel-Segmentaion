@@ -101,13 +101,18 @@ class PseudoInverseModel:
         self.logger.info(f"伪逆模型拟合完成，耗时 {elapsed_time:.2f} 秒", 
                        f"Pseudo-inverse model fitting completed in {elapsed_time:.2f} seconds")
         
+
         # 计算训练误差
         from sklearn.metrics import accuracy_score
         y_pred = self.predict(X)
-        accuracy = accuracy_score(y, y_pred)
+        # 确保转换为NumPy数组再传递给sklearn
+        y_cpu = ensure_numpy(y) 
+        y_pred_cpu = ensure_numpy(y_pred)
+        accuracy = accuracy_score(y_cpu, y_pred_cpu)
         self.logger.info(f"训练集准确率: {accuracy:.4f}", f"Training accuracy: {accuracy:.4f}")
         self.logger.info(f"矩阵运算类型检查: X_bias 类型 = {type(X_bias)}", 
                f"Matrix operation type check: X_bias type = {type(X_bias)}")
+
         return self
     
     def predict(self, X):
