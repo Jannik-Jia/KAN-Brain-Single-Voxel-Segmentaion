@@ -19,8 +19,9 @@ def visualize_feature_selection(selector, feature_names=None, save_path=None):
         print("特征选择器尚未拟合或没有特征重要性信息")
         return
     
-    # 获取特征重要性和选择掩码
-    importance = selector.get_feature_importance()
+    # 获取特征重要性和选择掩码并确保为NumPy数组
+    from src.gpu_utils import ensure_numpy
+    importance = ensure_numpy(selector.get_feature_importance())
     selected = selector.get_support()
     
     # 如果没有提供特征名称，使用索引
@@ -37,9 +38,12 @@ def visualize_feature_selection(selector, feature_names=None, save_path=None):
     # 1. 特征重要性分布图
     plt.subplot(2, 2, 1)
     plt.hist(importance, bins=50, alpha=0.7)
-    plt.axvline(x=selector.selection_threshold if selector.selection_mode == 'threshold' else 
-               importance[np.argsort(importance)[-selector.max_features]], 
-               color='r', linestyle='--', 
+    
+    # 转换为NumPy数组以确保兼容性
+    threshold = selector.selection_threshold if selector.selection_mode == 'threshold' else \
+               importance[np.argsort(importance)[-int(selector.max_features)]]  # 确保索引是整数
+               
+    plt.axvline(x=threshold, color='r', linestyle='--', 
                label=f"Selection Threshold: {selector.selection_threshold}" if selector.selection_mode == 'threshold' else 
                f"Top {selector.max_features} Features")
     plt.xlabel('Feature Importance')
@@ -65,7 +69,7 @@ def visualize_feature_selection(selector, feature_names=None, save_path=None):
     top_n = min(20, np.sum(selected))
     top_indices = np.argsort(importance)[-top_n:][::-1]
     top_importance = importance[top_indices]
-    top_names = [feature_names[i] for i in top_indices]
+    top_names = [feature_names[int(i)] for i in top_indices]  # 确保索引是整数
     
     plt.subplot(2, 2, 3)
     plt.barh(range(len(top_names)), top_importance, align='center')
@@ -75,9 +79,10 @@ def visualize_feature_selection(selector, feature_names=None, save_path=None):
     plt.grid(True, axis='x', linestyle='--', alpha=0.7)
     
     # 4. 选择频率分布（如果有）
-    if hasattr(selector, 'selection_frequency'):
+    if hasattr(selector, 'selection_frequency') and selector.selection_frequency is not None:
+        selection_frequency = ensure_numpy(selector.selection_frequency)  # 确保为NumPy数组
         plt.subplot(2, 2, 4)
-        plt.hist(selector.selection_frequency, bins=10, alpha=0.7)
+        plt.hist(selection_frequency, bins=10, alpha=0.7)
         plt.xlabel('Selection Frequency')
         plt.ylabel('Number of Features')
         plt.title('Feature Selection Stability')
@@ -100,6 +105,7 @@ def visualize_feature_selection(selector, feature_names=None, save_path=None):
     else:
         plt.show()
 
+
 def visualize_feature_stability(stability_metrics, save_path=None):
     """
     可视化特征选择稳定性
@@ -108,8 +114,10 @@ def visualize_feature_stability(stability_metrics, save_path=None):
         stability_metrics: 包含稳定性指标的字典
         save_path: 图表保存路径
     """
-    jaccard_matrix = stability_metrics['jaccard_matrix']
-    selection_frequency = stability_metrics['selection_frequency']
+    # 确保转换为NumPy数组
+    from src.gpu_utils import ensure_numpy
+    jaccard_matrix = ensure_numpy(stability_metrics['jaccard_matrix'])
+    selection_frequency = ensure_numpy(stability_metrics['selection_frequency'])
     
     plt.figure(figsize=(15, 6))
     
@@ -212,8 +220,9 @@ def visualize_feature_importance(model, feature_names=None, top_n=20, save_path=
         print("模型尚未拟合或没有特征重要性信息")
         return
     
-    # 获取特征重要性
-    importance = model.feature_importance
+    # 获取特征重要性并确保为NumPy数组
+    from src.gpu_utils import ensure_numpy
+    importance = ensure_numpy(model.feature_importance)
     
     # 如果没有提供特征名称，使用索引
     if feature_names is None:
@@ -227,9 +236,10 @@ def visualize_feature_importance(model, feature_names=None, top_n=20, save_path=
     if top_n > len(importance):
         top_n = len(importance)
     
+    # 注意这里需要转换为整数
     top_indices = np.argsort(importance)[-top_n:][::-1]
     top_importance = importance[top_indices]
-    top_names = [feature_names[i] for i in top_indices]
+    top_names = [feature_names[int(i)] for i in top_indices]  # 确保i是整数
     
     # 绘制特征重要性条形图
     plt.figure(figsize=(12, 8))
