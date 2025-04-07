@@ -219,19 +219,13 @@ def main():
     # 初始化GPU支持
     if args.use_gpu:
         logger.info(f"尝试初始化GPU加速，内存使用限制: {args.gpu_memory_fraction}", 
-                   f"Trying to initialize GPU acceleration, memory limit: {args.gpu_memory_fraction}")
+                f"Trying to initialize GPU acceleration, memory limit: {args.gpu_memory_fraction}")
         
         gpu_available = init_gpu(use_gpu=args.use_gpu, memory_fraction=args.gpu_memory_fraction)
-    
+
         from src.gpu_utils import USE_GPU
         logger.info(f"GPU全局状态检查: USE_GPU = {USE_GPU}", 
                 f"Global GPU status check: USE_GPU = {USE_GPU}")
-
-        # 确保所有导入都在GPU初始化之后
-        from src.brain_voxel_dataloader import BrainVoxelDataLoader
-        from src.experiment_manager import ExperimentManagerWithFeatureSelection
-
-
         
         if gpu_available:
             logger.info("GPU初始化成功，将使用GPU加速计算", "GPU initialization successful, using GPU acceleration")
@@ -241,32 +235,39 @@ def main():
         logger.info("不使用GPU加速，所有计算将在CPU上进行", "Not using GPU acceleration, all computation will be done on CPU")
         init_gpu(use_gpu=False)
 
+    # 确保在任何条件下都导入必要的模块
+    from src.brain_voxel_dataloader import BrainVoxelDataLoader
+    from src.experiment_manager import ExperimentManagerWithFeatureSelection
+
     # 打印实验参数
     logger.info(f"实验参数：\n"
-               f"  训练数据目录：{args.train_dir}\n"
-               f"  测试数据目录：{args.test_dir}\n"
-               f"  验证数据目录：{args.val_dir}\n"
-               f"  实验结果目录：{args.exp_dir}\n"
-               f"  特征选择模式：{args.fs_mode}\n"
-               f"  最大实验数量：{args.max_experiments}\n"
-               f"  使用GPU加速：{args.use_gpu}", 
-               
-               f"Experiment parameters:\n"
-               f"  Train directory: {args.train_dir}\n"
-               f"  Test directory: {args.test_dir}\n"
-               f"  Validation directory: {args.val_dir}\n"
-               f"  Experiment directory: {args.exp_dir}\n"
-               f"  Feature selection mode: {args.fs_mode}\n"
-               f"  Maximum number of experiments: {args.max_experiments}\n"
-               f"  Use GPU acceleration: {args.use_gpu}")
-               
+            f"  训练数据目录：{args.train_dir}\n"
+            f"  测试数据目录：{args.test_dir}\n"
+            f"  验证数据目录：{args.val_dir}\n"
+            f"  实验结果目录：{args.exp_dir}\n"
+            f"  特征选择模式：{args.fs_mode}\n"
+            f"  最大实验数量：{args.max_experiments}\n"
+            f"  使用GPU加速：{args.use_gpu}", 
+            
+            f"Experiment parameters:\n"
+            f"  Train directory: {args.train_dir}\n"
+            f"  Test directory: {args.test_dir}\n"
+            f"  Validation directory: {args.val_dir}\n"
+            f"  Experiment directory: {args.exp_dir}\n"
+            f"  Feature selection mode: {args.fs_mode}\n"
+            f"  Maximum number of experiments: {args.max_experiments}\n"
+            f"  Use GPU acceleration: {args.use_gpu}")
+            
+    # 创建数据加载器
+    data_loader = BrainVoxelDataLoader(args.train_dir, args.test_dir, args.val_dir, logger=logger)
 
     # 加载数据，设置每个标签的最大样本数
     logger.info(f"加载数据集，每个标签最多 {args.max_samples_per_label} 个样本", 
-               f"Loading datasets, max {args.max_samples_per_label} samples per label")
-    
+            f"Loading datasets, max {args.max_samples_per_label} samples per label")
+
     # 修改加载方法，传入限制参数
     data_loader.load_all_data(max_samples_per_label=args.max_samples_per_label)
+
     
 
     # 创建带特征选择的实验管理器
