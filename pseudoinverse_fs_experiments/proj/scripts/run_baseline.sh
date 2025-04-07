@@ -1,4 +1,3 @@
-# scripts/run_baseline.sh
 #!/bin/bash
 
 export PYTHONPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )"/.. && pwd )"
@@ -20,8 +19,6 @@ GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
 
 # 添加数据处理参数
 MAX_SAMPLES_PER_LABEL=500   # 每个标签最多使用的样本数
-APPLY_PCA=true              # 应用PCA降维
-PCA_COMPONENTS=50           # PCA组件数量
 
 # 构建GPU参数
 GPU_ARGS=""
@@ -31,6 +28,13 @@ if [ "$USE_GPU" = true ]; then
 else
     echo "仅使用CPU计算"
 fi
+
+# 打印实验设置
+echo "实验设置：" 
+echo " - 运行基准测试模式"
+echo " - 每个标签最大样本数: $MAX_SAMPLES_PER_LABEL"
+echo " - 特征选择模式: global" 
+echo " - 结果保存目录: $EXPERIMENT_DIR"
 
 # 运行基线实验
 echo "启动基线实验，日志将保存到 $LOG_FILE"
@@ -42,8 +46,6 @@ nohup python -m src.main \
     --fs_mode "global" \
     --run_baseline \
     --max_samples_per_label $MAX_SAMPLES_PER_LABEL \
-    --apply_pca $APPLY_PCA \
-    --pca_components $PCA_COMPONENTS \
     $GPU_ARGS \
     > "$LOG_FILE" 2>&1 &
 

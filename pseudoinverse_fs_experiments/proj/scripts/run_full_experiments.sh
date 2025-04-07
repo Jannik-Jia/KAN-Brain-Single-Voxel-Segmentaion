@@ -1,4 +1,3 @@
-# scripts/run_full_experiments.sh
 #!/bin/bash
 
 # 设置日志文件
@@ -10,10 +9,10 @@ TEST_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/r
 VAL_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
 
 # 设置结果保存目录
-EXPERIMENT_DIR="pseudoinverse_with_fs_experiments"
+EXPERIMENT_DIR="pseudoinverse_balanced_experiments"
 
-# 设置最大实验数量
-MAX_EXPERIMENTS=50
+# 设置最大实验数量 - 增加到1000以确保PCA/非PCA各约500个
+MAX_EXPERIMENTS=1000
 
 # GPU相关设置
 USE_GPU=true                # 是否使用GPU加速（true/false）
@@ -21,8 +20,6 @@ GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
 
 # 添加数据处理参数
 MAX_SAMPLES_PER_LABEL=500   # 每个标签最多使用的样本数
-APPLY_PCA=true              # 应用PCA降维
-PCA_COMPONENTS=50           # PCA组件数量
 
 # 构建GPU参数
 GPU_ARGS=""
@@ -32,6 +29,13 @@ if [ "$USE_GPU" = true ]; then
 else
     echo "仅使用CPU计算"
 fi
+
+# 打印实验设置
+echo "实验设置：" 
+echo " - 最大实验数量: $MAX_EXPERIMENTS (PCA和非PCA各约500个)"
+echo " - 每个标签最大样本数: $MAX_SAMPLES_PER_LABEL"
+echo " - 特征选择模式: global"
+echo " - 结果保存目录: $EXPERIMENT_DIR"
 
 # 运行完整实验
 echo "启动完整实验，日志将保存到 $LOG_FILE"
@@ -43,8 +47,6 @@ nohup python -m src.main \
     --fs_mode "global" \
     --max_experiments $MAX_EXPERIMENTS \
     --max_samples_per_label $MAX_SAMPLES_PER_LABEL \
-    --apply_pca $APPLY_PCA \
-    --pca_components $PCA_COMPONENTS \
     $GPU_ARGS \
     > "$LOG_FILE" 2>&1 &
 

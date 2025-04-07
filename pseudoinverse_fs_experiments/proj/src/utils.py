@@ -8,20 +8,20 @@ def create_feature_selection_param_grid():
     # 基本参数网格
     base_param_grid = {
         'apply_pca': [True, False],
-        'n_components': [50, 100],
+        'n_components': [50, 100, 150, 200],
         'normalization': ['standard', 'minmax', None],
         'class_balance': [False, True],
-        'regularization': [None, 'l2'],
-        'alpha': [0.001, 0.01, 0.1]
+        'regularization': [None, 'l2', 'truncated'],
+        'alpha': [0.001, 0.01, 0.05, 0.1, 0.5, 1.0]
     }
     
     # 特征选择参数网格
     feature_selection_param_grid = {
         'feature_selection': [None, 'lasso', 'elastic_net'],
         'selection_mode': ['threshold', 'fixed'],
-        'selection_threshold': [0.001, 0.01, 0.05],
-        'max_features': [50, 100, 200],
-        'l1_ratio': [0.5, 0.8, 1.0],
+        'selection_threshold': [0.001, 0.01, 0.05, 0.1, 0.2],
+        'max_features': [50, 100, 200, 500],
+        'l1_ratio': [0.3, 0.5, 0.8, 1.0],
         'scaling_before_selection': [True],
         'selection_metric': ['coefficient']
     }
@@ -33,7 +33,7 @@ def create_feature_selection_param_grid():
 
 def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
     """
-    从参数网格中采样有效的参数组合
+    从参数网格中采样有效的参数组合，确保PCA和非PCA方法数量平衡
     
     参数:
         param_grid: 参数网格
@@ -95,22 +95,40 @@ def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
     }
     param_combinations.append(baseline_config)
     
-    # 2. 使用LASSO特征选择的基准配置
-    lasso_config = baseline_config.copy()
-    lasso_config['feature_selection'] = 'lasso'
-    param_combinations.append(lasso_config)
+    # 2. 使用LASSO特征选择的基准配置，不使用PCA
+    lasso_config_no_pca = baseline_config.copy()
+    lasso_config_no_pca['feature_selection'] = 'lasso'
+    lasso_config_no_pca['apply_pca'] = False
+    param_combinations.append(lasso_config_no_pca)
     
-    # 3. 使用弹性网络特征选择的基准配置
+    # 3. 使用PCA的基准配置
+    pca_config = baseline_config.copy()
+    pca_config['apply_pca'] = True
+    param_combinations.append(pca_config)
+    
+    # 4. 使用LASSO特征选择和PCA的基准配置
+    lasso_pca_config = pca_config.copy()
+    lasso_pca_config['feature_selection'] = 'lasso'
+    param_combinations.append(lasso_pca_config)
+    
+    # 5. 使用弹性网络特征选择的基准配置
     elastic_net_config = baseline_config.copy()
     elastic_net_config['feature_selection'] = 'elastic_net'
     elastic_net_config['l1_ratio'] = 0.5
     param_combinations.append(elastic_net_config)
     
-    # 随机采样其余配置
-    remaining_samples = max_samples - len(param_combinations)
+    # 采样剩余的配置，确保PCA和非PCA样本数量平衡
+    # 将max_samples一半用于PCA，一半用于非PCA
+    pca_configs = []
+    no_pca_configs = []
+    target_each = (max_samples - len(param_combinations)) // 2
     
     # 避免选择无效组合
-    while len(param_combinations) < max_samples:
+    attempts = 0
+    max_attempts = total_combinations * 2  # 设置一个上限以避免无限循环
+    
+    while (len(pca_configs) < target_each or len(no_pca_configs) < target_each) and attempts < max_attempts:
+        attempts += 1
         config = {}
         
         # 采样每个参数
@@ -142,7 +160,21 @@ def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
             config['selection_threshold'] = 0.01  # 设为默认值
         
         # 检查是否已经存在相同配置
-        if config not in param_combinations:
-            param_combinations.append(config)
+        if config not in param_combinations and config not in pca_configs and config not in no_pca_configs:
+            # 根据是否使用PCA添加到相应列表
+            if config['apply_pca'] and len(pca_configs) < target_each:
+                pca_configs.append(config)
+            elif not config['apply_pca'] and len(no_pca_configs) < target_each:
+                no_pca_configs.append(config)
+    
+    # 合并所有配置
+    param_combinations.extend(pca_configs)
+    param_combinations.extend(no_pca_configs)
+    
+    # 打印PCA和非PCA配置的数量
+    pca_count = sum(1 for config in param_combinations if config['apply_pca'])
+    no_pca_count = len(param_combinations) - pca_count
+    print(f"PCA配置数量: {pca_count}")
+    print(f"非PCA配置数量: {no_pca_count}")
     
     return param_combinations
