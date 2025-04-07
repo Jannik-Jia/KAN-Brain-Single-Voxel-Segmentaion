@@ -712,7 +712,10 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         # 加载原始数据
         if self.original_data is None:
-            self.original_data = self.data_loader.load_all_data()
+            # 这里应该使用与初始加载相同的参数
+            max_samples_per_label = selection_params.get('max_samples_per_label')
+            self.original_data = self.data_loader.load_all_data(max_samples_per_label=max_samples_per_label)
+        
         
         # 应用预处理，但不包括特征选择
         preprocessed_data = self.data_loader.preprocess_data(
@@ -846,12 +849,14 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             # 处理数据
             start_time = time.time()
             
-            # 根据特征选择模式处理数据
             if use_feature_selection and self.feature_selection_mode == 'global':
                 # 全局特征选择模式
                 if self.global_selector is None:
+                    # 确保传递max_samples_per_label参数
+                    selection_params = params.copy()
+                    selection_params['max_samples_per_label'] = params.get('target_samples')
                     # 如果全局选择器尚未创建，则创建
-                    self.apply_global_feature_selection(params)
+                    self.apply_global_feature_selection(selection_params)
                 
                 # 使用全局选择后的数据
                 processed_data = {
