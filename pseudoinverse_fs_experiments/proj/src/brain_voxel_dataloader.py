@@ -46,8 +46,9 @@ class BrainVoxelDataLoader:
         self.logger.info(f"数据加载器初始化完成，GPU加速：{gpu_status}",
                         f"Data loader initialized, GPU acceleration: {gpu_status}")
     
-    def _load_data_from_dir(self, directory, desc="加载数据"):
-        """从指定目录加载数据"""
+
+    def _load_data_from_dir(self, directory, desc="加载数据", max_samples_per_label=None):
+        """从指定目录加载数据，可限制每个标签的最大样本数"""
         # 创建采样器
         sampler = BrainVoxelSampler(directory)
         valid_labels = sampler.valid_labels
@@ -60,6 +61,14 @@ class BrainVoxelDataLoader:
             file_path = sampler.get_file_path(label_id)
             if file_path:
                 samples = np.load(file_path)
+                
+                # 限制每个标签的样本数
+                if max_samples_per_label and len(samples) > max_samples_per_label:
+                    # 随机选择max_samples_per_label个样本
+                    np.random.seed(42)  # 保持随机结果一致
+                    indices = np.random.choice(len(samples), max_samples_per_label, replace=False)
+                    samples = samples[indices]
+                
                 labels = np.ones(len(samples)) * label_id
                 all_samples.append(samples)
                 all_labels.append(labels)
@@ -77,22 +86,26 @@ class BrainVoxelDataLoader:
         else:
             # 返回空数组，也转换到GPU
             return to_gpu(np.array([])), to_gpu(np.array([]))
+
     
-    def load_all_data(self):
+    
+    # 修改 brain_voxel_dataloader.py 中的 load_all_data 方法
+    def load_all_data(self, max_samples_per_label=None):
         """加载所有数据集"""
-        self.logger.info("开始加载所有数据集", "Start loading all datasets")
+        self.logger.info(f"开始加载所有数据集，每个标签最多 {max_samples_per_label} 个样本", 
+                    f"Start loading all datasets, max {max_samples_per_label} samples per label")
         
         # 加载训练集
         self.train_samples, self.train_labels = self._load_data_from_dir(
-            self.train_dir, "加载训练集数据")
+            self.train_dir, "加载训练集数据", max_samples_per_label)
         
         # 加载测试集
         self.test_samples, self.test_labels = self._load_data_from_dir(
-            self.test_dir, "加载测试集数据")
+            self.test_dir, "加载测试集数据", max_samples_per_label)
         
         # 加载验证集
         self.val_samples, self.val_labels = self._load_data_from_dir(
-            self.val_dir, "加载验证集数据")
+            self.val_dir, "加载验证集数据", max_samples_per_label)
         
         # 打印数据集统计信息
         self._print_dataset_stats()
@@ -105,7 +118,7 @@ class BrainVoxelDataLoader:
             'val_samples': self.val_samples,
             'val_labels': self.val_labels
         }
-    
+
     def _print_dataset_stats(self):
         """打印数据集统计信息"""
         # 确保计算长度时使用CPU上的数据

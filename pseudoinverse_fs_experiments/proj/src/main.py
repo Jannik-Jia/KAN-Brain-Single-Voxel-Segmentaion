@@ -35,6 +35,15 @@ def setup_args():
     parser.add_argument('--use_gpu', action='store_true', help='使用GPU加速计算')
     parser.add_argument('--gpu_memory_fraction', type=float, default=0.8, 
                         help='GPU内存使用比例上限 (0.0-1.0)')
+
+    # 日志设置
+    parser.add_argument('--max_samples_per_label', type=int, default=None, 
+                        help='每个标签最多使用的样本数量')
+    parser.add_argument('--apply_pca', type=lambda x: (str(x).lower() == 'true'), 
+                        default=False, help='是否应用PCA降维')
+    parser.add_argument('--pca_components', type=int, default=50, 
+                        help='PCA组件数量')
+    
     
     return parser.parse_args()
 
@@ -251,12 +260,14 @@ def main():
                f"  Maximum number of experiments: {args.max_experiments}\n"
                f"  Use GPU acceleration: {args.use_gpu}")
                
-    # 创建数据加载器
-    data_loader = BrainVoxelDataLoader(args.train_dir, args.test_dir, args.val_dir, logger=logger)
 
-    # 加载数据
-    logger.info("加载数据集", "Loading datasets")
-    data_loader.load_all_data()
+    # 加载数据，设置每个标签的最大样本数
+    logger.info(f"加载数据集，每个标签最多 {args.max_samples_per_label} 个样本", 
+               f"Loading datasets, max {args.max_samples_per_label} samples per label")
+    
+    # 修改加载方法，传入限制参数
+    data_loader.load_all_data(max_samples_per_label=args.max_samples_per_label)
+    
 
     # 创建带特征选择的实验管理器
     experiment_manager = ExperimentManagerWithFeatureSelection(

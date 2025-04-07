@@ -19,6 +19,11 @@ MAX_EXPERIMENTS=50
 USE_GPU=true                # 是否使用GPU加速（true/false）
 GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
 
+# 添加数据处理参数
+MAX_SAMPLES_PER_LABEL=500   # 每个标签最多使用的样本数
+APPLY_PCA=true              # 应用PCA降维
+PCA_COMPONENTS=50           # PCA组件数量
+
 # 构建GPU参数
 GPU_ARGS=""
 if [ "$USE_GPU" = true ]; then
@@ -37,6 +42,9 @@ nohup python -m src.main \
     --exp_dir "$EXPERIMENT_DIR" \
     --fs_mode "global" \
     --max_experiments $MAX_EXPERIMENTS \
+    --max_samples_per_label $MAX_SAMPLES_PER_LABEL \
+    --apply_pca $APPLY_PCA \
+    --pca_components $PCA_COMPONENTS \
     $GPU_ARGS \
     > "$LOG_FILE" 2>&1 &
 
