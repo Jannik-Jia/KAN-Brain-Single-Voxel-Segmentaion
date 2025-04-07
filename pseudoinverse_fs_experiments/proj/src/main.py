@@ -47,17 +47,18 @@ def setup_args():
     
     return parser.parse_args()
 
-def run_baseline_experiments(experiment_manager, logger):
+def run_baseline_experiments(experiment_manager, logger, args):
     """运行基准测试实验"""
     logger.info("运行基准测试实验（包含特征选择）", "Running baseline test experiment with feature selection")
 
+            
     # 基准参数 - 不使用特征选择
     baseline_params_no_fs = {
-        'apply_pca': False,
-        'n_components': 50,
+        'apply_pca': args.apply_pca,  # 使用命令行参数
+        'n_components': args.pca_components,  # 使用命令行参数
         'normalization': 'standard',
         'class_balance': True,
-        'target_samples': 5000,  # 每类最多500个样本
+        'target_samples': args.max_samples_per_label,  # 使用命令行参数
         'regularization': None,
         'alpha': 0.01,
         'feature_selection': None,
@@ -68,13 +69,13 @@ def run_baseline_experiments(experiment_manager, logger):
         'scaling_before_selection': True,
         'selection_metric': 'coefficient'
     }
-
     # 基准参数 - 使用LASSO特征选择
     baseline_params_lasso = {
-        'apply_pca': False,
-        'n_components': 50,
+        'apply_pca': args.apply_pca,
+        'n_components': args.pca_components,
         'normalization': 'standard',
         'class_balance': False,
+        'target_samples': args.max_samples_per_label,  # 这里也使用命令行指定的值
         'regularization': None,
         'alpha': 0.01,
         'feature_selection': 'lasso',
@@ -284,12 +285,13 @@ def main():
     # 运行实验
     start_time = time.time()
     
+
     if args.run_baseline:
         # 只运行基准实验
-        success = run_baseline_experiments(experiment_manager, logger)
+        success = run_baseline_experiments(experiment_manager, logger, args)
     else:
         # 先运行基准实验
-        baseline_success = run_baseline_experiments(experiment_manager, logger)
+        baseline_success = run_baseline_experiments(experiment_manager, logger, args)
         
         # 然后运行完整实验集
         if baseline_success:
