@@ -707,16 +707,26 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
         返回:
             feature_selector: 训练好的特征选择器
-        """
+        """        
         self.logger.info("开始全局特征选择", "Starting global feature selection")
-        
-        # 加载原始数据
-        if self.original_data is None:
-            # 这里应该使用与初始加载相同的参数
+    
+        # 如果data_loader已经有数据，直接使用
+        if hasattr(self.data_loader, 'train_samples') and self.data_loader.train_samples is not None:
+            self.original_data = {
+                'train_samples': self.data_loader.train_samples,
+                'train_labels': self.data_loader.train_labels,
+                'test_samples': self.data_loader.test_samples,
+                'test_labels': self.data_loader.test_labels,
+                'val_samples': self.data_loader.val_samples,
+                'val_labels': self.data_loader.val_labels
+            }
+        else:
+            # 否则加载数据
             max_samples_per_label = selection_params.get('max_samples_per_label')
             self.original_data = self.data_loader.load_all_data(max_samples_per_label=max_samples_per_label)
         
-        
+
+
         # 应用预处理，但不包括特征选择
         preprocessed_data = self.data_loader.preprocess_data(
             apply_pca=selection_params.get('apply_pca', False),
