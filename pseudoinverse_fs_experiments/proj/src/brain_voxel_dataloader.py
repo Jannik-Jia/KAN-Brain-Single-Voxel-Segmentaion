@@ -139,13 +139,15 @@ class BrainVoxelDataLoader:
         )
     
 
-    
+    # 修改preprocess_data函数，优化标准化逻辑
+
     def preprocess_data(self, apply_pca=False, n_components=50,
-                   normalization='standard', class_balance=False,
-                   target_samples=1000, random_state=42,
-                   auto_pca_variance=0.95):  # 添加自动PCA方差参数
+                    normalization='standard', class_balance=False,
+                    target_samples=1000, random_state=42,
+                    auto_pca_variance=0.95,
+                    scaling_before_pca=True):  # 新增参数控制PCA前是否标准化
         """
-        预处理数据
+        预处理数据，优化版本避免重复标准化
         
         参数:
             apply_pca: 是否应用PCA降维
@@ -155,6 +157,7 @@ class BrainVoxelDataLoader:
             target_samples: 每个类别的目标样本数
             random_state: 随机种子
             auto_pca_variance: 如果不为None，自动寻找解释这一比例方差所需的组件数量
+            scaling_before_pca: 是否在PCA前进行标准化 (避免重复标准化)
         """
         processed_data = {}
         
@@ -167,16 +170,37 @@ class BrainVoxelDataLoader:
         test_y = self.test_labels.copy() if hasattr(self.test_labels, 'copy') else self.test_labels
         val_y = self.val_labels.copy() if hasattr(self.val_labels, 'copy') else self.val_labels
         
-        # 1. 应用PCA降维（要在CPU上进行）
+        # 获取CPU数据用于处理
+        train_X_cpu = ensure_numpy(train_X)
+        test_X_cpu = ensure_numpy(test_X)
+        val_X_cpu = ensure_numpy(val_X)
+        
+        # 优化：只标准化一次，根据需要在PCA前或PCA后进行
+        already_normalized = False
+        
+        # 如果需要在PCA前标准化
+        if scaling_before_pca and apply_pca and normalization:
+            already_normalized = True
+            if normalization == 'standard':
+                self.logger.info("在PCA前应用标准化(Z-score)", "Applying standardization (Z-score) before PCA")
+                self.scaler = StandardScaler()
+                train_X_cpu = self.scaler.fit_transform(train_X_cpu)
+                test_X_cpu = self.scaler.transform(test_X_cpu)
+                val_X_cpu = self.scaler.transform(val_X_cpu)
+            elif normalization == 'minmax':
+                self.logger.info("在PCA前应用归一化(MinMax)", "Applying normalization (MinMax) before PCA")
+                self.scaler = MinMaxScaler()
+                train_X_cpu = self.scaler.fit_transform(train_X_cpu)
+                test_X_cpu = self.scaler.transform(test_X_cpu)
+                val_X_cpu = self.scaler.transform(val_X_cpu)
+        
+        # 应用PCA降维
         if apply_pca:
-            # 转换到CPU进行PCA处理
-            train_X_cpu = ensure_numpy(train_X)
-            
             # 自动寻找解释目标方差比例所需的组件数量
             if auto_pca_variance is not None:
                 from sklearn.decomposition import PCA
                 
-                # 首先创建一个临时PCA对象用于分析方差解释率
+                # 创建临时PCA对象用于分析方差解释率
                 temp_pca = PCA(n_components=min(train_X_cpu.shape[1], 300))  # 使用较大的组件数先拟合
                 temp_pca.fit(train_X_cpu)
                 
@@ -193,62 +217,36 @@ class BrainVoxelDataLoader:
                             f"Applying PCA reduction to {n_components} components")
             
             # 创建并拟合PCA模型
+            from sklearn.decomposition import PCA
             self.pca_model = PCA(n_components=n_components, random_state=random_state)
             train_X_cpu = self.pca_model.fit_transform(train_X_cpu)
-            
-            # 转换测试集和验证集
-            test_X_cpu = ensure_numpy(test_X)
-            val_X_cpu = ensure_numpy(val_X)
-            
             test_X_cpu = self.pca_model.transform(test_X_cpu)
             val_X_cpu = self.pca_model.transform(val_X_cpu)
-            
-            # 转回GPU
-            train_X = to_gpu(train_X_cpu)
-            test_X = to_gpu(test_X_cpu)
-            val_X = to_gpu(val_X_cpu)
             
             # 记录解释方差
             explained_variance = np.sum(self.pca_model.explained_variance_ratio_)
             self.logger.info(f"PCA解释方差: {explained_variance:.4f}",
                             f"PCA explained variance: {explained_variance:.4f}")
         
-        # 2. 应用标准化（要在CPU上进行）
-        if normalization == 'standard':
-            self.logger.info("应用标准化(Z-score)", "Applying standardization (Z-score)")
-            
-            # 转换到CPU
-            train_X_cpu = ensure_numpy(train_X)
-            test_X_cpu = ensure_numpy(test_X)
-            val_X_cpu = ensure_numpy(val_X)
-            
-            self.scaler = StandardScaler()
-            train_X_cpu = self.scaler.fit_transform(train_X_cpu)
-            test_X_cpu = self.scaler.transform(test_X_cpu)
-            val_X_cpu = self.scaler.transform(val_X_cpu)
-            
-            # 转回GPU
-            train_X = to_gpu(train_X_cpu)
-            test_X = to_gpu(test_X_cpu)
-            val_X = to_gpu(val_X_cpu)
-            
-        elif normalization == 'minmax':
-            self.logger.info("应用归一化(MinMax)", "Applying normalization (MinMax)")
-            
-            # 转换到CPU
-            train_X_cpu = ensure_numpy(train_X)
-            test_X_cpu = ensure_numpy(test_X)
-            val_X_cpu = ensure_numpy(val_X)
-            
-            self.scaler = MinMaxScaler()
-            train_X_cpu = self.scaler.fit_transform(train_X_cpu)
-            test_X_cpu = self.scaler.transform(test_X_cpu)
-            val_X_cpu = self.scaler.transform(val_X_cpu)
-            
-            # 转回GPU
-            train_X = to_gpu(train_X_cpu)
-            test_X = to_gpu(test_X_cpu)
-            val_X = to_gpu(val_X_cpu)
+        # 如果还没有标准化且需要标准化，在PCA后进行
+        if not already_normalized and normalization:
+            if normalization == 'standard':
+                self.logger.info("应用标准化(Z-score)", "Applying standardization (Z-score)")
+                self.scaler = StandardScaler()
+                train_X_cpu = self.scaler.fit_transform(train_X_cpu)
+                test_X_cpu = self.scaler.transform(test_X_cpu)
+                val_X_cpu = self.scaler.transform(val_X_cpu)
+            elif normalization == 'minmax':
+                self.logger.info("应用归一化(MinMax)", "Applying normalization (MinMax)")
+                self.scaler = MinMaxScaler()
+                train_X_cpu = self.scaler.fit_transform(train_X_cpu)
+                test_X_cpu = self.scaler.transform(test_X_cpu)
+                val_X_cpu = self.scaler.transform(val_X_cpu)
+        
+        # 转回GPU
+        train_X = to_gpu(train_X_cpu)
+        test_X = to_gpu(test_X_cpu)
+        val_X = to_gpu(val_X_cpu)
         
         # 3. 类别平衡（仅针对训练集）
         if class_balance:
@@ -331,15 +329,17 @@ class BrainVoxelDataLoader:
 
 
     def preprocess_data_with_feature_selection(self, apply_pca=False, n_components=50,
-                                              normalization='standard', class_balance=False,
-                                              target_samples=1000, random_state=42,
-                                              feature_selection=None, selection_mode='threshold',
-                                              selection_threshold=0.01, max_features=100,
-                                              l1_ratio=1.0, cv_folds=5,
-                                              scaling_before_selection=True,
-                                              selection_metric='coefficient'):
+                                            normalization='standard', class_balance=False,
+                                            target_samples=1000, random_state=42,
+                                            feature_selection=None, selection_mode='threshold',
+                                            selection_threshold=0.01, max_features=100,
+                                            l1_ratio=1.0, cv_folds=5,
+                                            scaling_before_selection=True,
+                                            selection_metric='coefficient',
+                                            auto_pca_variance=0.95,
+                                            scaling_before_pca=True):
         """
-        预处理数据，包括可选的特征选择
+        预处理数据，包括可选的特征选择，优化版本避免重复标准化
         
         参数:
             apply_pca: 是否应用PCA降维
@@ -356,18 +356,22 @@ class BrainVoxelDataLoader:
             cv_folds: 交叉验证折数
             scaling_before_selection: 是否在特征选择前进行标准化
             selection_metric: 特征重要性度量
+            auto_pca_variance: 自动PCA方差比例
+            scaling_before_pca: 是否在PCA前标准化
             
         返回:
             预处理后的数据字典
         """
-        # 首先进行常规预处理
+        # 使用优化后的预处理方法，避免重复标准化
         processed_data = self.preprocess_data(
             apply_pca=apply_pca,
             n_components=n_components,
-            normalization=normalization,
+            normalization=normalization if not scaling_before_selection else None,  # 如果特征选择前会标准化，这里就不重复
             class_balance=class_balance,
             target_samples=target_samples,
-            random_state=random_state
+            random_state=random_state,
+            auto_pca_variance=auto_pca_variance,
+            scaling_before_pca=scaling_before_pca
         )
         
         # 如果不需要特征选择，直接返回
@@ -375,7 +379,7 @@ class BrainVoxelDataLoader:
             return processed_data
         
         self.logger.info(f"应用特征选择: 方法={feature_selection}, 模式={selection_mode}",
-                      f"Applying feature selection: method={feature_selection}, mode={selection_mode}")
+                    f"Applying feature selection: method={feature_selection}, mode={selection_mode}")
         
         # 创建特征选择器
         selector = FeatureSelector(
@@ -410,10 +414,9 @@ class BrainVoxelDataLoader:
         # 获取所选特征的索引和数量
         selected_indices = selector.get_selected_indices()
         self.logger.info(f"特征选择完成，选择了 {len(selected_indices)} 个特征",
-                      f"Feature selection completed, selected {len(selected_indices)} features")
+                    f"Feature selection completed, selected {len(selected_indices)} features")
         
         return processed_data
-
 
 class BrainVoxelSampler:
     """脑体素数据采样器，提供多种采样策略"""

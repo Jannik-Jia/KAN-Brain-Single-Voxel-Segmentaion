@@ -12,6 +12,7 @@ from src.utils import create_feature_selection_param_grid, sample_parameter_comb
 from src.gpu_utils import init_gpu  # 导入GPU初始化函数
 
 
+
 def setup_args():
     """设置命令行参数"""
     parser = argparse.ArgumentParser(description='伪逆线性模型特征选择实验')
@@ -36,31 +37,33 @@ def setup_args():
     parser.add_argument('--gpu_memory_fraction', type=float, default=0.8, 
                         help='GPU内存使用比例上限 (0.0-1.0)')
 
-    # 日志设置
+    # 数据处理参数
     parser.add_argument('--max_samples_per_label', type=int, default=None, 
                         help='每个标签最多使用的样本数量')
     parser.add_argument('--apply_pca', type=lambda x: (str(x).lower() == 'true'), 
-                        default=False, help='是否应用PCA降维')
+                        default=True, help='是否应用PCA降维')
     parser.add_argument('--pca_components', type=int, default=50, 
                         help='PCA组件数量')
-    parser.add_argument('--auto_pca_variance', type=float, default=None,
+    parser.add_argument('--auto_pca_variance', type=float, default=0.95,
                         help='自动选择PCA组件数量以解释指定比例的方差 (0.0-1.0)')
+    parser.add_argument('--scaling_before_pca', type=lambda x: (str(x).lower() == 'true'),
+                        default=True, help='是否在PCA降维前进行标准化')
     
     return parser.parse_args()
 
 def run_baseline_experiments(experiment_manager, logger, args):
     """运行基准测试实验"""
     logger.info("运行基准测试实验（专注于PCA方法）", "Running baseline test experiment focusing on PCA methods")
-
             
     # 基准参数 - 使用PCA自动组件数量
     baseline_params_pca = {
-        'apply_pca': args.apply_pca,  # 使用命令行参数
-        'n_components': args.pca_components,  # 使用命令行参数
-        'auto_pca_variance': args.auto_pca_variance,  # 新增：自动PCA方差参数
+        'apply_pca': args.apply_pca,
+        'n_components': args.pca_components,
+        'auto_pca_variance': args.auto_pca_variance,
+        'scaling_before_pca': args.scaling_before_pca,
         'normalization': 'standard',
         'class_balance': False,
-        'target_samples': args.max_samples_per_label,  # 使用命令行参数
+        'target_samples': args.max_samples_per_label,
         'regularization': None,
         'alpha': 0.01,
         'feature_selection': None,
@@ -75,14 +78,15 @@ def run_baseline_experiments(experiment_manager, logger, args):
     # 带L2正则化的PCA基准
     baseline_params_pca_l2 = baseline_params_pca.copy()
     baseline_params_pca_l2['regularization'] = 'l2'
+    baseline_params_pca_l2['alpha'] = 0.1
     
-    # 带类平衡的PCA基准
+    # 带类别平衡的PCA基准
     baseline_params_pca_balanced = baseline_params_pca.copy()
     baseline_params_pca_balanced['class_balance'] = True
 
     try:
-        # 运行使用PCA的基准实验
-        logger.info("运行使用PCA的基准实验", "Running baseline experiment with PCA")
+        # 运行基本PCA实验
+        logger.info("运行基本PCA实验", "Running basic PCA experiment")
         experiment_id_pca, results_pca = experiment_manager.run_experiment(baseline_params_pca)
         
         logger.info(f"基准实验（PCA）{experiment_id_pca} 完成", 
@@ -101,28 +105,28 @@ def run_baseline_experiments(experiment_manager, logger, args):
             f"  Validation accuracy: {results_pca['val']['accuracy']:.4f}"
         )
         
-        # 运行使用PCA+L2正则化的基准实验
-        logger.info("运行使用PCA+L2正则化的基准实验", "Running baseline experiment with PCA and L2 regularization")
+        # 运行带L2正则化的PCA实验
+        logger.info("运行带L2正则化的PCA实验", "Running PCA experiment with L2 regularization")
         experiment_id_pca_l2, results_pca_l2 = experiment_manager.run_experiment(baseline_params_pca_l2)
         
-        logger.info(f"基准实验（PCA+L2）{experiment_id_pca_l2} 完成", 
-                   f"Baseline experiment (PCA+L2) {experiment_id_pca_l2} completed")
+        logger.info(f"基准实验（PCA+L2正则化）{experiment_id_pca_l2} 完成", 
+                   f"Baseline experiment (PCA+L2 regularization) {experiment_id_pca_l2} completed")
         
         # 打印主要评估指标
         logger.info(
-            f"基准实验（PCA+L2）结果:\n"
+            f"基准实验（PCA+L2正则化）结果:\n"
             f"  训练集准确率: {results_pca_l2['train']['accuracy']:.4f}\n"
             f"  测试集准确率: {results_pca_l2['test']['accuracy']:.4f}\n"
             f"  验证集准确率: {results_pca_l2['val']['accuracy']:.4f}",
             
-            f"Baseline experiment (PCA+L2) results:\n"
+            f"Baseline experiment (PCA+L2 regularization) results:\n"
             f"  Training accuracy: {results_pca_l2['train']['accuracy']:.4f}\n"
             f"  Test accuracy: {results_pca_l2['test']['accuracy']:.4f}\n"
             f"  Validation accuracy: {results_pca_l2['val']['accuracy']:.4f}"
         )
         
-        # 运行使用PCA+类平衡的基准实验
-        logger.info("运行使用PCA+类平衡的基准实验", "Running baseline experiment with PCA and class balancing")
+        # 运行带类别平衡的PCA实验
+        logger.info("运行带类别平衡的PCA实验", "Running PCA experiment with class balancing")
         experiment_id_pca_balanced, results_pca_balanced = experiment_manager.run_experiment(baseline_params_pca_balanced)
         
         logger.info(f"基准实验（PCA+类平衡）{experiment_id_pca_balanced} 完成", 
@@ -141,12 +145,12 @@ def run_baseline_experiments(experiment_manager, logger, args):
             f"  Validation accuracy: {results_pca_balanced['val']['accuracy']:.4f}"
         )
         
-        # 对比基准实验结果
+        # 对比实验结果
         logger.info(
             f"基准实验对比:\n"
             f"  PCA vs PCA+L2正则化:\n"
             f"  测试集准确率: {results_pca['test']['accuracy']:.4f} vs {results_pca_l2['test']['accuracy']:.4f}\n"
-            f"  准确率差异: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n\n"
+            f"  准确率差异: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n"
             f"  PCA vs PCA+类平衡:\n"
             f"  测试集准确率: {results_pca['test']['accuracy']:.4f} vs {results_pca_balanced['test']['accuracy']:.4f}\n"
             f"  准确率差异: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}",
@@ -154,7 +158,7 @@ def run_baseline_experiments(experiment_manager, logger, args):
             f"Baseline experiments comparison:\n"
             f"  PCA vs PCA+L2 regularization:\n"
             f"  Test accuracy: {results_pca['test']['accuracy']:.4f} vs {results_pca_l2['test']['accuracy']:.4f}\n"
-            f"  Accuracy difference: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n\n"
+            f"  Accuracy difference: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n"
             f"  PCA vs PCA+class balancing:\n"
             f"  Test accuracy: {results_pca['test']['accuracy']:.4f} vs {results_pca_balanced['test']['accuracy']:.4f}\n"
             f"  Accuracy difference: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}"
@@ -171,8 +175,6 @@ def run_baseline_experiments(experiment_manager, logger, args):
         
         return False
 
-
-
 def run_full_experiments(experiment_manager, max_experiments, logger):
     """运行完整实验集"""
     # 创建参数网格
@@ -187,14 +189,12 @@ def run_full_experiments(experiment_manager, max_experiments, logger):
     logger.info(f"采样了 {len(param_combinations)} 个参数组合", 
                f"Sampled {len(param_combinations)} parameter combinations")
                
-    # 批量运行实验
+    # 批量运行实验 - 注意这里直接传递param_combinations列表而非param_grid
     logger.info(f"开始批量实验，最大实验数: {len(param_combinations)}", 
                f"Starting batch experiments, max experiments: {len(param_combinations)}")
 
     try:
-        # 打乱组合顺序，避免类似参数连续运行
-        np.random.shuffle(param_combinations)
-        
+        # 运行批量实验，直接传递参数组合列表
         completed_experiments = experiment_manager.run_batch_experiments(param_combinations)
         
         # 生成结果汇总报告

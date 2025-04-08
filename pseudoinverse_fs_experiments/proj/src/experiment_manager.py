@@ -54,200 +54,74 @@ class ExperimentManager:
         self.logger.info(f"实验管理器初始化，基础目录: {base_dir}", 
                        f"Experiment manager initialized with base directory: {base_dir}")
     
-    # def run_experiment(self, params, force_rerun=False):
-    #     """
-    #     运行单个实验
-        
-    #     参数:
-    #         params: 实验参数字典
-    #         force_rerun: 是否强制重新运行已完成的实验
-            
-    #     返回:
-    #         experiment_id: 实验ID
-    #         results: 实验结果
-    #     """
-    #     # 生成实验ID
-    #     experiment_id = self._generate_experiment_id(params)
-    #     experiment_dir = os.path.join(self.base_dir, experiment_id)
-        
-    #     # 检查是否已完成实验
-    #     if os.path.exists(experiment_dir) and not force_rerun:
-    #         status_path = os.path.join(experiment_dir, "status.json")
-    #         if os.path.exists(status_path):
-    #             with open(status_path, 'r') as f:
-    #                 status = json.load(f)
-    #                 if status.get('status') == 'completed':
-    #                     self.logger.info(f"实验 {experiment_id} 已完成，跳过", 
-    #                                    f"Experiment {experiment_id} already completed, skipping")
-    #                     return experiment_id, self._load_results(experiment_dir)
-        
-    #     # 创建实验目录
-    #     os.makedirs(experiment_dir, exist_ok=True)
-        
-    #     # 保存参数
-    #     with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
-    #         json.dump(params, f, indent=4)
-        
-    #     # 更新状态为运行中
-    #     with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-    #         json.dump({"status": "running", "start_time": str(datetime.now())}, f, indent=4)
-        
-    #     # 记录实验开始
-    #     self.logger.info(f"开始实验 {experiment_id}", f"Starting experiment {experiment_id}")
-    #     self.logger.info(f"参数: {params}", f"Parameters: {params}")
-        
-    #     try:
-    #         # 处理数据
-    #         start_time = time.time()
-    #         processed_data = self.data_loader.preprocess_data(
-    #             apply_pca=params.get('apply_pca', False),
-    #             n_components=params.get('n_components', 50),
-    #             normalization=params.get('normalization', None),
-    #             class_balance=params.get('class_balance', False),
-    #             target_samples=params.get('target_samples', 1000)
-    #         )
-            
-    #         # 训练模型
-    #         model = PseudoInverseModel(num_classes=102, logger=self.logger)
-    #         model.fit(
-    #             processed_data['train_X'], 
-    #             processed_data['train_y'],
-    #             regularization=params.get('regularization', None),
-    #             alpha=params.get('alpha', 0.0)
-    #         )
-    #         train_time = time.time() - start_time
-            
-    #         # 保存模型
-    #         model.save(os.path.join(experiment_dir, "model.pkl"))
-            
-    #         # 评估模型
-    #         eval_start_time = time.time()
-    #         evaluator = ModelEvaluator(logger=self.logger)
-            
-    #         # 评估训练集
-    #         train_result = evaluator.evaluate(
-    #             model, processed_data['train_X'], processed_data['train_y'], "train")
-            
-    #         # 评估测试集
-    #         test_result = evaluator.evaluate(
-    #             model, processed_data['test_X'], processed_data['test_y'], "test")
-            
-    #         # 评估验证集
-    #         val_result = evaluator.evaluate(
-    #             model, processed_data['val_X'], processed_data['val_y'], "val")
-            
-    #         evaluation_time = time.time() - eval_start_time
-            
-    #         # 生成可视化
-    #         evaluator.visualize_performance(save_dir=experiment_dir)
-            
-    #         # 特征重要性可视化
-    #         visualize_feature_importance(
-    #             model, top_n=30, 
-    #             save_path=os.path.join(experiment_dir, "feature_importance.png"))
-            
-    #         # 权重分布可视化
-    #         visualize_weight_distribution(
-    #             model, save_path=os.path.join(experiment_dir, "weight_distribution.png"))
-            
-    #         # 保存评估结果
-    #         results = {
-    #             'train': train_result,
-    #             'test': test_result,
-    #             'val': val_result,
-    #             'train_time': train_time,
-    #             'evaluation_time': evaluation_time
-    #         }
 
-    #         # 保存评估结果
-    #         self._save_results(experiment_dir, results)
 
-    #         # 更新状态为已完成
-    #         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-    #             json.dump({
-    #                 "status": "completed", 
-    #                 "start_time": str(datetime.now()),
-    #                 "end_time": str(datetime.now()),
-    #                 "train_time": train_time,
-    #                 "evaluation_time": evaluation_time
-    #             }, f, indent=4)
-            
-    #         # 更新实验日志
-    #         self._update_experiment_log(
-    #             experiment_id, params, train_result, test_result, val_result, 
-    #             train_time, evaluation_time, "completed")
-            
-    #         self.logger.info(f"实验 {experiment_id} 完成", f"Experiment {experiment_id} completed")
-            
-    #         return experiment_id, results
-            
-    #     except Exception as e:
-    #         # 记录错误
-    #         self.logger.error(f"实验 {experiment_id} 失败: {str(e)}", 
-    #                         f"Experiment {experiment_id} failed: {str(e)}")
-            
-    #         # 更新状态为失败
-    #         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-    #             json.dump({
-    #                 "status": "failed",
-    #                 "error": str(e),
-    #                 "traceback": traceback.format_exc()
-    #             }, f, indent=4)
-            
-    #         # 更新实验日志
-    #         self._update_experiment_log(
-    #             experiment_id, params, None, None, None, 0, 0, "failed")
-            
-    #         raise e
-    
     def run_batch_experiments(self, param_grid, max_experiments=None):
         """
         运行批量实验
         
         参数:
-            param_grid: 参数网格，包含每个参数的可能值列表
+            param_grid: 参数网格或参数组合列表
             max_experiments: 最大实验数量，None表示不限制
-            
+                
         返回:
             completed_experiments: 已完成实验的ID列表
         """
-        # 生成所有参数组合
-        param_keys = list(param_grid.keys())
-        param_values = list(param_grid.values())
-        
-        # 计算总实验数
-        total_combinations = 1
-        for values in param_values:
-            total_combinations *= len(values)
-        
-        if max_experiments and max_experiments < total_combinations:
-            self.logger.info(f"限制实验数量为 {max_experiments}/{total_combinations}", 
-                           f"Limiting to {max_experiments}/{total_combinations} experiments")
-            total_combinations = max_experiments
-        
-        self.logger.info(f"开始批量实验，共 {total_combinations} 个组合", 
-                       f"Starting batch experiments with {total_combinations} combinations")
-        
-        # 生成所有参数组合
-        param_combinations = []
-        
-        def generate_combinations(keys, values, current=0, current_params={}):
-            if current == len(keys):
-                param_combinations.append(current_params.copy())
-                return
+        # 判断输入类型
+        if isinstance(param_grid, list):
+            # 如果已经是参数组合列表，直接使用
+            param_combinations = param_grid
+            total_combinations = len(param_combinations)
             
-            for value in values[current]:
-                current_params[keys[current]] = value
-                generate_combinations(keys, values, current + 1, current_params)
+            if max_experiments and max_experiments < total_combinations:
+                self.logger.info(f"限制实验数量为 {max_experiments}/{total_combinations}", 
+                            f"Limiting to {max_experiments}/{total_combinations} experiments")
+                # 随机选择max_experiments个组合
+                np.random.shuffle(param_combinations)
+                param_combinations = param_combinations[:max_experiments]
+                total_combinations = max_experiments
+        else:
+            # 如果是参数网格字典，则生成组合
+            # 原有逻辑处理参数网格
+            param_keys = list(param_grid.keys())
+            param_values = list(param_grid.values())
+            
+            # 计算总实验数
+            total_combinations = 1
+            for values in param_values:
+                total_combinations *= len(values)
+            
+            if max_experiments and max_experiments < total_combinations:
+                self.logger.info(f"限制实验数量为 {max_experiments}/{total_combinations}", 
+                            f"Limiting to {max_experiments}/{total_combinations} experiments")
+                total_combinations = max_experiments
+            
+            self.logger.info(f"开始批量实验，共 {total_combinations} 个组合", 
+                        f"Starting batch experiments with {total_combinations} combinations")
+            
+            # 生成所有参数组合
+            param_combinations = []
+            
+            def generate_combinations(keys, values, current=0, current_params={}):
+                if current == len(keys):
+                    param_combinations.append(current_params.copy())
+                    return
                 
-                # 如果达到最大实验数，则停止
-                if max_experiments and len(param_combinations) >= max_experiments:
-                    break
-        
-        generate_combinations(param_keys, param_values)
+                for value in values[current]:
+                    current_params[keys[current]] = value
+                    generate_combinations(keys, values, current + 1, current_params)
+                    
+                    # 如果达到最大实验数，则停止
+                    if max_experiments and len(param_combinations) >= max_experiments:
+                        break
+            
+            generate_combinations(param_keys, param_values)
         
         # 打乱参数组合，使实验更加随机化
         np.random.shuffle(param_combinations)
+        
+        self.logger.info(f"开始批量实验，共 {len(param_combinations)} 个组合", 
+                    f"Starting batch experiments with {len(param_combinations)} combinations")
         
         # 运行所有实验
         completed_experiments = []
@@ -810,6 +684,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         return self.global_selector
     
+
     def run_experiment(self, params, force_rerun=False):
         """
         运行单个实验，支持特征选择
@@ -817,7 +692,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         参数:
             params: 实验参数字典
             force_rerun: 是否强制重新运行已完成的实验
-            
+                
         返回:
             experiment_id: 实验ID
             results: 实验结果
@@ -834,7 +709,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     status = json.load(f)
                     if status.get('status') == 'completed':
                         self.logger.info(f"实验 {experiment_id} 已完成，跳过", 
-                                       f"Experiment {experiment_id} already completed, skipping")
+                                    f"Experiment {experiment_id} already completed, skipping")
                         return experiment_id, self._load_results(experiment_dir)
         
         # 创建实验目录
@@ -858,6 +733,10 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             # 处理数据
             start_time = time.time()
+            
+            # 提取新增参数，如果不存在则使用默认值
+            auto_pca_variance = params.get('auto_pca_variance', None)
+            scaling_before_pca = params.get('scaling_before_pca', True)
             
             if use_feature_selection and self.feature_selection_mode == 'global':
                 # 全局特征选择模式
@@ -887,6 +766,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 processed_data = self.data_loader.preprocess_data_with_feature_selection(
                     apply_pca=params.get('apply_pca', False),
                     n_components=params.get('n_components', 50),
+                    auto_pca_variance=auto_pca_variance,  # 新增参数
+                    scaling_before_pca=scaling_before_pca,  # 新增参数
                     normalization=params.get('normalization', None),
                     class_balance=params.get('class_balance', False),
                     target_samples=params.get('target_samples', 1000),
@@ -919,9 +800,12 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 processed_data = self.data_loader.preprocess_data(
                     apply_pca=params.get('apply_pca', False),
                     n_components=params.get('n_components', 50),
+                    auto_pca_variance=auto_pca_variance,  # 新增参数
+                    scaling_before_pca=scaling_before_pca,  # 新增参数
                     normalization=params.get('normalization', None),
                     class_balance=params.get('class_balance', False),
-                    target_samples=params.get('target_samples', 1000)
+                    target_samples=params.get('target_samples', 1000),
+                    random_state=params.get('random_state', 42)
                 )
                 
                 # 原始和选择后的特征维度相同
@@ -971,6 +855,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             # 权重分布可视化
             visualize_weight_distribution(
                 model, save_path=os.path.join(experiment_dir, "weight_distribution.png"))
+            
             # 保存评估结果
             results = {
                 'train': train_result,
@@ -979,7 +864,9 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 'train_time': train_time,
                 'evaluation_time': evaluation_time,
                 'original_dim': original_dim,
-                'selected_dim': selected_dim
+                'selected_dim': selected_dim,
+                'pca_components': params.get('n_components') if params.get('apply_pca') else None,
+                'auto_pca_variance': auto_pca_variance
             }
 
             # 保存评估结果
@@ -994,7 +881,9 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     "train_time": train_time,
                     "evaluation_time": evaluation_time,
                     "original_dim": original_dim,
-                    "selected_dim": selected_dim
+                    "selected_dim": selected_dim,
+                    "pca_components": params.get('n_components') if params.get('apply_pca') else None,
+                    "auto_pca_variance": auto_pca_variance
                 }, f, indent=4)
             
             # 更新实验日志
@@ -1024,7 +913,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 experiment_id, params, None, None, None, 0, 0, 0, 0, "failed")
             
             raise e
-    
+
+
     def _update_experiment_log_with_fs(self, experiment_id, params, train_result, test_result, 
                                     val_result, original_dim, selected_dim, train_time, 
                                     evaluation_time, status):
@@ -1066,287 +956,379 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         with open(self.experiment_log_path, 'a') as f:
             f.write(log_entry)
     
-    def generate_summary_report_with_fs(self, top_n=10):
-        """
-        生成包含特征选择信息的汇总报告
+def generate_summary_report_with_fs(self, top_n=10):
+    """
+    生成包含特征选择信息的汇总报告
+    
+    参数:
+        top_n: 展示的顶部实验数量
+    """
+    # 读取实验日志
+    if not os.path.exists(self.experiment_log_path):
+        self.logger.warning("实验日志不存在", "Experiment log does not exist")
+        return
+    
+    try:
+        log_df = pd.read_csv(self.experiment_log_path)
+    except:
+        self.logger.warning("无法读取实验日志", "Cannot read experiment log")
+        return
+    
+    # 过滤成功的实验
+    log_df = log_df[log_df['status'] == 'completed']
+    
+    if len(log_df) == 0:
+        self.logger.warning("没有已完成的实验", "No completed experiments")
+        return
+    
+    # 按测试集准确率排序
+    log_df_sorted = log_df.sort_values('test_accuracy', ascending=False)
+    
+    # 创建报告目录
+    report_dir = os.path.join(self.base_dir, "summary_report_with_fs")
+    os.makedirs(report_dir, exist_ok=True)
+    
+    # 保存排序后的实验日志
+    log_df_sorted.to_csv(os.path.join(report_dir, "experiments_sorted.csv"), index=False)
+    
+    # 生成顶部实验表格
+    top_df = log_df_sorted.head(top_n)
+    
+    # 创建评估器实例
+    evaluator = ModelEvaluator(logger=self.logger)
+    
+    # 收集不同PCA组件数量的实验结果
+    self.logger.info("分析不同PCA组件数量的影响", "Analyzing impact of different PCA component counts")
+    
+    # 筛选使用PCA的实验
+    pca_experiments = log_df[log_df['apply_pca'] == True]
+    
+    # PCA组件分析结果
+    best_comp = None
+    
+    if len(pca_experiments) > 0:
+        # 准备按组件数量分组的结果字典
+        results_by_components = {}
         
-        参数:
-            top_n: 展示的顶部实验数量
-        """
-        # 读取实验日志
-        if not os.path.exists(self.experiment_log_path):
-            self.logger.warning("实验日志不存在", "Experiment log does not exist")
-            return
-        
-        try:
-            log_df = pd.read_csv(self.experiment_log_path)
-        except:
-            self.logger.warning("无法读取实验日志", "Cannot read experiment log")
-            return
-        
-        # 过滤成功的实验
-        log_df = log_df[log_df['status'] == 'completed']
-        
-        if len(log_df) == 0:
-            self.logger.warning("没有已完成的实验", "No completed experiments")
-            return
-        
-        # 按测试集准确率排序
-        log_df_sorted = log_df.sort_values('test_accuracy', ascending=False)
-        
-        # 创建报告目录
-        report_dir = os.path.join(self.base_dir, "summary_report_with_fs")
-        os.makedirs(report_dir, exist_ok=True)
-        
-        # 保存排序后的实验日志
-        log_df_sorted.to_csv(os.path.join(report_dir, "experiments_sorted.csv"), index=False)
-        
-        # 生成顶部实验表格
-        top_df = log_df_sorted.head(top_n)
-        
-        # 生成HTML报告
-        html_report = f"""
-        <html>
-        <head>
-            <title>Pseudo-Inverse Experiments with Feature Selection Summary Report</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                h1 {{ color: #333366; }}
-                h2 {{ color: #666699; }}
-                table {{ border-collapse: collapse; width: 100%; }}
-                th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }}
-                th {{ background-color: #f2f2f2; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .chart-container {{ display: flex; flex-wrap: wrap; justify-content: space-between; }}
-                .chart {{ margin: 10px; max-width: 600px; }}
-            </style>
-        </head>
-        <body>
-            <h1>Pseudo-Inverse Experiments with Feature Selection Summary Report</h1>
-            <p>Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            <p>Total experiments: {len(log_df)}</p>
+        # 首先找出使用了哪些不同的PCA组件数量
+        if 'n_components' in pca_experiments.columns:
+            # 对每个组件数量，找出测试集准确率最高的实验
+            component_groups = pca_experiments.groupby('n_components')
             
-            <h2>Top {top_n} Experiments by Test Accuracy</h2>
-            <table>
-                <tr>
-                    <th>Experiment ID</th>
-                    <th>Test Accuracy</th>
-                    <th>Test F1</th>
-                    <th>Val Accuracy</th>
-                    <th>PCA</th>
-                    <th>Feature Selection</th>
-                    <th>Original Features</th>
-                    <th>Selected Features</th>
-                    <th>Selection Ratio</th>
-                </tr>
+            for n_comp, group in component_groups:
+                # 按测试准确率排序并获取最佳实验
+                best_exp = group.sort_values('test_accuracy', ascending=False).iloc[0]
+                exp_id = best_exp['experiment_id']
+                exp_dir = os.path.join(self.base_dir, exp_id)
+                
+                # 加载实验结果
+                results = self._load_results(exp_dir)
+                if results:
+                    results_by_components[int(n_comp)] = results
+            
+            # 使用评估器分析不同组件数量的影响
+            if results_by_components:
+                best_comp = evaluator.analyze_pca_components(
+                    results_by_components, 
+                    save_dir=report_dir,
+                    prefix="pca_"
+                )
+                
+                self.logger.info(f"PCA组件数量分析完成，最佳组件数: {best_comp}", 
+                               f"PCA component analysis completed, best component count: {best_comp}")
+                
+                # 在报告中添加最佳组件数的信息
+                with open(os.path.join(report_dir, "pca_best_component.txt"), 'w') as f:
+                    f.write(f"Best PCA component count: {best_comp}\n")
+    
+    # 生成HTML报告
+    html_report = f"""
+    <html>
+    <head>
+        <title>Pseudo-Inverse Experiments with Feature Selection Summary Report</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #333366; }}
+            h2 {{ color: #666699; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }}
+            th {{ background-color: #f2f2f2; }}
+            tr:hover {{ background-color: #f5f5f5; }}
+            .chart-container {{ display: flex; flex-wrap: wrap; justify-content: space-between; }}
+            .chart {{ margin: 10px; max-width: 600px; }}
+        </style>
+    </head>
+    <body>
+        <h1>Pseudo-Inverse Experiments with Feature Selection Summary Report</h1>
+        <p>Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p>Total experiments: {len(log_df)}</p>
+    """
+    
+    # 添加PCA组件数量分析的部分（如果有的话）
+    if best_comp is not None:
+        html_report += f"""
+        <h2>PCA Component Analysis</h2>
+        <p><strong>Best PCA component count: {best_comp}</strong></p>
+        <div class="chart-container">
+            <div class="chart">
+                <img src="pca_pca_components_accuracy.png" alt="PCA Components vs Accuracy" width="100%">
+            </div>
+            <div class="chart">
+                <img src="pca_pca_components_f1.png" alt="PCA Components vs F1 Score" width="100%">
+            </div>
+        </div>
+        <p>View detailed PCA component analysis <a href="pca_components_report.md">here</a>.</p>
         """
         
-        for _, row in top_df.iterrows():
-            html_report += f"""
-                <tr>
-                    <td>{row['experiment_id']}</td>
-                    <td>{row['test_accuracy']:.4f}</td>
-                    <td>{row['test_f1']:.4f}</td>
-                    <td>{row['val_accuracy']:.4f}</td>
-                    <td>{'Yes' if row['apply_pca'] else 'No'}</td>
-                    <td>{row['feature_selection']}</td>
-                    <td>{int(row['original_features'])}</td>
-                    <td>{int(row['selected_features'])}</td>
-                    <td>{row['selection_ratio']:.2f}</td>
-                </tr>
-            """
-        
-        html_report += """
-            </table>
-            
-            <h2>Feature Selection Impact Analysis</h2>
-            <div class="chart-container">
+    html_report += f"""
+        <h2>Top {top_n} Experiments by Test Accuracy</h2>
+        <table>
+            <tr>
+                <th>Experiment ID</th>
+                <th>Test Accuracy</th>
+                <th>Test F1</th>
+                <th>Val Accuracy</th>
+                <th>PCA</th>
+                <th>Components</th>
+                <th>Feature Selection</th>
+                <th>Original Features</th>
+                <th>Selected Features</th>
+                <th>Selection Ratio</th>
+            </tr>
+    """
+    
+    for _, row in top_df.iterrows():
+        html_report += f"""
+            <tr>
+                <td>{row['experiment_id']}</td>
+                <td>{row['test_accuracy']:.4f}</td>
+                <td>{row['test_f1']:.4f}</td>
+                <td>{row['val_accuracy']:.4f}</td>
+                <td>{'Yes' if row['apply_pca'] else 'No'}</td>
+                <td>{row['n_components'] if 'n_components' in row and row['apply_pca'] else '-'}</td>
+                <td>{row['feature_selection']}</td>
+                <td>{int(row['original_features'])}</td>
+                <td>{int(row['selected_features'])}</td>
+                <td>{row['selection_ratio']:.2f}</td>
+            </tr>
         """
+    
+    html_report += """
+        </table>
         
-        # 生成特征选择影响可视化
-        # 1. 特征选择方法对准确率的影响
-        if 'feature_selection' in log_df.columns:
-            plt.figure(figsize=(10, 6))
-            sns.boxplot(x='feature_selection', y='test_accuracy', data=log_df)
-            plt.title('Impact of Feature Selection Method on Test Accuracy')
-            plt.xlabel('Feature Selection Method')
-            plt.ylabel('Test Accuracy')
-            plt.grid(True, axis='y', linestyle='--', alpha=0.7)
-            plt.tight_layout()
-            fs_impact_path = os.path.join(report_dir, "feature_selection_impact.png")
-            plt.savefig(fs_impact_path, dpi=300)
-            plt.close()
-            
-            html_report += f"""
-                <div class="chart">
-                    <img src="{os.path.relpath(fs_impact_path, self.base_dir)}" alt="Feature Selection Impact" width="100%">
-                </div>
-            """
-        
-        # 2. 特征选择比例与准确率的关系
+        <h2>Feature Selection Impact Analysis</h2>
+        <div class="chart-container">
+    """
+    
+    # 生成特征选择影响可视化
+    # 1. 特征选择方法对准确率的影响
+    if 'feature_selection' in log_df.columns:
         plt.figure(figsize=(10, 6))
-        plt.scatter(log_df['selection_ratio'], log_df['test_accuracy'], alpha=0.7)
-        plt.title('Relationship Between Feature Selection Ratio and Test Accuracy')
-        plt.xlabel('Feature Selection Ratio')
+        sns.boxplot(x='feature_selection', y='test_accuracy', data=log_df)
+        plt.title('Impact of Feature Selection Method on Test Accuracy')
+        plt.xlabel('Feature Selection Method')
         plt.ylabel('Test Accuracy')
-        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.grid(True, axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
-        ratio_impact_path = os.path.join(report_dir, "selection_ratio_impact.png")
-        plt.savefig(ratio_impact_path, dpi=300)
+        fs_impact_path = os.path.join(report_dir, "feature_selection_impact.png")
+        plt.savefig(fs_impact_path, dpi=300)
         plt.close()
         
         html_report += f"""
             <div class="chart">
-                <img src="{os.path.relpath(ratio_impact_path, self.base_dir)}" alt="Selection Ratio Impact" width="100%">
+                <img src="{os.path.relpath(fs_impact_path, self.base_dir)}" alt="Feature Selection Impact" width="100%">
             </div>
         """
+    
+    # 2. 特征选择比例与准确率的关系
+    plt.figure(figsize=(10, 6))
+    plt.scatter(log_df['selection_ratio'], log_df['test_accuracy'], alpha=0.7)
+    plt.title('Relationship Between Feature Selection Ratio and Test Accuracy')
+    plt.xlabel('Feature Selection Ratio')
+    plt.ylabel('Test Accuracy')
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    ratio_impact_path = os.path.join(report_dir, "selection_ratio_impact.png")
+    plt.savefig(ratio_impact_path, dpi=300)
+    plt.close()
+    
+    html_report += f"""
+        <div class="chart">
+            <img src="{os.path.relpath(ratio_impact_path, self.base_dir)}" alt="Selection Ratio Impact" width="100%">
+        </div>
+    """
+    
+    # 3. 使用不同L1比例的比较
+    if 'l1_ratio' in log_df.columns:
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(x='l1_ratio', y='test_accuracy', data=log_df)
+        plt.title('Impact of L1 Ratio on Test Accuracy')
+        plt.xlabel('L1 Ratio')
+        plt.ylabel('Test Accuracy')
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        l1_impact_path = os.path.join(report_dir, "l1_ratio_impact.png")
+        plt.savefig(l1_impact_path, dpi=300)
+        plt.close()
         
-        # 3. 使用不同L1比例的比较
-        if 'l1_ratio' in log_df.columns:
-            plt.figure(figsize=(10, 6))
-            sns.lineplot(x='l1_ratio', y='test_accuracy', data=log_df)
-            plt.title('Impact of L1 Ratio on Test Accuracy')
-            plt.xlabel('L1 Ratio')
-            plt.ylabel('Test Accuracy')
-            plt.grid(True, linestyle='--', alpha=0.7)
-            plt.tight_layout()
-            l1_impact_path = os.path.join(report_dir, "l1_ratio_impact.png")
-            plt.savefig(l1_impact_path, dpi=300)
-            plt.close()
-            
-            html_report += f"""
-                <div class="chart">
-                    <img src="{os.path.relpath(l1_impact_path, self.base_dir)}" alt="L1 Ratio Impact" width="100%">
-                </div>
-            """
-        
-        # 4. 特征选择前后对比（使用和不使用特征选择）
-        with_fs = log_df[log_df['feature_selection'] != 'none']
-        without_fs = log_df[log_df['feature_selection'] == 'none']
-        
-        if len(with_fs) > 0 and len(without_fs) > 0:
-            plt.figure(figsize=(12, 6))
-            
-            # 准确率对比
-            plt.subplot(1, 2, 1)
-            data = {
-                'With FS': with_fs['test_accuracy'].mean(),
-                'Without FS': without_fs['test_accuracy'].mean()
-            }
-            plt.bar(data.keys(), data.values())
-            plt.ylabel('Average Test Accuracy')
-            plt.title('Accuracy With vs Without Feature Selection')
-            plt.grid(True, axis='y', linestyle='--', alpha=0.7)
-            
-            # 特征数量对比
-            plt.subplot(1, 2, 2)
-            data = {
-                'Original': log_df['original_features'].mean(),
-                'After Selection': with_fs['selected_features'].mean()
-            }
-            plt.bar(data.keys(), data.values())
-            plt.ylabel('Average Feature Count')
-            plt.title('Feature Count Before vs After Selection')
-            plt.grid(True, axis='y', linestyle='--', alpha=0.7)
-            
-            plt.tight_layout()
-            fs_comparison_path = os.path.join(report_dir, "feature_selection_comparison.png")
-            plt.savefig(fs_comparison_path, dpi=300)
-            plt.close()
-            
-            html_report += f"""
-                <div class="chart">
-                    <img src="{os.path.relpath(fs_comparison_path, self.base_dir)}" alt="Feature Selection Comparison" width="100%">
-                </div>
-            """
-        
-        html_report += """
-            </div>
-            
-            <h2>Best Experiment Details</h2>
-        """
-        
-        # 获取最佳实验的详细信息
-        if len(top_df) > 0:
-            best_exp_id = top_df.iloc[0]['experiment_id']
-            best_exp_dir = os.path.join(self.base_dir, best_exp_id)
-            
-            # 复制最佳实验的图表到报告目录
-            important_images = [
-                'feature_selection_visualization.png',
-                'feature_importance.png',
-                'weight_distribution.png', 
-                'performance_comparison.png', 
-                'confusion_matrix_test.png'
-            ]
-            
-            for img_file in important_images:
-                img_path = os.path.join(best_exp_dir, img_file)
-                if os.path.exists(img_path):
-                    dest_path = os.path.join(report_dir, f"best_{img_file}")
-                    import shutil
-                    shutil.copy(img_path, dest_path)
-                    
-                    img_title = img_file.replace('_', ' ').replace('.png', '').title()
-                    html_report += f"""
-                        <div class="chart">
-                            <h3>{img_title}</h3>
-                            <img src="{os.path.relpath(dest_path, self.base_dir)}" alt="{img_file}" width="100%">
-                        </div>
-                    """
-        
-        html_report += """
-            <h2>Conclusion and Recommendations</h2>
-            <p>Based on the experimental results, here are the key findings related to feature selection:</p>
-            <ul>
-        """
-        
-        # 添加特征选择相关结论
-        # 特征选择方法比较
-        if 'feature_selection' in log_df.columns:
-            fs_impact = log_df.groupby('feature_selection')['test_accuracy'].mean()
-            best_fs = fs_impact.idxmax()
-            html_report += f"""
-                <li>Best feature selection method: {best_fs} (Avg. accuracy: {fs_impact[best_fs]:.4f})</li>
-            """
-        
-        # 特征选择比例分析
-        avg_ratio = with_fs['selection_ratio'].mean() if len(with_fs) > 0 else 0
         html_report += f"""
-            <li>Average feature selection ratio: {avg_ratio:.2f} ({avg_ratio*100:.1f}% of original features)</li>
+            <div class="chart">
+                <img src="{os.path.relpath(l1_impact_path, self.base_dir)}" alt="L1 Ratio Impact" width="100%">
+            </div>
         """
+    
+    # 4. 特征选择前后对比（使用和不使用特征选择）
+    with_fs = log_df[log_df['feature_selection'] != 'none']
+    without_fs = log_df[log_df['feature_selection'] == 'none']
+    
+    if len(with_fs) > 0 and len(without_fs) > 0:
+        plt.figure(figsize=(12, 6))
         
-        # 特征选择前后对比
-        if len(with_fs) > 0 and len(without_fs) > 0:
-            acc_diff = with_fs['test_accuracy'].mean() - without_fs['test_accuracy'].mean()
-            html_report += f"""
-                <li>Feature selection {'improves' if acc_diff > 0 else 'reduces'} model performance by {abs(acc_diff):.4f} on average</li>
-            """
+        # 准确率对比
+        plt.subplot(1, 2, 1)
+        data = {
+            'With FS': with_fs['test_accuracy'].mean(),
+            'Without FS': without_fs['test_accuracy'].mean()
+        }
+        plt.bar(data.keys(), data.values())
+        plt.ylabel('Average Test Accuracy')
+        plt.title('Accuracy With vs Without Feature Selection')
+        plt.grid(True, axis='y', linestyle='--', alpha=0.7)
         
-        # 最佳特征选择参数
-        if len(top_df) > 0 and top_df.iloc[0]['feature_selection'] != 'none':
-            best_row = top_df.iloc[0]
-            html_report += f"""
-                <li>Best feature selection parameters:
-                    <ul>
-                        <li>Method: {best_row['feature_selection']}</li>
-                        <li>Selection mode: {best_row['selection_mode']}</li>
-                        <li>Threshold/Max features: {best_row['selection_threshold'] if best_row['selection_mode'] == 'threshold' else best_row['max_features']}</li>
-                        <li>L1 ratio: {best_row['l1_ratio']}</li>
-                        <li>Feature reduction: from {int(best_row['original_features'])} to {int(best_row['selected_features'])} features ({best_row['selection_ratio']:.2f} ratio)</li>
-                    </ul>
-                </li>
-            """
+        # 特征数量对比
+        plt.subplot(1, 2, 2)
+        data = {
+            'Original': log_df['original_features'].mean(),
+            'After Selection': with_fs['selected_features'].mean()
+        }
+        plt.bar(data.keys(), data.values())
+        plt.ylabel('Average Feature Count')
+        plt.title('Feature Count Before vs After Selection')
+        plt.grid(True, axis='y', linestyle='--', alpha=0.7)
         
-        html_report += """
-            </ul>
-        </body>
-        </html>
+        plt.tight_layout()
+        fs_comparison_path = os.path.join(report_dir, "feature_selection_comparison.png")
+        plt.savefig(fs_comparison_path, dpi=300)
+        plt.close()
+        
+        html_report += f"""
+            <div class="chart">
+                <img src="{os.path.relpath(fs_comparison_path, self.base_dir)}" alt="Feature Selection Comparison" width="100%">
+            </div>
         """
+    
+    # 5. PCA相关的可视化（如果有的话）
+    if 'n_components' in log_df.columns and log_df['apply_pca'].any():
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(x='n_components', y='test_accuracy', data=log_df[log_df['apply_pca']==True])
+        plt.title('Impact of PCA Components Count on Test Accuracy')
+        plt.xlabel('Number of PCA Components')
+        plt.ylabel('Test Accuracy')
+        plt.grid(True, axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        pca_components_impact_path = os.path.join(report_dir, "pca_components_impact.png")
+        plt.savefig(pca_components_impact_path, dpi=300)
+        plt.close()
         
-        # 保存HTML报告
-        with open(os.path.join(report_dir, "summary_report_with_fs.html"), 'w') as f:
-            f.write(html_report)
+        html_report += f"""
+            <div class="chart">
+                <img src="{os.path.relpath(pca_components_impact_path, self.base_dir)}" alt="PCA Components Impact" width="100%">
+            </div>
+        """
+    
+    html_report += """
+        </div>
         
-        self.logger.info(f"特征选择汇总报告已生成: {os.path.join(report_dir, 'summary_report_with_fs.html')}", 
-                       f"Feature selection summary report generated: {os.path.join(report_dir, 'summary_report_with_fs.html')}")
+        <h2>Best Experiment Details</h2>
+    """
+    
+    # 获取最佳实验的详细信息
+    if len(top_df) > 0:
+        best_exp_id = top_df.iloc[0]['experiment_id']
+        best_exp_dir = os.path.join(self.base_dir, best_exp_id)
+        
+        # 复制最佳实验的图表到报告目录
+        important_images = [
+            'feature_selection_visualization.png',
+            'feature_importance.png',
+            'weight_distribution.png', 
+            'performance_comparison.png', 
+            'confusion_matrix_test.png'
+        ]
+        
+        for img_file in important_images:
+            img_path = os.path.join(best_exp_dir, img_file)
+            if os.path.exists(img_path):
+                dest_path = os.path.join(report_dir, f"best_{img_file}")
+                import shutil
+                shutil.copy(img_path, dest_path)
+                
+                img_title = img_file.replace('_', ' ').replace('.png', '').title()
+                html_report += f"""
+                    <div class="chart">
+                        <h3>{img_title}</h3>
+                        <img src="{os.path.relpath(dest_path, self.base_dir)}" alt="{img_file}" width="100%">
+                    </div>
+                """
+    
+    html_report += """
+        <h2>Conclusion and Recommendations</h2>
+        <p>Based on the experimental results, here are the key findings:</p>
+        <ul>
+    """
+    
+    # 添加PCA相关结论
+    if best_comp is not None:
+        html_report += f"""
+            <li><strong>PCA Components:</strong> The optimal number of PCA components was found to be {best_comp}.</li>
+        """
+    
+    # 添加特征选择相关结论
+    # 特征选择方法比较
+    if 'feature_selection' in log_df.columns:
+        fs_impact = log_df.groupby('feature_selection')['test_accuracy'].mean()
+        best_fs = fs_impact.idxmax()
+        html_report += f"""
+            <li><strong>Feature Selection Method:</strong> {best_fs} (Avg. accuracy: {fs_impact[best_fs]:.4f})</li>
+        """
+    
+    # 特征选择比例分析
+    avg_ratio = with_fs['selection_ratio'].mean() if len(with_fs) > 0 else 0
+    html_report += f"""
+        <li><strong>Average Feature Selection Ratio:</strong> {avg_ratio:.2f} ({avg_ratio*100:.1f}% of original features)</li>
+    """
+    
+    # 特征选择前后对比
+    if len(with_fs) > 0 and len(without_fs) > 0:
+        acc_diff = with_fs['test_accuracy'].mean() - without_fs['test_accuracy'].mean()
+        html_report += f"""
+            <li><strong>Effect of Feature Selection:</strong> Feature selection {'improves' if acc_diff > 0 else 'reduces'} model performance by {abs(acc_diff):.4f} on average</li>
+        """
+    
+    # 最佳特征选择参数
+    if len(top_df) > 0 and top_df.iloc[0]['feature_selection'] != 'none':
+        best_row = top_df.iloc[0]
+        html_report += f"""
+            <li><strong>Best Feature Selection Parameters:</strong>
+                <ul>
+                    <li>Method: {best_row['feature_selection']}</li>
+                    <li>Selection mode: {best_row['selection_mode']}</li>
+                    <li>Threshold/Max features: {best_row['selection_threshold'] if best_row['selection_mode'] == 'threshold' else best_row['max_features']}</li>
+                    <li>L1 ratio: {best_row['l1_ratio']}</li>
+                    <li>Feature reduction: from {int(best_row['original_features'])} to {int(best_row['selected_features'])} features ({best_row['selection_ratio']:.2f} ratio)</li>
+                </ul>
+            </li>
+        """
+    
+    html_report += """
+        </ul>
+    </body>
+    </html>
+    """
+    
+    # 保存HTML报告
+    with open(os.path.join(report_dir, "summary_report_with_fs.html"), 'w') as f:
+        f.write(html_report)
+    
+    self.logger.info(f"特征选择汇总报告已生成: {os.path.join(report_dir, 'summary_report_with_fs.html')}", 
+                   f"Feature selection summary report generated: {os.path.join(report_dir, 'summary_report_with_fs.html')}")

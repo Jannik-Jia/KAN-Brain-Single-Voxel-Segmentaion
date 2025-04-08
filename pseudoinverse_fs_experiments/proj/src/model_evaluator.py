@@ -344,3 +344,119 @@ class ModelEvaluator:
                 plt.close()
             else:
                 plt.show()
+
+def analyze_pca_components(self, results_by_components, save_dir=None, prefix=""):
+    """
+    分析不同PCA组件数量对性能的影响
+    
+    参数:
+        results_by_components: 包含不同组件数量实验结果的字典，格式为{组件数量: 结果字典}
+        save_dir: 图表保存目录
+        prefix: 文件名前缀
+    """
+    if not results_by_components:
+        self.logger.warning("没有PCA组件数据可供分析", "No PCA component data to analyze")
+        return
+    
+    if save_dir and not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # 提取不同组件数量和对应的准确率、F1分数等指标
+    components = []
+    train_acc = []
+    test_acc = []
+    val_acc = []
+    train_f1 = []
+    test_f1 = []
+    val_f1 = []
+    
+    # 按组件数量排序
+    sorted_components = sorted(results_by_components.keys())
+    
+    for n_comp in sorted_components:
+        result = results_by_components[n_comp]
+        components.append(n_comp)
+        train_acc.append(result['train']['accuracy'])
+        test_acc.append(result['test']['accuracy'])
+        val_acc.append(result['val']['accuracy'])
+        train_f1.append(result['train']['f1_macro'])
+        test_f1.append(result['test']['f1_macro'])
+        val_f1.append(result['val']['f1_macro'])
+    
+    # 1. 绘制准确率随组件数量变化的曲线
+    plt.figure(figsize=(12, 8))
+    plt.plot(components, train_acc, 'o-', label='Train Accuracy')
+    plt.plot(components, test_acc, 'o-', label='Test Accuracy')
+    plt.plot(components, val_acc, 'o-', label='Validation Accuracy')
+    plt.xlabel('Number of PCA Components')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy vs Number of PCA Components')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # 添加数据标签
+    for i, comp in enumerate(components):
+        plt.text(comp, train_acc[i], f"{train_acc[i]:.3f}", ha='center', va='bottom', fontsize=8)
+        plt.text(comp, test_acc[i], f"{test_acc[i]:.3f}", ha='center', va='bottom', fontsize=8)
+        plt.text(comp, val_acc[i], f"{val_acc[i]:.3f}", ha='center', va='bottom', fontsize=8)
+    
+    if save_dir:
+        plt.savefig(os.path.join(save_dir, f"{prefix}pca_components_accuracy.png"), dpi=300)
+        plt.close()
+    else:
+        plt.show()
+    
+    # 2. 绘制F1分数随组件数量变化的曲线
+    plt.figure(figsize=(12, 8))
+    plt.plot(components, train_f1, 'o-', label='Train F1-macro')
+    plt.plot(components, test_f1, 'o-', label='Test F1-macro')
+    plt.plot(components, val_f1, 'o-', label='Validation F1-macro')
+    plt.xlabel('Number of PCA Components')
+    plt.ylabel('F1 Score (Macro)')
+    plt.title('F1 Score vs Number of PCA Components')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # 添加数据标签
+    for i, comp in enumerate(components):
+        plt.text(comp, train_f1[i], f"{train_f1[i]:.3f}", ha='center', va='bottom', fontsize=8)
+        plt.text(comp, test_f1[i], f"{test_f1[i]:.3f}", ha='center', va='bottom', fontsize=8)
+        plt.text(comp, val_f1[i], f"{val_f1[i]:.3f}", ha='center', va='bottom', fontsize=8)
+    
+    if save_dir:
+        plt.savefig(os.path.join(save_dir, f"{prefix}pca_components_f1.png"), dpi=300)
+        plt.close()
+    else:
+        plt.show()
+    
+    # 3. 找出最佳组件数量
+    best_idx = np.argmax(test_acc)
+    best_comp = components[best_idx]
+    
+    # 4. 生成报告
+    report = f"""
+## PCA组件数量分析报告
+
+分析了{len(components)}种不同的PCA组件数量配置，范围从{min(components)}到{max(components)}。
+
+### 主要发现:
+- 最佳PCA组件数量: **{best_comp}**
+- 最佳测试集准确率: {test_acc[best_idx]:.4f}
+- 最佳测试集F1分数: {test_f1[best_idx]:.4f}
+
+### 详细性能对比:
+| PCA组件数 | 训练准确率 | 测试准确率 | 验证准确率 | 训练F1 | 测试F1 | 验证F1 |
+|-----------|------------|------------|------------|--------|--------|--------|
+"""
+    
+    for i, comp in enumerate(components):
+        report += f"| {comp} | {train_acc[i]:.4f} | {test_acc[i]:.4f} | {val_acc[i]:.4f} | {train_f1[i]:.4f} | {test_f1[i]:.4f} | {val_f1[i]:.4f} |\n"
+    
+    if save_dir:
+        with open(os.path.join(save_dir, f"{prefix}pca_components_report.md"), 'w') as f:
+            f.write(report)
+    
+    self.logger.info(f"PCA组件数量分析完成，最佳组件数: {best_comp}", 
+                   f"PCA component analysis completed, best component count: {best_comp}")
+    
+    return best_comp

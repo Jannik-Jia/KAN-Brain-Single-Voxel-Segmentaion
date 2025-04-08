@@ -30,6 +30,9 @@ else
     echo "仅使用CPU计算"
 fi
 
+# 确保Python模块路径正确
+export PYTHONPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )"/.. && pwd )"
+
 # 打印实验设置
 echo "实验设置：" 
 echo " - 专注于PCA的实验"
@@ -37,6 +40,10 @@ echo " - 最大实验数量: $MAX_EXPERIMENTS"
 echo " - 每个标签最大样本数: $MAX_SAMPLES_PER_LABEL"
 echo " - 特征选择模式: global"
 echo " - 结果保存目录: $EXPERIMENT_DIR"
+echo " - PYTHONPATH: $PYTHONPATH"
+
+# 创建结果目录
+mkdir -p "$EXPERIMENT_DIR"
 
 # 运行完整实验
 echo "启动完整实验，日志将保存到 $LOG_FILE"
