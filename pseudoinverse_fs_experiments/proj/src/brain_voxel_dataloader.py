@@ -138,19 +138,23 @@ class BrainVoxelDataLoader:
             f"Validation set: {val_len} samples"
         )
     
+
+    
     def preprocess_data(self, apply_pca=False, n_components=50,
-                       normalization='standard', class_balance=False,
-                       target_samples=1000, random_state=42):
+                   normalization='standard', class_balance=False,
+                   target_samples=1000, random_state=42,
+                   auto_pca_variance=0.95):  # 添加自动PCA方差参数
         """
         预处理数据
         
         参数:
             apply_pca: 是否应用PCA降维
-            n_components: PCA组件数量
+            n_components: PCA组件数量 (如果auto_pca_variance为None时使用)
             normalization: 标准化方法，'standard'或'minmax'或None
             class_balance: 是否进行类别平衡
             target_samples: 每个类别的目标样本数
             random_state: 随机种子
+            auto_pca_variance: 如果不为None，自动寻找解释这一比例方差所需的组件数量
         """
         processed_data = {}
         
@@ -164,12 +168,29 @@ class BrainVoxelDataLoader:
         val_y = self.val_labels.copy() if hasattr(self.val_labels, 'copy') else self.val_labels
         
         # 1. 应用PCA降维（要在CPU上进行）
-        if apply_pca and n_components > 0:
-            self.logger.info(f"应用PCA降维至{n_components}个组件",
-                            f"Applying PCA reduction to {n_components} components")
-            
+        if apply_pca:
             # 转换到CPU进行PCA处理
             train_X_cpu = ensure_numpy(train_X)
+            
+            # 自动寻找解释目标方差比例所需的组件数量
+            if auto_pca_variance is not None:
+                from sklearn.decomposition import PCA
+                
+                # 首先创建一个临时PCA对象用于分析方差解释率
+                temp_pca = PCA(n_components=min(train_X_cpu.shape[1], 300))  # 使用较大的组件数先拟合
+                temp_pca.fit(train_X_cpu)
+                
+                # 计算累积方差贡献率
+                cumulative_variance_ratio = np.cumsum(temp_pca.explained_variance_ratio_)
+                
+                # 找到第一个满足方差目标的组件数量
+                n_components = np.argmax(cumulative_variance_ratio >= auto_pca_variance) + 1
+                
+                self.logger.info(f"自动选择了 {n_components} 个PCA组件，可解释 {auto_pca_variance*100:.1f}% 的方差",
+                                f"Automatically selected {n_components} PCA components to explain {auto_pca_variance*100:.1f}% variance")
+            
+            self.logger.info(f"应用PCA降维至{n_components}个组件",
+                            f"Applying PCA reduction to {n_components} components")
             
             # 创建并拟合PCA模型
             self.pca_model = PCA(n_components=n_components, random_state=random_state)
@@ -232,7 +253,7 @@ class BrainVoxelDataLoader:
         # 3. 类别平衡（仅针对训练集）
         if class_balance:
             self.logger.info(f"应用类别平衡，目标每类{target_samples}个样本",
-                           f"Applying class balancing, target {target_samples} samples per class")
+                        f"Applying class balancing, target {target_samples} samples per class")
             
             # 转换到CPU进行类别平衡
             train_X_cpu = ensure_numpy(train_X)
@@ -295,7 +316,7 @@ class BrainVoxelDataLoader:
             train_y = to_gpu(train_y_cpu)
             
             self.logger.info(f"类别平衡后训练集大小: {len(train_y_cpu)}",
-                           f"Training set size after balancing: {len(train_y_cpu)}")
+                        f"Training set size after balancing: {len(train_y_cpu)}")
         
         # 保存处理后的数据
         processed_data['train_X'] = train_X
@@ -306,7 +327,9 @@ class BrainVoxelDataLoader:
         processed_data['val_y'] = val_y
         
         return processed_data
-    
+
+
+
     def preprocess_data_with_feature_selection(self, apply_pca=False, n_components=50,
                                               normalization='standard', class_balance=False,
                                               target_samples=1000, random_state=42,

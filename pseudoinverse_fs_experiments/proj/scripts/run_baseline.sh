@@ -3,7 +3,7 @@
 export PYTHONPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )"/.. && pwd )"
 
 # 设置日志文件
-LOG_FILE="baseline_experiment_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="baseline_pca_experiment_$(date +%Y%m%d_%H%M%S).log"
 
 # 设置数据目录 - 请根据实际路径修改
 TRAIN_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train"
@@ -11,7 +11,7 @@ TEST_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/r
 VAL_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
 
 # 设置结果保存目录
-EXPERIMENT_DIR="pseudoinverse_baseline_experiments"
+EXPERIMENT_DIR="pseudoinverse_pca_baseline_experiments"
 
 # GPU相关设置
 USE_GPU=true                # 是否使用GPU加速（true/false）
@@ -19,6 +19,8 @@ GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
 
 # 添加数据处理参数
 MAX_SAMPLES_PER_LABEL=500   # 每个标签最多使用的样本数
+APPLY_PCA=true              # 应用PCA降维
+AUTO_VARIANCE=0.95          # 自动选择解释95%方差的PCA组件数量
 
 # 构建GPU参数
 GPU_ARGS=""
@@ -31,7 +33,7 @@ fi
 
 # 打印实验设置
 echo "实验设置：" 
-echo " - 运行基准测试模式"
+echo " - 运行基准测试模式 (自动PCA组件数量)"
 echo " - 每个标签最大样本数: $MAX_SAMPLES_PER_LABEL"
 echo " - 特征选择模式: global" 
 echo " - 结果保存目录: $EXPERIMENT_DIR"
@@ -46,6 +48,8 @@ nohup python -m src.main \
     --fs_mode "global" \
     --run_baseline \
     --max_samples_per_label $MAX_SAMPLES_PER_LABEL \
+    --apply_pca $APPLY_PCA \
+    --auto_pca_variance $AUTO_VARIANCE \
     $GPU_ARGS \
     > "$LOG_FILE" 2>&1 &
 

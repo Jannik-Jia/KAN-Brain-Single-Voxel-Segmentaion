@@ -3,25 +3,25 @@
 import numpy as np
 
 def create_feature_selection_param_grid():
-    """创建包含特征选择参数的网格"""
+    """创建专注于PCA的参数网格"""
     
-    # 基本参数网格
+    # 基本参数网格 - 专注于PCA
     base_param_grid = {
-        'apply_pca': [True, False],
-        'n_components': [50, 100, 150, 200],
+        'apply_pca': [True],  # 只使用PCA
+        'n_components': [50, 80, 100, 150, 200, 250, 300],  # 更多PCA组件选项以找到最佳点
         'normalization': ['standard', 'minmax', None],
         'class_balance': [False, True],
         'regularization': [None, 'l2', 'truncated'],
         'alpha': [0.001, 0.01, 0.05, 0.1, 0.5, 1.0]
     }
     
-    # 特征选择参数网格
+    # 特征选择参数网格 - 不使用特征选择
     feature_selection_param_grid = {
-        'feature_selection': [None, 'lasso', 'elastic_net'],
-        'selection_mode': ['threshold', 'fixed'],
-        'selection_threshold': [0.001, 0.01, 0.05, 0.1, 0.2],
-        'max_features': [50, 100, 200, 500],
-        'l1_ratio': [0.3, 0.5, 0.8, 1.0],
+        'feature_selection': [None],  # 不使用特征选择
+        'selection_mode': ['threshold'],
+        'selection_threshold': [0.01],
+        'max_features': [100],
+        'l1_ratio': [1.0],
         'scaling_before_selection': [True],
         'selection_metric': ['coefficient']
     }
@@ -33,7 +33,7 @@ def create_feature_selection_param_grid():
 
 def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
     """
-    从参数网格中采样有效的参数组合，确保PCA和非PCA方法数量平衡
+    从参数网格中采样有效的参数组合
     
     参数:
         param_grid: 参数网格
@@ -77,10 +77,10 @@ def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
     param_combinations = []
     
     # 首先添加几个基准配置
-    # 1. 不使用特征选择的基准配置
+    # 1. PCA + 标准化，不使用特征选择，无正则化 (基础配置)
     baseline_config = {
-        'apply_pca': False,
-        'n_components': 50,
+        'apply_pca': True,
+        'n_components': 100,  # 较小的组件数
         'normalization': 'standard',
         'class_balance': False,
         'regularization': None,
@@ -95,39 +95,61 @@ def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
     }
     param_combinations.append(baseline_config)
     
-    # 2. 使用LASSO特征选择的基准配置，不使用PCA
-    lasso_config_no_pca = baseline_config.copy()
-    lasso_config_no_pca['feature_selection'] = 'lasso'
-    lasso_config_no_pca['apply_pca'] = False
-    param_combinations.append(lasso_config_no_pca)
+    # 2. PCA + 标准化 + L2正则化
+    pca_l2_config = baseline_config.copy()
+    pca_l2_config['regularization'] = 'l2'
+    pca_l2_config['alpha'] = 0.1
+    param_combinations.append(pca_l2_config)
     
-    # 3. 使用PCA的基准配置
-    pca_config = baseline_config.copy()
-    pca_config['apply_pca'] = True
-    param_combinations.append(pca_config)
+    # 3. PCA + 标准化 + 截断SVD正则化
+    pca_truncated_config = baseline_config.copy()
+    pca_truncated_config['regularization'] = 'truncated'
+    pca_truncated_config['alpha'] = 0.1
+    param_combinations.append(pca_truncated_config)
     
-    # 4. 使用LASSO特征选择和PCA的基准配置
-    lasso_pca_config = pca_config.copy()
-    lasso_pca_config['feature_selection'] = 'lasso'
-    param_combinations.append(lasso_pca_config)
+    # 4. PCA + 标准化 + 类别平衡
+    pca_balanced_config = baseline_config.copy()
+    pca_balanced_config['class_balance'] = True
+    param_combinations.append(pca_balanced_config)
     
-    # 5. 使用弹性网络特征选择的基准配置
-    elastic_net_config = baseline_config.copy()
-    elastic_net_config['feature_selection'] = 'elastic_net'
-    elastic_net_config['l1_ratio'] = 0.5
-    param_combinations.append(elastic_net_config)
+    # 5. PCA (更多组件) + 标准化
+    pca_more_comp_config = baseline_config.copy()
+    pca_more_comp_config['n_components'] = 200
+    param_combinations.append(pca_more_comp_config)
     
-    # 采样剩余的配置，确保PCA和非PCA样本数量平衡
-    # 将max_samples一半用于PCA，一半用于非PCA
-    pca_configs = []
-    no_pca_configs = []
-    target_each = (max_samples - len(param_combinations)) // 2
+    # 随机采样剩余配置
+    remaining_samples = max_samples - len(param_combinations)
     
-    # 避免选择无效组合
+    # 优先测试不同的PCA组件数量和正则化参数组合
+    n_components_options = param_grid['n_components']
+    regularization_options = param_grid['regularization']
+    alpha_options = param_grid['alpha']
+    normalization_options = param_grid['normalization']
+    class_balance_options = param_grid['class_balance']
+    
+    # 确保每个PCA组件数量至少有一些样本
+    for n_comp in n_components_options:
+        for reg in regularization_options:
+            # 为每个组件数和正则化方法组合创建至少一个配置
+            if len(param_combinations) < max_samples:
+                config = baseline_config.copy()
+                config['n_components'] = n_comp
+                config['regularization'] = reg
+                if reg is not None:  # 只有在使用正则化时才设置alpha
+                    config['alpha'] = np.random.choice(alpha_options)
+                
+                # 随机选择其他参数
+                config['normalization'] = np.random.choice(normalization_options)
+                config['class_balance'] = np.random.choice(class_balance_options)
+                
+                if config not in param_combinations:
+                    param_combinations.append(config)
+    
+    # 避免选择无效组合，随机填充剩余的配置
     attempts = 0
     max_attempts = total_combinations * 2  # 设置一个上限以避免无限循环
     
-    while (len(pca_configs) < target_each or len(no_pca_configs) < target_each) and attempts < max_attempts:
+    while len(param_combinations) < max_samples and attempts < max_attempts:
         attempts += 1
         config = {}
         
@@ -136,45 +158,9 @@ def sample_parameter_combinations(param_grid, max_samples=100, random_state=42):
             config[key] = np.random.choice(values)
         
         # 修正无效组合
-        # 1. 如果不使用特征选择，调整相关参数
-        if config['feature_selection'] is None:
-            config['selection_mode'] = 'threshold'  # 不影响实际行为
-            config['selection_threshold'] = 0.01
-            config['max_features'] = 100
-            config['l1_ratio'] = 1.0
-        
-        # 2. 如果使用的是LASSO，设置l1_ratio为1.0
-        if config['feature_selection'] == 'lasso':
-            config['l1_ratio'] = 1.0
-        
-        # 3. 如果不使用PCA，调整相关参数
-        if not config['apply_pca']:
-            config['n_components'] = 50  # 设为默认值，不影响
-        
-        # 4. 如果selection_mode是threshold，max_features不相关
-        if config['selection_mode'] == 'threshold':
-            config['max_features'] = 100  # 设为默认值
-        
-        # 5. 如果selection_mode是fixed，selection_threshold不相关
-        if config['selection_mode'] == 'fixed':
-            config['selection_threshold'] = 0.01  # 设为默认值
-        
-        # 检查是否已经存在相同配置
-        if config not in param_combinations and config not in pca_configs and config not in no_pca_configs:
-            # 根据是否使用PCA添加到相应列表
-            if config['apply_pca'] and len(pca_configs) < target_each:
-                pca_configs.append(config)
-            elif not config['apply_pca'] and len(no_pca_configs) < target_each:
-                no_pca_configs.append(config)
+        # 如果配置没有出现在之前的组合中，添加它
+        if config not in param_combinations:
+            param_combinations.append(config)
     
-    # 合并所有配置
-    param_combinations.extend(pca_configs)
-    param_combinations.extend(no_pca_configs)
-    
-    # 打印PCA和非PCA配置的数量
-    pca_count = sum(1 for config in param_combinations if config['apply_pca'])
-    no_pca_count = len(param_combinations) - pca_count
-    print(f"PCA配置数量: {pca_count}")
-    print(f"非PCA配置数量: {no_pca_count}")
-    
+    print(f"总共生成了 {len(param_combinations)} 个参数组合")
     return param_combinations

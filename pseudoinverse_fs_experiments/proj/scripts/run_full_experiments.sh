@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 设置日志文件
-LOG_FILE="full_experiments_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="full_experiments_pca_$(date +%Y%m%d_%H%M%S).log"
 
 # 设置数据目录 - 请根据实际路径修改
 TRAIN_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train"
@@ -9,9 +9,9 @@ TEST_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/r
 VAL_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
 
 # 设置结果保存目录
-EXPERIMENT_DIR="pseudoinverse_balanced_experiments"
+EXPERIMENT_DIR="pseudoinverse_pca_experiments"
 
-# 设置最大实验数量 - 增加到1000以确保PCA/非PCA各约500个
+# 设置最大实验数量
 MAX_EXPERIMENTS=1000
 
 # GPU相关设置
@@ -32,7 +32,8 @@ fi
 
 # 打印实验设置
 echo "实验设置：" 
-echo " - 最大实验数量: $MAX_EXPERIMENTS (PCA和非PCA各约500个)"
+echo " - 专注于PCA的实验"
+echo " - 最大实验数量: $MAX_EXPERIMENTS"
 echo " - 每个标签最大样本数: $MAX_SAMPLES_PER_LABEL"
 echo " - 特征选择模式: global"
 echo " - 结果保存目录: $EXPERIMENT_DIR"
