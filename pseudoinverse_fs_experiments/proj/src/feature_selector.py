@@ -1,3 +1,4 @@
+
 # src/feature_selector.py
 
 import numpy as np
@@ -31,29 +32,86 @@ else:
 
 from src.bilingual_logger import BilingualLogger
 
+# 在feature_selector.py中添加PyTorch实现
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+class TorchElasticNet:
+    """使用PyTorch实现的弹性网络"""
+    
+    def __init__(self, alpha=1.0, l1_ratio=0.5, max_iter=1000, tol=1e-4, random_state=None):
+        self.alpha = alpha
+        self.l1_ratio = l1_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.random_state = random_state
+        self.coef_ = None
+        self.intercept_ = None
+        
+    def fit(self, X, y):
+        # 设置随机种子
+        if self.random_state is not None:
+            torch.manual_seed(self.random_state)
+            
+        # 转换为PyTorch张量
+        X_tensor = torch.FloatTensor(X)
+        y_tensor = torch.FloatTensor(y).view(-1, 1)
+        
+        # 初始化权重和偏置
+        n_features = X.shape[1]
+        weights = nn.Parameter(torch.zeros(n_features, 1, requires_grad=True))
+        bias = nn.Parameter(torch.zeros(1, requires_grad=True))
+        
+        # 定义优化器
+        optimizer = optim.Adam([weights, bias], lr=0.01)
+        
+        # 训练模型
+        for epoch in range(self.max_iter):
+            optimizer.zero_grad()
+            
+            # 前向传播
+            y_pred = torch.matmul(X_tensor, weights) + bias
+            
+            # 计算MSE损失
+            mse_loss = torch.mean((y_pred - y_tensor) ** 2)
+            
+            # 添加正则化项
+            l1_penalty = self.alpha * self.l1_ratio * torch.sum(torch.abs(weights))
+            l2_penalty = self.alpha * (1 - self.l1_ratio) * torch.sum(weights ** 2)
+            
+            # 总损失
+            loss = mse_loss + l1_penalty + l2_penalty
+            
+            # 反向传播
+            loss.backward()
+            optimizer.step()
+            
+            # 检查收敛
+            if epoch > 0 and abs(prev_loss - loss.item()) < self.tol:
+                break
+                
+            prev_loss = loss.item()
+        
+        # 保存系数和截距
+        self.coef_ = weights.detach().numpy()
+        self.intercept_ = bias.detach().item()
+        
+        return self
+
+    def predict(self, X):
+        X_tensor = torch.FloatTensor(X)
+        return (torch.matmul(X_tensor, torch.FloatTensor(self.coef_)) + self.intercept_).numpy()
+
 
 class FeatureSelector:
     """使用LASSO或弹性网络进行特征选择的类，支持GPU加速"""
     
     def __init__(self, method='lasso', selection_mode='threshold', selection_threshold=0.01,
-                 max_features=100, l1_ratio=1.0, cv_folds=5, random_state=42,
-                 scaling_before_selection=True, selection_metric='coefficient',
-                 logger=None):
-        """
-        初始化特征选择器
-        
-        参数:
-            method: 特征选择方法，'lasso'或'elastic_net'
-            selection_mode: 特征选择模式，'threshold'（基于阈值）或'fixed'（固定数量）
-            selection_threshold: 特征选择阈值，用于'threshold'模式
-            max_features: 最大特征数量，用于'fixed'模式
-            l1_ratio: 弹性网络的L1比例（1.0为纯LASSO）
-            cv_folds: 交叉验证折数，用于评估特征选择稳定性
-            random_state: 随机种子
-            scaling_before_selection: 是否在特征选择前进行标准化
-            selection_metric: 特征重要性度量，'coefficient'或'importance'
-            logger: 日志记录器
-        """
+                max_features=100, l1_ratio=1.0, cv_folds=5, random_state=42,
+                scaling_before_selection=True, selection_metric='coefficient',
+                max_iter=1000, tol=1e-4, logger=None):
         self.method = method
         self.selection_mode = selection_mode
         self.selection_threshold = selection_threshold
@@ -63,6 +121,8 @@ class FeatureSelector:
         self.random_state = random_state
         self.scaling_before_selection = scaling_before_selection
         self.selection_metric = selection_metric
+        self.max_iter = max_iter  # 添加最大迭代次数参数
+        self.tol = tol  # 添加收敛阈值参数
         self.logger = logger if logger else BilingualLogger()
         self.selection_frequency = None
         self.jaccard_matrix = None
@@ -78,12 +138,12 @@ class FeatureSelector:
         
         gpu_status = "启用" if USE_GPU else "未启用"
         self.logger.info(f"特征选择器初始化: 方法={method}, 选择模式={selection_mode}, "
-                      f"阈值/最大特征数={selection_threshold if selection_mode=='threshold' else max_features}, "
-                      f"GPU加速: {gpu_status}",
-                      f"Feature selector initialized: method={method}, selection_mode={selection_mode}, "
-                      f"threshold/max_features={selection_threshold if selection_mode=='threshold' else max_features}, "
-                      f"GPU acceleration: {gpu_status}")
-    
+                    f"阈值/最大特征数={selection_threshold if selection_mode=='threshold' else max_features}, "
+                    f"最大迭代次数={max_iter}, 收敛阈值={tol}, GPU加速: {gpu_status}",
+                    f"Feature selector initialized: method={method}, selection_mode={selection_mode}, "
+                    f"threshold/max_features={selection_threshold if selection_mode=='threshold' else max_features}, "
+                    f"max_iter={max_iter}, tol={tol}, GPU acceleration: {gpu_status}")
+                    
     def fit(self, X, y, class_weight=None):
         """
         拟合特征选择模型并选择特征
@@ -110,8 +170,54 @@ class FeatureSelector:
             self.scaler = StandardScaler()
             X_cpu = self.scaler.fit_transform(X_cpu)
         
-        # 创建模型 - 修改这部分代码
-        if self.method == 'lasso':
+        # 创建模型 - 修改这部分使用PyTorch实现
+        if self.method == 'elastic_net_torch':
+            # 使用PyTorch实现的弹性网络
+            self.logger.info(f"使用PyTorch实现的弹性网络，l1_ratio={self.l1_ratio}, max_iter={self.max_iter}", 
+                        f"Using PyTorch implementation of ElasticNet, l1_ratio={self.l1_ratio}, max_iter={self.max_iter}")
+            
+            # 创建多分类模型
+            n_classes = len(np.unique(y_cpu))
+            
+            if n_classes > 2:
+                # 多分类问题 - 一对多方法
+                models = []
+                coefs = []
+                
+                for i in range(n_classes):
+                    # 创建二分类标签 (当前类别 vs 其他)
+                    binary_y = np.where(y_cpu == i, 1, 0)
+                    
+                    # 拟合模型
+                    model = TorchElasticNet(
+                        alpha=self.selection_threshold,
+                        l1_ratio=self.l1_ratio,
+                        max_iter=self.max_iter,
+                        tol=self.tol,
+                        random_state=self.random_state
+                    )
+                    model.fit(X_cpu, binary_y)
+                    models.append(model)
+                    coefs.append(model.coef_)
+                
+                # 合并系数
+                self.model = models
+                coefs = np.vstack([c.flatten() for c in coefs])
+                
+            else:
+                # 二分类问题
+                self.model = TorchElasticNet(
+                    alpha=self.selection_threshold,
+                    l1_ratio=self.l1_ratio,
+                    max_iter=self.max_iter,
+                    tol=self.tol,
+                    random_state=self.random_state
+                )
+                self.model.fit(X_cpu, y_cpu)
+                coefs = self.model.coef_
+        
+        # 保留原有的LASSO和elastic_net实现，但添加迭代次数和收敛参数
+        elif self.method == 'lasso':
             # 对于多分类问题，使用OneVsRestClassifier包装LogisticRegression
             if len(np.unique(y_cpu)) > 2:
                 # 根据是否使用GPU选择不同的实现
@@ -119,12 +225,13 @@ class FeatureSelector:
                     # cuML版本 - 使用qn solver
                     base_model = LogisticRegression(
                         penalty='l1', solver='qn', C=1.0/self.selection_threshold,
-                        random_state=self.random_state)
+                        random_state=self.random_state, max_iter=self.max_iter, tol=self.tol)
                 else:
                     # sklearn版本 - 使用liblinear solver
                     base_model = sklearn.linear_model.LogisticRegression(
                         penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
-                        random_state=self.random_state, class_weight=class_weight)
+                        random_state=self.random_state, class_weight=class_weight,
+                        max_iter=self.max_iter, tol=self.tol)
                     
                 self.model = OneVsRestClassifier(base_model)
             else:
@@ -133,65 +240,70 @@ class FeatureSelector:
                     # cuML版本
                     self.model = LogisticRegression(
                         penalty='l1', solver='qn', C=1.0/self.selection_threshold,
-                        random_state=self.random_state)
+                        random_state=self.random_state, max_iter=self.max_iter, tol=self.tol)
                 else:
                     # sklearn版本
                     self.model = sklearn.linear_model.LogisticRegression(
                         penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
-                        random_state=self.random_state, class_weight=class_weight)
+                        random_state=self.random_state, class_weight=class_weight,
+                        max_iter=self.max_iter, tol=self.tol)
         
         elif self.method == 'elastic_net':
             # 对于多分类问题
             if len(np.unique(y_cpu)) > 2:
                 if USE_GPU and has_cuda_ml():
-                    # cuML不支持ElasticNet的LogisticRegression，所以我们暂时使用L1
-                    base_model = LogisticRegression(
-                        penalty='l1', solver='qn', C=1.0/self.selection_threshold,
-                        random_state=self.random_state)
-                    self.logger.warning("cuML不支持ElasticNet, 使用L1代替", 
-                                    "ElasticNet not supported in cuML, using L1 instead")
+                    # cuML不支持ElasticNet的LogisticRegression，所以我们使用PyTorch实现
+                    self.logger.info("cuML不支持ElasticNet, 使用PyTorch实现", 
+                                "ElasticNet not supported in cuML, using PyTorch implementation")
+                    return self.fit(X, y, class_weight)  # 递归调用使用PyTorch实现
                 else:
                     # sklearn版本使用saga solver
                     base_model = sklearn.linear_model.LogisticRegression(
                         penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
                         l1_ratio=self.l1_ratio, random_state=self.random_state, 
-                        class_weight=class_weight)
+                        class_weight=class_weight, max_iter=self.max_iter, tol=self.tol)
                     
                 self.model = OneVsRestClassifier(base_model)
             else:
                 # 二分类问题
                 if USE_GPU and has_cuda_ml():
-                    # cuML不支持ElasticNet的LogisticRegression
-                    self.model = LogisticRegression(
-                        penalty='l1', solver='qn', C=1.0/self.selection_threshold,
-                        random_state=self.random_state)
-                    self.logger.warning("cuML不支持ElasticNet, 使用L1代替", 
-                                    "ElasticNet not supported in cuML, using L1 instead")
+                    # cuML不支持ElasticNet的LogisticRegression，使用PyTorch实现
+                    self.logger.info("cuML不支持ElasticNet, 使用PyTorch实现", 
+                                "ElasticNet not supported in cuML, using PyTorch implementation")
+                    return self.fit(X, y, class_weight)  # 递归调用使用PyTorch实现
                 else:
                     # sklearn版本
                     self.model = sklearn.linear_model.LogisticRegression(
                         penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
                         l1_ratio=self.l1_ratio, random_state=self.random_state,
-                        class_weight=class_weight)
+                        class_weight=class_weight, max_iter=self.max_iter, tol=self.tol)
         
         # 拟合模型
-        self.model.fit(X_cpu, y_cpu)
+        if self.method != 'elastic_net_torch':  # 非PyTorch实现才需要拟合
+            self.model.fit(X_cpu, y_cpu)
 
-        
         # 获取特征重要性
-        if hasattr(self.model, 'coef_'):
-            coefs = self.model.coef_
+        if self.method == 'elastic_net_torch':
+            if isinstance(self.model, list):
+                coefs = np.vstack([model.coef_.flatten() for model in self.model])
+                self.feature_importance = np.mean(np.abs(coefs), axis=0)
+            else:
+                self.feature_importance = np.abs(self.model.coef_).flatten()
         else:
-            # 对于OneVsRestClassifier，特征系数在estimators_中
-            coefs = np.vstack([est.coef_ for est in self.model.estimators_])
-        
-        # 计算特征重要性
-        if self.selection_metric == 'coefficient':
-            # 使用系数绝对值的平均值作为特征重要性
-            self.feature_importance = np.mean(np.abs(coefs), axis=0)
-        else:
-            # TODO: 实现其他特征重要性度量，如SHAP值
-            self.feature_importance = np.mean(np.abs(coefs), axis=0)
+            # 原始代码逻辑
+            if hasattr(self.model, 'coef_'):
+                coefs = self.model.coef_
+            else:
+                # 对于OneVsRestClassifier，特征系数在estimators_中
+                coefs = np.vstack([est.coef_ for est in self.model.estimators_])
+            
+            # 计算特征重要性
+            if self.selection_metric == 'coefficient':
+                # 使用系数绝对值的平均值作为特征重要性
+                self.feature_importance = np.mean(np.abs(coefs), axis=0)
+            else:
+                # 其他特征重要性度量
+                self.feature_importance = np.mean(np.abs(coefs), axis=0)
         
         # 选择特征
         if self.selection_mode == 'threshold':

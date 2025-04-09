@@ -514,8 +514,12 @@ class BrainVoxelDataLoader:
             target_samples=target_samples,
             random_state=random_state,
             auto_pca_variance=auto_pca_variance,
-            scaling_before_pca=scaling_before_pca
+            scaling_before_pca=scaling_before_pca,
+            max_iter=params.get('max_iter', 1000), 
+            tol=params.get('tol', 1e-4)  
         )
+
+        
         
         # 如果不需要特征选择，直接返回
         if feature_selection is None:

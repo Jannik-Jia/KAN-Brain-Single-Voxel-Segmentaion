@@ -58,12 +58,12 @@ class ExperimentManager:
 
     def run_batch_experiments(self, param_grid, max_experiments=None):
         """
-        运行批量实验
+        运行批量实验，优化过滤算法确保测试足够多的参数组合
         
         参数:
             param_grid: 参数网格或参数组合列表
             max_experiments: 最大实验数量，None表示不限制
-                
+                    
         返回:
             completed_experiments: 已完成实验的ID列表
         """
@@ -76,10 +76,41 @@ class ExperimentManager:
             if max_experiments and max_experiments < total_combinations:
                 self.logger.info(f"限制实验数量为 {max_experiments}/{total_combinations}", 
                             f"Limiting to {max_experiments}/{total_combinations} experiments")
-                # 随机选择max_experiments个组合
-                np.random.shuffle(param_combinations)
-                param_combinations = param_combinations[:max_experiments]
-                total_combinations = max_experiments
+                
+                # 更智能的过滤策略：确保重要参数组合被测试
+                # 对于迭代次数、特征选择阈值和正则化强度，确保每个值至少有一些试验
+                filtered_combinations = []
+                
+                # 关键参数
+                key_params = ['max_iter', 'selection_threshold', 'alpha', 'l1_ratio']
+                
+                # 从每个关键参数中提取不同的值
+                param_values = {}
+                for param in key_params:
+                    param_values[param] = set([comb.get(param) for comb in param_combinations if param in comb])
+                
+                # 确保每个关键参数的每个值都有至少一个实验
+                for param in key_params:
+                    if param in param_values and param_values[param]:
+                        for value in param_values[param]:
+                            # 找到一个使用此值的组合
+                            for comb in param_combinations:
+                                if param in comb and comb[param] == value:
+                                    if comb not in filtered_combinations:
+                                        filtered_combinations.append(comb)
+                                        break
+                
+                # 添加更多的随机组合，直到达到最大实验数
+                remaining = max_experiments - len(filtered_combinations)
+                if remaining > 0:
+                    # 排除已选择的组合
+                    remaining_combinations = [c for c in param_combinations if c not in filtered_combinations]
+                    # 随机选择剩余组合
+                    np.random.shuffle(remaining_combinations)
+                    filtered_combinations.extend(remaining_combinations[:remaining])
+                
+                param_combinations = filtered_combinations
+                total_combinations = len(param_combinations)
         else:
             # 如果是参数网格字典，则生成组合
             # 原有逻辑处理参数网格
@@ -607,7 +638,9 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             n_components=selection_params.get('n_components', 50),
             normalization=selection_params.get('normalization', 'standard'),
             class_balance=selection_params.get('class_balance', False),
-            target_samples=selection_params.get('target_samples', 1000)
+            target_samples=selection_params.get('target_samples', 1000),
+            max_iter=params.get('max_iter', 1000),  # 添加这行
+            tol=params.get('tol', 1e-4)  # 添加这行
         )
         
         # 创建特征选择器
@@ -784,6 +817,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 
             elif use_feature_selection and self.feature_selection_mode == 'per_experiment':
                 # 每次实验单独进行特征选择
+
                 processed_data = self.data_loader.preprocess_data_with_feature_selection(
                     apply_pca=params.get('apply_pca', False),
                     n_components=params.get('n_components', 50),
@@ -799,7 +833,9 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     l1_ratio=params.get('l1_ratio', 1.0),
                     cv_folds=params.get('cv_folds', 5),
                     scaling_before_selection=params.get('scaling_before_selection', True),
-                    selection_metric=params.get('selection_metric', 'coefficient')
+                    selection_metric=params.get('selection_metric', 'coefficient'),
+                    max_iter=params.get('max_iter', 1000),  # 添加这行
+                    tol=params.get('tol', 1e-4)  # 添加这行
                 )
                 
                 # 获取特征选择器并保存

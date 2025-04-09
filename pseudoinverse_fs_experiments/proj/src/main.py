@@ -12,6 +12,7 @@ from src.utils import sample_parameter_combinations, sample_parameter_combinatio
 from src.gpu_utils import init_gpu, has_cuda_ml  # 导入GPU初始化函数
 
 
+
 def setup_args():
     """设置命令行参数"""
     parser = argparse.ArgumentParser(description='伪逆线性模型特征选择实验')
@@ -49,6 +50,14 @@ def setup_args():
                         help='自动选择PCA组件数量以解释指定比例的方差 (0.0-1.0)')
     parser.add_argument('--scaling_before_pca', type=lambda x: (str(x).lower() == 'true'),
                         default=True, help='是否在PCA降维前进行标准化')
+    
+    # 添加特征选择参数
+    parser.add_argument('--max_iter', type=int, default=1000,
+                        help='特征选择算法最大迭代次数')
+    parser.add_argument('--tol', type=float, default=1e-4,
+                        help='特征选择算法收敛阈值')
+    parser.add_argument('--use_torch', action='store_true',
+                        help='使用PyTorch实现弹性网络')
     
     return parser.parse_args()
 

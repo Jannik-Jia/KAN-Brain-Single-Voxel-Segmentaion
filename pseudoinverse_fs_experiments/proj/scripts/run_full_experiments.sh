@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 实验类型设置
-EXPERIMENT_TYPE="pca"  # 可选："pca" 或 "fs"（特征选择）
+EXPERIMENT_TYPE="fs"  # 可选："pca" 或 "fs"（特征选择）
 
 # 设置日志文件
 LOG_FILE="full_experiments_${EXPERIMENT_TYPE}_$(date +%Y%m%d_%H%M%S).log"
