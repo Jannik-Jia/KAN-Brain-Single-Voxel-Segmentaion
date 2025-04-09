@@ -11,8 +11,6 @@ from src.bilingual_logger import BilingualLogger
 from src.utils import create_feature_selection_param_grid, sample_parameter_combinations
 from src.gpu_utils import init_gpu  # 导入GPU初始化函数
 
-
-
 def setup_args():
     """设置命令行参数"""
     parser = argparse.ArgumentParser(description='伪逆线性模型特征选择实验')
@@ -23,7 +21,7 @@ def setup_args():
     parser.add_argument('--val_dir', type=str, required=True, help='验证数据目录路径')
     
     # 实验设置
-    parser.add_argument('--exp_dir', type=str, default='pseudoinverse_with_fs_experiments', 
+    parser.add_argument('--exp_dir', type=str, default='pseudoinverse_experiments', 
                         help='实验结果保存目录')
     parser.add_argument('--fs_mode', type=str, default='global', choices=['global', 'per_experiment'],
                         help='特征选择模式: global(全局选择) 或 per_experiment(每次实验单独选择)')
@@ -31,6 +29,8 @@ def setup_args():
                         help='最大实验数量')
     parser.add_argument('--run_baseline', action='store_true', 
                         help='只运行基准实验')
+    parser.add_argument('--focus_on_fs', action='store_true',
+                        help='专注于直接特征选择实验（不使用PCA）')
     
     # GPU 设置
     parser.add_argument('--use_gpu', action='store_true', help='使用GPU加速计算')
@@ -50,6 +50,7 @@ def setup_args():
                         default=True, help='是否在PCA降维前进行标准化')
     
     return parser.parse_args()
+
 
 def run_baseline_experiments(experiment_manager, logger, args):
     """运行基准测试实验"""
@@ -175,21 +176,58 @@ def run_baseline_experiments(experiment_manager, logger, args):
         
         return False
 
-def run_full_experiments(experiment_manager, max_experiments, logger):
-    """运行完整实验集"""
-    # 创建参数网格
-    param_grid = create_feature_selection_param_grid()
+
+def run_full_experiments(experiment_manager, max_experiments, logger, use_feature_selection=False):
+    """
+    运行完整实验集，支持PCA或直接特征选择
     
-    logger.info(f"参数网格创建完成，包含 {len(param_grid)} 个参数", 
-               f"Parameter grid created with {len(param_grid)} parameters")
-    
-    # 从参数网格中采样合理的组合
-    param_combinations = sample_parameter_combinations(param_grid, max_samples=max_experiments)
+    参数:
+        experiment_manager: 实验管理器
+        max_experiments: 最大实验数量 
+        logger: 日志记录器
+        use_feature_selection: 是否使用直接特征选择（不使用PCA）
+    """
+    # 根据类型选择参数网格
+    if use_feature_selection:
+        logger.info("创建直接特征选择参数网格（不使用PCA）", 
+                   "Creating direct feature selection parameter grid (without PCA)")
+        param_grid = create_feature_selection_without_pca_param_grid()
+        
+        # 从参数网格中采样组合
+        param_combinations = sample_parameter_combinations_for_feature_selection(
+            param_grid, max_samples=max_experiments)
+    else:
+        logger.info("创建PCA参数网格", "Creating PCA parameter grid")
+        param_grid = create_feature_selection_param_grid()
+        
+        # 从参数网格中采样组合
+        param_combinations = sample_parameter_combinations(
+            param_grid, max_samples=max_experiments)
     
     logger.info(f"采样了 {len(param_combinations)} 个参数组合", 
                f"Sampled {len(param_combinations)} parameter combinations")
+    
+    # 预计算常用的数据变换
+    if hasattr(experiment_manager.data_loader, 'precompute_transformations'):
+        logger.info("预计算常用数据变换，减少重复计算", 
+                   "Precomputing common data transformations to reduce redundant computation")
+        
+        # 选择几个常用配置进行预计算
+        common_configs = [
+            # 基础PCA配置
+            {'apply_pca': True, 'n_components': 100, 'normalization': 'standard'},
+            {'apply_pca': True, 'n_components': 100, 'normalization': 'minmax'},
+            {'apply_pca': True, 'n_components': 100, 'normalization': None},
+            # 非PCA配置
+            {'apply_pca': False, 'normalization': 'standard'},
+            {'apply_pca': False, 'normalization': 'minmax'},
+            {'apply_pca': False, 'normalization': None},
+        ]
+        
+        # 预计算这些配置
+        experiment_manager.data_loader.precompute_transformations(common_configs)
                
-    # 批量运行实验 - 注意这里直接传递param_combinations列表而非param_grid
+    # 批量运行实验
     logger.info(f"开始批量实验，最大实验数: {len(param_combinations)}", 
                f"Starting batch experiments, max experiments: {len(param_combinations)}")
 
@@ -211,8 +249,7 @@ def run_full_experiments(experiment_manager, max_experiments, logger):
         traceback.print_exc()
         
         return False
-    
-    
+
 def main():
     """主函数"""
     # 解析命令行参数
@@ -225,13 +262,18 @@ def main():
     log_dir = os.path.join(args.exp_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger = BilingualLogger(
         log_dir=log_dir, 
-        log_name=f"experiment_pca_focus_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        log_name=f"experiment_{timestamp}.log"
     )
 
-    logger.info("开始伪逆线性模型实验（专注于PCA方法）", 
-               "Starting pseudo-inverse linear model experiments focusing on PCA")
+    if args.focus_on_fs:
+        logger.info("开始伪逆线性模型实验（专注于直接特征选择）", 
+                   "Starting pseudo-inverse linear model experiments focusing on direct feature selection")
+    else:
+        logger.info("开始伪逆线性模型实验（专注于PCA方法）", 
+                   "Starting pseudo-inverse linear model experiments focusing on PCA")
     
     # 初始化GPU支持
     if args.use_gpu:
@@ -265,6 +307,7 @@ def main():
             f"  特征选择模式：{args.fs_mode}\n"
             f"  最大实验数量：{args.max_experiments}\n"
             f"  使用GPU加速：{args.use_gpu}\n"
+            f"  直接特征选择：{args.focus_on_fs}\n"
             f"  自动PCA方差阈值：{args.auto_pca_variance if args.auto_pca_variance is not None else 'None'}", 
             
             f"Experiment parameters:\n"
@@ -275,6 +318,7 @@ def main():
             f"  Feature selection mode: {args.fs_mode}\n"
             f"  Maximum number of experiments: {args.max_experiments}\n"
             f"  Use GPU acceleration: {args.use_gpu}\n"
+            f"  Focus on feature selection: {args.focus_on_fs}\n"
             f"  Auto PCA variance threshold: {args.auto_pca_variance if args.auto_pca_variance is not None else 'None'}")
             
     # 创建数据加载器
@@ -301,7 +345,6 @@ def main():
     # 运行实验
     start_time = time.time()
     
-
     if args.run_baseline:
         # 只运行基准实验
         success = run_baseline_experiments(experiment_manager, logger, args)
@@ -311,7 +354,12 @@ def main():
         
         # 然后运行完整实验集
         if baseline_success:
-            success = run_full_experiments(experiment_manager, args.max_experiments, logger)
+            success = run_full_experiments(
+                experiment_manager, 
+                args.max_experiments, 
+                logger,
+                use_feature_selection=args.focus_on_fs  # 新参数决定实验类型
+            )
         else:
             logger.error("基准实验失败，跳过完整实验集", 
                          "Baseline experiments failed, skipping full experiment set")
@@ -332,5 +380,7 @@ def main():
     print(f"\n{'所有实验和分析已完成' if success else '实验过程中出现错误'}。请查看结果目录获取详细报告。")
     print(f"结果目录: {os.path.abspath(args.exp_dir)}")
 
+
 if __name__ == "__main__":
     main()
+

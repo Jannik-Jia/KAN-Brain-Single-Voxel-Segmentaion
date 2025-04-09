@@ -47,8 +47,10 @@ class BrainVoxelDataLoader:
                         f"Data loader initialized, GPU acceleration: {gpu_status}")
     
 
+
+
     def _load_data_from_dir(self, directory, desc="加载数据", max_samples_per_label=None):
-        """从指定目录加载数据，可限制每个标签的最大样本数"""
+        """从指定目录加载数据，可限制每个标签的最大样本数，修改以使用所有可用样本"""
         # 创建采样器
         sampler = BrainVoxelSampler(directory)
         valid_labels = sampler.valid_labels
@@ -61,6 +63,7 @@ class BrainVoxelDataLoader:
             file_path = sampler.get_file_path(label_id)
             if file_path:
                 samples = np.load(file_path)
+                actual_samples = len(samples)
                 
                 # 限制每个标签的样本数
                 if max_samples_per_label and len(samples) > max_samples_per_label:
@@ -68,6 +71,12 @@ class BrainVoxelDataLoader:
                     np.random.seed(42)  # 保持随机结果一致
                     indices = np.random.choice(len(samples), max_samples_per_label, replace=False)
                     samples = samples[indices]
+                    self.logger.info(f"标签{label_id}使用了{max_samples_per_label}/{actual_samples}个样本",
+                                f"Label {label_id} using {max_samples_per_label}/{actual_samples} samples")
+                else:
+                    if max_samples_per_label:
+                        self.logger.info(f"标签{label_id}所有样本都被使用：{actual_samples}个",
+                                    f"Label {label_id} using all available samples: {actual_samples}")
                 
                 labels = np.ones(len(samples)) * label_id
                 all_samples.append(samples)
@@ -87,7 +96,133 @@ class BrainVoxelDataLoader:
             # 返回空数组，也转换到GPU
             return to_gpu(np.array([])), to_gpu(np.array([]))
 
-    
+    def precompute_transformations(self, preprocess_configs):
+        """
+        预计算并缓存不同的数据变换，避免重复计算
+        
+        参数:
+            preprocess_configs: 预处理配置列表，每个配置是一个字典
+        
+        返回:
+            cached_data: 缓存的预处理数据字典
+        """
+        self.logger.info("开始预计算数据变换", "Starting precomputation of data transformations")
+        
+        # 创建缓存字典
+        self.cached_data = {}
+        
+        # 确保原始数据已加载
+        if self.train_samples is None:
+            self.logger.warning("原始数据未加载，正在加载数据", "Raw data not loaded, loading now")
+            self.load_all_data()
+        
+        # 为每种预处理配置计算变换
+        for config in preprocess_configs:
+            config_key = self._get_config_key(config)
+            self.logger.info(f"计算配置: {config_key}", f"Computing for config: {config_key}")
+            
+            # 使用原有的预处理函数，但结果存储在缓存中
+            if config.get('feature_selection') is None:
+                processed_data = self.preprocess_data(
+                    apply_pca=config.get('apply_pca', False),
+                    n_components=config.get('n_components', 50),
+                    normalization=config.get('normalization', 'standard'),
+                    class_balance=config.get('class_balance', False),
+                    target_samples=config.get('target_samples', 1000),
+                    auto_pca_variance=config.get('auto_pca_variance', None),
+                    scaling_before_pca=config.get('scaling_before_pca', True)
+                )
+            else:
+                processed_data = self.preprocess_data_with_feature_selection(
+                    apply_pca=config.get('apply_pca', False),
+                    n_components=config.get('n_components', 50),
+                    normalization=config.get('normalization', 'standard'),
+                    class_balance=config.get('class_balance', False),
+                    target_samples=config.get('target_samples', 1000),
+                    feature_selection=config.get('feature_selection'),
+                    selection_mode=config.get('selection_mode', 'threshold'),
+                    selection_threshold=config.get('selection_threshold', 0.01),
+                    max_features=config.get('max_features', 100),
+                    l1_ratio=config.get('l1_ratio', 1.0),
+                    scaling_before_selection=config.get('scaling_before_selection', True),
+                    selection_metric=config.get('selection_metric', 'coefficient'),
+                    auto_pca_variance=config.get('auto_pca_variance', None),
+                    scaling_before_pca=config.get('scaling_before_pca', True)
+                )
+            
+            # 存储到缓存
+            self.cached_data[config_key] = processed_data
+        
+        self.logger.info(f"预计算完成，缓存了 {len(self.cached_data)} 种变换", 
+                    f"Precomputation completed, cached {len(self.cached_data)} transformations")
+        
+        return self.cached_data
+
+    def _get_config_key(self, config):
+        """生成配置的唯一键"""
+        key_parts = []
+        # 添加关键配置参数到键
+        key_parts.append(f"pca={config.get('apply_pca', False)}")
+        
+        if config.get('apply_pca', False):
+            key_parts.append(f"comp={config.get('n_components', 0)}")
+        
+        key_parts.append(f"norm={config.get('normalization', 'none')}")
+        
+        if config.get('feature_selection') is not None:
+            key_parts.append(f"fs={config.get('feature_selection')}")
+        
+        return "_".join(key_parts)
+
+    def get_cached_data(self, config):
+        """获取缓存的预处理数据，如果没有则计算"""
+        config_key = self._get_config_key(config)
+        
+        if hasattr(self, 'cached_data') and config_key in self.cached_data:
+            self.logger.info(f"使用缓存的数据变换: {config_key}", f"Using cached transformation: {config_key}")
+            return self.cached_data[config_key]
+        
+        # 如果没有缓存，执行计算
+        self.logger.info(f"缓存未命中，计算数据变换: {config_key}", 
+                    f"Cache miss, computing transformation: {config_key}")
+        
+        if config.get('feature_selection') is None:
+            processed_data = self.preprocess_data(
+                apply_pca=config.get('apply_pca', False),
+                n_components=config.get('n_components', 50),
+                normalization=config.get('normalization', 'standard'),
+                class_balance=config.get('class_balance', False),
+                target_samples=config.get('target_samples', 1000),
+                auto_pca_variance=config.get('auto_pca_variance', None),
+                scaling_before_pca=config.get('scaling_before_pca', True)
+            )
+        else:
+            processed_data = self.preprocess_data_with_feature_selection(
+                apply_pca=config.get('apply_pca', False),
+                n_components=config.get('n_components', 50),
+                normalization=config.get('normalization', 'standard'),
+                class_balance=config.get('class_balance', False),
+                target_samples=config.get('target_samples', 1000),
+                feature_selection=config.get('feature_selection'),
+                selection_mode=config.get('selection_mode', 'threshold'),
+                selection_threshold=config.get('selection_threshold', 0.01),
+                max_features=config.get('max_features', 100),
+                l1_ratio=config.get('l1_ratio', 1.0),
+                scaling_before_selection=config.get('scaling_before_selection', True),
+                selection_metric=config.get('selection_metric', 'coefficient'),
+                auto_pca_variance=config.get('auto_pca_variance', None),
+                scaling_before_pca=config.get('scaling_before_pca', True)
+            )
+        
+        # 动态创建缓存字典
+        if not hasattr(self, 'cached_data'):
+            self.cached_data = {}
+        
+        # 存储到缓存
+        self.cached_data[config_key] = processed_data
+        
+        return processed_data
+
     
     # 修改 brain_voxel_dataloader.py 中的 load_all_data 方法
     def load_all_data(self, max_samples_per_label=None):

@@ -29,10 +29,10 @@ class PseudoInverseModel:
         gpu_status = "启用" if USE_GPU else "未启用"
         self.logger.info(f"初始化伪逆模型，类别数：{num_classes}，GPU加速：{gpu_status}", 
                        f"Initialized pseudo-inverse model with {num_classes} classes, GPU acceleration: {gpu_status}")
-    
+
     def fit(self, X, y, regularization=None, alpha=0.0):
         """
-        使用伪逆方法拟合线性模型
+        使用伪逆方法拟合线性模型，修复CuPy错误
         
         参数:
             X: 特征矩阵，形状为(n_samples, n_features)
@@ -57,7 +57,7 @@ class PseudoInverseModel:
         if regularization == 'l2':
             # Tikhonov正则化（L2）
             self.logger.info(f"应用L2正则化，alpha={alpha}", 
-                           f"Applying L2 regularization with alpha={alpha}")
+                        f"Applying L2 regularization with alpha={alpha}")
             n_features = X_bias.shape[1]
             identity = xp.eye(n_features)
             identity[-1, -1] = 0  # 不对偏置项正则化
@@ -70,18 +70,27 @@ class PseudoInverseModel:
         elif regularization == 'truncated':
             # 截断SVD伪逆
             self.logger.info(f"应用截断SVD伪逆，alpha={alpha}", 
-                           f"Applying truncated SVD with threshold={alpha}")
+                        f"Applying truncated SVD with threshold={alpha}")
             
-            # 使用SVD计算伪逆
-            U, s, Vh = xp.linalg.svd(X_bias, full_matrices=False)
-            
-            # 截断小于阈值的奇异值
-            s_threshold = alpha * xp.max(s)
-            s_inv = xp.array([1/si if si > s_threshold else 0 for si in s])
-            
-            # 计算伪逆
-            pinv_X = (Vh.T * s_inv) @ U.T
-            weights = pinv_X @ y_one_hot
+            # 使用SVD计算伪逆 - 修复CuPy错误
+            try:
+                U, s, Vh = xp.linalg.svd(X_bias, full_matrices=False)
+                
+                # 截断小于阈值的奇异值 - 修复隐式转换问题
+                s_threshold = alpha * float(xp.max(s))  # 确保是标量
+                
+                # 使用xp.where避免列表推导式和隐式转换
+                s_inv = xp.where(s > s_threshold, 1.0/s, 0.0)
+                
+                # 计算伪逆
+                pinv_X = (Vh.T * s_inv.reshape(-1, 1)) @ U.T
+                weights = pinv_X @ y_one_hot
+            except Exception as e:
+                self.logger.error(f"SVD计算错误: {str(e)}", f"SVD computation error: {str(e)}")
+                # 如果截断SVD失败，回退到标准伪逆
+                self.logger.info("回退到标准伪逆", "Falling back to standard pseudo-inverse")
+                pinv_X = xp.linalg.pinv(X_bias)
+                weights = pinv_X @ y_one_hot
         
         else:
             # 标准伪逆
@@ -99,7 +108,7 @@ class PseudoInverseModel:
         # 记录拟合时间
         elapsed_time = time.time() - start_time
         self.logger.info(f"伪逆模型拟合完成，耗时 {elapsed_time:.2f} 秒", 
-                       f"Pseudo-inverse model fitting completed in {elapsed_time:.2f} seconds")
+                    f"Pseudo-inverse model fitting completed in {elapsed_time:.2f} seconds")
         
 
         # 计算训练误差
@@ -110,11 +119,9 @@ class PseudoInverseModel:
         y_pred_cpu = ensure_numpy(y_pred)
         accuracy = accuracy_score(y_cpu, y_pred_cpu)
         self.logger.info(f"训练集准确率: {accuracy:.4f}", f"Training accuracy: {accuracy:.4f}")
-        self.logger.info(f"矩阵运算类型检查: X_bias 类型 = {type(X_bias)}", 
-               f"Matrix operation type check: X_bias type = {type(X_bias)}")
 
         return self
-    
+
     def predict(self, X):
         """
         使用拟合的模型进行预测

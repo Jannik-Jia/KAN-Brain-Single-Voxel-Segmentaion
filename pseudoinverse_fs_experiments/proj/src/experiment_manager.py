@@ -685,9 +685,10 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         return self.global_selector
     
 
+
     def run_experiment(self, params, force_rerun=False):
         """
-        运行单个实验，支持特征选择
+        运行单个实验，支持特征选择，使用缓存数据减少重复计算
         
         参数:
             params: 实验参数字典
@@ -734,17 +735,21 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             # 处理数据
             start_time = time.time()
             
-            # 提取新增参数，如果不存在则使用默认值
+            # 提取参数
             auto_pca_variance = params.get('auto_pca_variance', None)
             scaling_before_pca = params.get('scaling_before_pca', True)
             
-            if use_feature_selection and self.feature_selection_mode == 'global':
+            # 优先使用缓存的预处理数据
+            if hasattr(self.data_loader, 'get_cached_data'):
+                processed_data = self.data_loader.get_cached_data(params)
+                self.logger.info("使用缓存或按需计算的预处理数据", 
+                            "Using cached or on-demand computed preprocessed data")
+            elif use_feature_selection and self.feature_selection_mode == 'global':
                 # 全局特征选择模式
                 if self.global_selector is None:
-                    # 确保传递max_samples_per_label参数
+                    # 如果全局选择器尚未创建，则创建
                     selection_params = params.copy()
                     selection_params['max_samples_per_label'] = params.get('target_samples')
-                    # 如果全局选择器尚未创建，则创建
                     self.apply_global_feature_selection(selection_params)
                 
                 # 使用全局选择后的数据
@@ -766,8 +771,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 processed_data = self.data_loader.preprocess_data_with_feature_selection(
                     apply_pca=params.get('apply_pca', False),
                     n_components=params.get('n_components', 50),
-                    auto_pca_variance=auto_pca_variance,  # 新增参数
-                    scaling_before_pca=scaling_before_pca,  # 新增参数
+                    auto_pca_variance=auto_pca_variance,
+                    scaling_before_pca=scaling_before_pca,
                     normalization=params.get('normalization', None),
                     class_balance=params.get('class_balance', False),
                     target_samples=params.get('target_samples', 1000),
@@ -800,8 +805,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 processed_data = self.data_loader.preprocess_data(
                     apply_pca=params.get('apply_pca', False),
                     n_components=params.get('n_components', 50),
-                    auto_pca_variance=auto_pca_variance,  # 新增参数
-                    scaling_before_pca=scaling_before_pca,  # 新增参数
+                    auto_pca_variance=auto_pca_variance,
+                    scaling_before_pca=scaling_before_pca,
                     normalization=params.get('normalization', None),
                     class_balance=params.get('class_balance', False),
                     target_samples=params.get('target_samples', 1000),
@@ -814,12 +819,61 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             # 训练伪逆模型
             model = PseudoInverseModel(num_classes=102, logger=self.logger)
-            model.fit(
-                processed_data['train_X'], 
-                processed_data['train_y'],
-                regularization=params.get('regularization', None),
-                alpha=params.get('alpha', 0.0)
-            )
+            
+            try:
+                # 使用batch_operation在GPU上完成整个拟合过程
+                if 'batch_operation' in globals():
+                    from src.gpu_utils import batch_operation
+                    
+                    def fit_operation(X, y):
+                        model.fit(
+                            X, y,
+                            regularization=params.get('regularization', None),
+                            alpha=params.get('alpha', 0.0)
+                        )
+                        return model
+                    
+                    model = batch_operation(
+                        fit_operation,
+                        processed_data['train_X'],
+                        processed_data['train_y'],
+                        device='gpu'
+                    )
+                else:
+                    # 常规拟合
+                    model.fit(
+                        processed_data['train_X'], 
+                        processed_data['train_y'],
+                        regularization=params.get('regularization', None),
+                        alpha=params.get('alpha', 0.0)
+                    )
+            except Exception as e:
+                self.logger.error(f"模型拟合错误: {str(e)}，尝试CPU回退", 
+                                f"Model fitting error: {str(e)}, trying CPU fallback")
+                
+                # 将数据移到CPU，尝试在CPU上拟合
+                from src.gpu_utils import ensure_numpy
+                train_X_cpu = ensure_numpy(processed_data['train_X'])
+                train_y_cpu = ensure_numpy(processed_data['train_y'])
+                
+                # 初始化新模型，使用CPU模式
+                model = PseudoInverseModel(num_classes=102, logger=self.logger)
+                # 临时禁用GPU
+                from src.gpu_utils import USE_GPU
+                old_gpu_status = USE_GPU
+                import src.gpu_utils
+                src.gpu_utils.USE_GPU = False
+                
+                # 在CPU上拟合
+                model.fit(
+                    train_X_cpu, 
+                    train_y_cpu,
+                    regularization=params.get('regularization', None),
+                    alpha=params.get('alpha', 0.0)
+                )
+                
+                # 恢复GPU状态
+                src.gpu_utils.USE_GPU = old_gpu_status
             
             train_time = time.time() - start_time
             
@@ -913,6 +967,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 experiment_id, params, None, None, None, 0, 0, 0, 0, "failed")
             
             raise e
+    
 
 
     def _update_experiment_log_with_fs(self, experiment_id, params, train_result, test_result, 

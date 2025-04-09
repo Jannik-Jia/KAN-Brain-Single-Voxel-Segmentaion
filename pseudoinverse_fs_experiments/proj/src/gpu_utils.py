@@ -82,12 +82,17 @@ def get_array_module(x):
         return cp.get_array_module(x)
     return np
 
-def to_gpu(x):
+
+
+# 增强gpu_utils.py中的函数，减少传输次数，添加批处理支持
+
+def to_gpu(x, force_copy=False):
     """
-    将数组转移到GPU
+    将数组转移到GPU，添加缓存机制避免重复传输
     
     参数:
         x: 输入数组
+        force_copy: 是否强制复制数据
         
     返回:
         数组: GPU上的数组
@@ -95,15 +100,26 @@ def to_gpu(x):
     if USE_GPU:
         import cupy as cp
         if isinstance(x, np.ndarray):
-            return cp.asarray(x)
+            if hasattr(x, '_gpu_cached') and not force_copy:
+                return x._gpu_cached
+            gpu_array = cp.asarray(x)
+            # 尝试在原始数组上缓存GPU版本的引用
+            try:
+                x._gpu_cached = gpu_array
+            except:
+                pass
+            return gpu_array
+        elif isinstance(x, cp.ndarray):
+            return x.copy() if force_copy else x
     return x
 
-def to_cpu(x):
+def to_cpu(x, force_copy=False):
     """
-    将数组转移到CPU
+    将数组转移到CPU，添加缓存避免重复传输
     
     参数:
         x: 输入数组
+        force_copy: 是否强制复制数据
         
     返回:
         数组: CPU上的NumPy数组
@@ -111,12 +127,22 @@ def to_cpu(x):
     if USE_GPU:
         import cupy as cp
         if isinstance(x, cp.ndarray):
-            return cp.asnumpy(x)
+            if hasattr(x, '_cpu_cached') and not force_copy:
+                return x._cpu_cached
+            cpu_array = cp.asnumpy(x)
+            # 尝试在原始数组上缓存CPU版本的引用
+            try:
+                x._cpu_cached = cpu_array
+            except:
+                pass
+            return cpu_array
+        elif isinstance(x, np.ndarray):
+            return x.copy() if force_copy else x
     return x
 
 def ensure_numpy(x):
     """
-    确保输出是NumPy数组
+    确保输出是NumPy数组，修复隐式转换问题
     
     参数:
         x: 输入数组
@@ -124,4 +150,33 @@ def ensure_numpy(x):
     返回:
         numpy.ndarray: NumPy数组
     """
-    return to_cpu(x)
+    if USE_GPU:
+        import cupy as cp
+        if isinstance(x, cp.ndarray):
+            return cp.asnumpy(x)  # 使用显式转换
+    return to_cpu(x)  # 使用我们增强的to_cpu函数
+
+def batch_operation(operation, *args, device='gpu'):
+    """
+    在指定设备上批量执行操作，减少数据传输
+    
+    参数:
+        operation: 要执行的函数
+        args: 传递给operation的参数
+        device: 'gpu'或'cpu'，指定在哪个设备上执行
+        
+    返回:
+        操作结果
+    """
+    if device == 'gpu' and USE_GPU:
+        # 确保所有参数在GPU上
+        gpu_args = [to_gpu(arg) for arg in args]
+        # 在GPU上执行操作
+        result = operation(*gpu_args)
+        # 不立即转回CPU
+        return result
+    else:
+        # 确保所有参数在CPU上
+        cpu_args = [to_cpu(arg) for arg in args]
+        # 在CPU上执行操作
+        return operation(*cpu_args)
