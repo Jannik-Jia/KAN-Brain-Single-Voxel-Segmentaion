@@ -98,7 +98,7 @@ class FeatureSelector:
         """
         start_time = time.time()
         self.logger.info(f"开始特征选择, 输入特征维度: {X.shape[1]}", 
-                      f"Starting feature selection, input dimension: {X.shape[1]}")
+                    f"Starting feature selection, input dimension: {X.shape[1]}")
         
         # 将数据移到CPU，因为sklearn不支持GPU
         X_cpu = ensure_numpy(X)
@@ -110,39 +110,73 @@ class FeatureSelector:
             self.scaler = StandardScaler()
             X_cpu = self.scaler.fit_transform(X_cpu)
         
-        # 创建模型
+        # 创建模型 - 修改这部分代码
         if self.method == 'lasso':
             # 对于多分类问题，使用OneVsRestClassifier包装LogisticRegression
             if len(np.unique(y_cpu)) > 2:
-                base_model = LogisticRegression(
-                    penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
-                    random_state=self.random_state, class_weight=class_weight)
-                
+                # 根据是否使用GPU选择不同的实现
+                if USE_GPU and has_cuda_ml():
+                    # cuML版本 - 使用qn solver
+                    base_model = LogisticRegression(
+                        penalty='l1', solver='qn', C=1.0/self.selection_threshold,
+                        random_state=self.random_state)
+                else:
+                    # sklearn版本 - 使用liblinear solver
+                    base_model = sklearn.linear_model.LogisticRegression(
+                        penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
+                        random_state=self.random_state, class_weight=class_weight)
+                    
                 self.model = OneVsRestClassifier(base_model)
             else:
                 # 二分类问题
-                self.model = LogisticRegression(
-                    penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
-                    random_state=self.random_state, class_weight=class_weight)
+                if USE_GPU and has_cuda_ml():
+                    # cuML版本
+                    self.model = LogisticRegression(
+                        penalty='l1', solver='qn', C=1.0/self.selection_threshold,
+                        random_state=self.random_state)
+                else:
+                    # sklearn版本
+                    self.model = sklearn.linear_model.LogisticRegression(
+                        penalty='l1', solver='liblinear', C=1.0/self.selection_threshold,
+                        random_state=self.random_state, class_weight=class_weight)
         
         elif self.method == 'elastic_net':
             # 对于多分类问题
             if len(np.unique(y_cpu)) > 2:
-                base_model = LogisticRegression(
-                    penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
-                    l1_ratio=self.l1_ratio, random_state=self.random_state, 
-                    class_weight=class_weight)
-                
+                if USE_GPU and has_cuda_ml():
+                    # cuML不支持ElasticNet的LogisticRegression，所以我们暂时使用L1
+                    base_model = LogisticRegression(
+                        penalty='l1', solver='qn', C=1.0/self.selection_threshold,
+                        random_state=self.random_state)
+                    self.logger.warning("cuML不支持ElasticNet, 使用L1代替", 
+                                    "ElasticNet not supported in cuML, using L1 instead")
+                else:
+                    # sklearn版本使用saga solver
+                    base_model = sklearn.linear_model.LogisticRegression(
+                        penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
+                        l1_ratio=self.l1_ratio, random_state=self.random_state, 
+                        class_weight=class_weight)
+                    
                 self.model = OneVsRestClassifier(base_model)
             else:
                 # 二分类问题
-                self.model = LogisticRegression(
-                    penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
-                    l1_ratio=self.l1_ratio, random_state=self.random_state,
-                    class_weight=class_weight)
+                if USE_GPU and has_cuda_ml():
+                    # cuML不支持ElasticNet的LogisticRegression
+                    self.model = LogisticRegression(
+                        penalty='l1', solver='qn', C=1.0/self.selection_threshold,
+                        random_state=self.random_state)
+                    self.logger.warning("cuML不支持ElasticNet, 使用L1代替", 
+                                    "ElasticNet not supported in cuML, using L1 instead")
+                else:
+                    # sklearn版本
+                    self.model = sklearn.linear_model.LogisticRegression(
+                        penalty='elasticnet', solver='saga', C=1.0/self.selection_threshold,
+                        l1_ratio=self.l1_ratio, random_state=self.random_state,
+                        class_weight=class_weight)
         
         # 拟合模型
         self.model.fit(X_cpu, y_cpu)
+
         
         # 获取特征重要性
         if hasattr(self.model, 'coef_'):
