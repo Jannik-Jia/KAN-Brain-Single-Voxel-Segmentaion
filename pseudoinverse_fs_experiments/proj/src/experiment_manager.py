@@ -728,6 +728,10 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         self.logger.info(f"开始实验 {experiment_id}", f"Starting experiment {experiment_id}")
         self.logger.info(f"参数: {params}", f"Parameters: {params}")
         
+        # 初始化变量，确保在所有路径上都有值
+        original_dim = 0
+        selected_dim = 0
+
         try:
             # 判断是否使用特征选择
             use_feature_selection = params.get('feature_selection') is not None
@@ -755,6 +759,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     selector = processed_data.pop('feature_selector')
                     original_dim = selector.feature_importance.shape[0]
                     selected_dim = len(selector.selected_indices)
+
             elif use_feature_selection and self.feature_selection_mode == 'global':
                 # 全局特征选择模式
                 if self.global_selector is None:
@@ -798,18 +803,23 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 )
                 
                 # 获取特征选择器并保存
-                selector = processed_data.pop('feature_selector')
-                selector.save(os.path.join(experiment_dir, "feature_selector.pkl"))
-                
-                # 可视化特征选择结果
-                visualize_feature_selection(
-                    selector, 
-                    save_path=os.path.join(experiment_dir, "feature_selection_visualization.png")
-                )
-                
-                # 记录原始和选择后的特征维度
-                original_dim = selector.feature_importance.shape[0]
-                selected_dim = len(selector.selected_indices)
+                if 'feature_selector' in processed_data:
+                    selector = processed_data.pop('feature_selector')
+                    selector.save(os.path.join(experiment_dir, "feature_selector.pkl"))
+                    
+                    # 可视化特征选择结果
+                    visualize_feature_selection(
+                        selector, 
+                        save_path=os.path.join(experiment_dir, "feature_selection_visualization.png")
+                    )
+                    
+                    # 记录原始和选择后的特征维度
+                    original_dim = selector.feature_importance.shape[0]
+                    selected_dim = len(selector.selected_indices)
+                else:
+                    # 如果没有特征选择器，使用处理后数据的维度
+                    original_dim = processed_data['train_X'].shape[1]
+                    selected_dim = original_dim
                 
             else:
                 # 不使用特征选择，正常处理数据
