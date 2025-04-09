@@ -246,7 +246,7 @@ class ExperimentManager:
                 return int(obj)
             elif isinstance(obj, np.floating):
                 return float(obj)
-            elif isinstance(obj, np.bool_):
+            elif isinstance(obj, np.bool_):  # 特别处理np.bool_类型
                 return bool(obj)
             elif str(type(obj)).startswith("<class 'numpy"):  # 捕获其他NumPy类型
                 return obj.item() if hasattr(obj, 'item') else str(obj)
@@ -258,6 +258,8 @@ class ExperimentManager:
             # 转换NumPy类型为Python原生类型
             results_json = convert_numpy_types(results)
             json.dump(results_json, f, indent=4)
+
+
     
     def _load_results(self, experiment_dir):
         """加载保存的实验结果"""
@@ -717,7 +719,24 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         return self.global_selector
     
-
+    def _convert_params(self, params):
+        """将参数中的NumPy类型转换为Python原生类型"""
+        if isinstance(params, dict):
+            return {k: self._convert_params(v) for k, v in params.items()}
+        elif isinstance(params, list):
+            return [self._convert_params(item) for item in params]
+        elif isinstance(params, np.bool_):
+            return bool(params)
+        elif isinstance(params, np.integer):
+            return int(params)
+        elif isinstance(params, np.floating):
+            return float(params)
+        elif isinstance(params, np.ndarray):
+            return params.tolist()
+        elif str(type(params)).startswith("<class 'numpy"):
+            return params.item() if hasattr(params, 'item') else str(params)
+        else:
+            return params
 
     def run_experiment(self, params, force_rerun=False):
         """
@@ -751,7 +770,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         # 保存参数
         with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
-            json.dump(params, f, indent=4)
+            converted_params = self._convert_params(params)
+            json.dump(converted_params, f, indent=4)
         
         # 更新状态为运行中
         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
@@ -983,9 +1003,10 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             # 保存评估结果
             self._save_results(experiment_dir, results)
 
+
             # 更新状态为已完成
             with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-                json.dump({
+                status_data = {
                     "status": "completed", 
                     "start_time": str(datetime.now()),
                     "end_time": str(datetime.now()),
@@ -995,7 +1016,10 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     "selected_dim": selected_dim,
                     "pca_components": params.get('n_components') if params.get('apply_pca') else None,
                     "auto_pca_variance": auto_pca_variance
-                }, f, indent=4)
+                }
+                # 转换NumPy类型
+                converted_status = self._convert_params(status_data)
+                json.dump(converted_status, f, indent=4)
             
             # 更新实验日志
             self._update_experiment_log_with_fs(
@@ -1013,11 +1037,14 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             # 更新状态为失败
             with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-                json.dump({
+                error_data = {
                     "status": "failed",
                     "error": str(e),
                     "traceback": traceback.format_exc()
-                }, f, indent=4)
+                }
+                # 转换NumPy类型
+                converted_error = self._convert_params(error_data)
+                json.dump(converted_error, f, indent=4)
             
             # 更新实验日志
             self._update_experiment_log_with_fs(
