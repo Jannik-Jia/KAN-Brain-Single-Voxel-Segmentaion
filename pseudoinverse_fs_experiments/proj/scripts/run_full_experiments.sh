@@ -1,7 +1,10 @@
 #!/bin/bash
 
+# 实验类型设置
+EXPERIMENT_TYPE="pca"  # 可选："pca" 或 "fs"（特征选择）
+
 # 设置日志文件
-LOG_FILE="full_experiments_pca_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="full_experiments_${EXPERIMENT_TYPE}_$(date +%Y%m%d_%H%M%S).log"
 
 # 设置数据目录 - 请根据实际路径修改
 TRAIN_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train"
@@ -9,7 +12,7 @@ TEST_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/r
 VAL_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
 
 # 设置结果保存目录
-EXPERIMENT_DIR="pseudoinverse_pca_experiments"
+EXPERIMENT_DIR="pseudoinverse_${EXPERIMENT_TYPE}_experiments"
 
 # 设置最大实验数量
 MAX_EXPERIMENTS=1000
@@ -30,12 +33,21 @@ else
     echo "仅使用CPU计算"
 fi
 
+# 构建实验类型参数
+TYPE_ARGS=""
+if [ "$EXPERIMENT_TYPE" = "fs" ]; then
+    TYPE_ARGS="--focus_on_fs"
+    echo "专注于直接特征选择实验"
+else
+    echo "专注于PCA实验"
+fi
+
 # 确保Python模块路径正确
 export PYTHONPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )"/.. && pwd )"
 
 # 打印实验设置
 echo "实验设置：" 
-echo " - 专注于PCA的实验"
+echo " - 实验类型: ${EXPERIMENT_TYPE}"
 echo " - 最大实验数量: $MAX_EXPERIMENTS"
 echo " - 每个标签最大样本数: $MAX_SAMPLES_PER_LABEL"
 echo " - 特征选择模式: global"
@@ -56,6 +68,7 @@ nohup python -m src.main \
     --max_experiments $MAX_EXPERIMENTS \
     --max_samples_per_label $MAX_SAMPLES_PER_LABEL \
     $GPU_ARGS \
+    $TYPE_ARGS \
     > "$LOG_FILE" 2>&1 &
 
 # 记录进程ID
