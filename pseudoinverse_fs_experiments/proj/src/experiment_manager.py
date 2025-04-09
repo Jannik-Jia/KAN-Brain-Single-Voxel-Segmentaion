@@ -739,11 +739,22 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             auto_pca_variance = params.get('auto_pca_variance', None)
             scaling_before_pca = params.get('scaling_before_pca', True)
             
+
             # 优先使用缓存的预处理数据
             if hasattr(self.data_loader, 'get_cached_data'):
                 processed_data = self.data_loader.get_cached_data(params)
                 self.logger.info("使用缓存或按需计算的预处理数据", 
                             "Using cached or on-demand computed preprocessed data")
+                
+                # 设置特征维度信息
+                original_dim = processed_data['train_X'].shape[1]
+                selected_dim = original_dim
+                
+                # 如果有特征选择器，从中获取更准确的维度信息
+                if 'feature_selector' in processed_data:
+                    selector = processed_data.pop('feature_selector')
+                    original_dim = selector.feature_importance.shape[0]
+                    selected_dim = len(selector.selected_indices)
             elif use_feature_selection and self.feature_selection_mode == 'global':
                 # 全局特征选择模式
                 if self.global_selector is None:
