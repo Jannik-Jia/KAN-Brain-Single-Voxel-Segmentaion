@@ -4,12 +4,20 @@ import os
 import numpy as np
 import time
 from tqdm import tqdm
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+# 根据可用性选择合适的实现
+from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU, has_cuda_ml
+
+# 根据GPU可用性选择实现
+if USE_GPU and has_cuda_ml():
+    from cuml.decomposition import PCA
+    from cuml.preprocessing import StandardScaler, MinMaxScaler
+else:
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 from src.bilingual_logger import BilingualLogger
 from src.feature_selector import FeatureSelector
-from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU
 
 
 class BrainVoxelDataLoader:

@@ -5,14 +5,32 @@ import os
 import time
 import pickle
 import warnings
-from sklearn.linear_model import Lasso, ElasticNet, LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.multiclass import OneVsRestClassifier
+
+# 根据GPU可用性选择实现
+from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU, has_cuda_ml
+
+# 标准scikit-learn库
 from sklearn.metrics import jaccard_score
 from sklearn.model_selection import KFold
 
+# 根据GPU可用性选择线性模型实现
+if USE_GPU and has_cuda_ml():
+    from cuml.linear_model import LogisticRegression
+    # CuML还没有完全实现这些模型
+    from sklearn.linear_model import Lasso, ElasticNet
+    from sklearn.multiclass import OneVsRestClassifier
+else:
+    from sklearn.linear_model import Lasso, ElasticNet, LogisticRegression
+    from sklearn.multiclass import OneVsRestClassifier
+
+# 根据GPU可用性选择预处理实现
+if USE_GPU and has_cuda_ml():
+    from cuml.preprocessing import StandardScaler
+else:
+    from sklearn.preprocessing import StandardScaler
+
 from src.bilingual_logger import BilingualLogger
-from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU
+
 
 class FeatureSelector:
     """使用LASSO或弹性网络进行特征选择的类，支持GPU加速"""

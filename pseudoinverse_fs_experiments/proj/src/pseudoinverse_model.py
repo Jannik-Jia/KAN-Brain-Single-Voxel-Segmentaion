@@ -6,7 +6,7 @@ import pickle
 import warnings
 
 from src.bilingual_logger import BilingualLogger
-from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU
+from src.gpu_utils import xp, to_gpu, to_cpu, ensure_numpy, USE_GPU, batch_operation
 
 
 class PseudoInverseModel:

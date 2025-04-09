@@ -3,21 +3,33 @@
 import warnings
 import numpy as np
 
+# GPU加速基础库
+try:
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+
+# RAPIDS库 (GPU加速的ML)
+try:
+    import cuml
+    from cuml.decomposition import PCA as cuPCA
+    from cuml.preprocessing import StandardScaler as cuStandardScaler, MinMaxScaler as cuMinMaxScaler 
+    from cuml.linear_model import LogisticRegression as cuLogisticRegression
+    HAS_CUDA_ML = True
+except ImportError:
+    HAS_CUDA_ML = False
+
 # 全局变量，表示是否使用GPU
 USE_GPU = False
 xp = np
 
+def has_cuda_ml():
+    """检查是否可用CUDA ML库"""
+    return HAS_CUDA_ML
+
 def init_gpu(use_gpu=True, memory_fraction=0.8):
-    """
-    初始化GPU支持
-    
-    参数:
-        use_gpu: 是否使用GPU
-        memory_fraction: GPU内存使用比例上限
-        
-    返回:
-        bool: 是否成功启用GPU
-    """
+    """初始化GPU支持"""
     global USE_GPU, xp
     
     if not use_gpu:
@@ -26,31 +38,40 @@ def init_gpu(use_gpu=True, memory_fraction=0.8):
         xp = np
         return False
     
-    try:
-        import cupy as cp
+    if not CUPY_AVAILABLE:
+        print("未安装CuPy，切换到CPU模式")
+        print("要使用GPU加速，请安装CuPy: pip install cupy-cuda11x (根据CUDA版本选择)")
+        USE_GPU = False
+        xp = np
+        return False
         
+    try:
         # 检查CUDA是否可用
         if cp.cuda.is_available():
-            # 尝试设置内存池（不影响主要功能）
+            # 设置内存池
             try:
                 cp.cuda.set_allocator(cp.cuda.MemoryPool().malloc)
-                # 注意：较新版本的CuPy可能没有set_limit_ratio方法
-                # 我们尝试使用替代方法或跳过这一步
                 try:
                     cp.cuda.memory.set_limit_ratio(memory_fraction)
                     print(f"已设置GPU内存使用上限为{memory_fraction*100:.0f}%")
                 except AttributeError:
                     print(f"当前CuPy版本不支持set_limit_ratio方法，使用默认内存管理")
-                    # 可能的替代方法（取决于CuPy版本）
                     if hasattr(cp.cuda, 'setMemoryFraction'):
                         cp.cuda.setMemoryFraction(memory_fraction)
                         print(f"使用setMemoryFraction设置内存比例为{memory_fraction}")
             except Exception as e:
                 print(f"设置GPU内存管理时出错: {str(e)}，将使用默认内存管理")
                 
-            # 不管内存设置如何，我们仍然启用GPU
+            # 启用GPU
             device_name = cp.cuda.runtime.getDeviceProperties(0)['name']
             print(f"GPU初始化成功: {device_name}")
+            
+            # 如果有CUDA ML库，打印信息
+            if HAS_CUDA_ML:
+                print(f"RAPIDS cuML库可用，将用于ML加速")
+            else:
+                print(f"RAPIDS cuML库不可用，ML操作将使用CPU")
+                
             USE_GPU = True
             xp = cp
             return True
@@ -60,12 +81,12 @@ def init_gpu(use_gpu=True, memory_fraction=0.8):
             xp = np
             return False
             
-    except ImportError:
-        print("未安装CuPy，切换到CPU模式")
-        print("要使用GPU加速，请安装CuPy: pip install cupy-cuda11x (根据CUDA版本选择)")
+    except Exception as e:
+        print(f"GPU初始化错误: {str(e)}")
         USE_GPU = False
         xp = np
         return False
+
 
 def get_array_module(x):
     """

@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import f1_score
 
+from src.gpu_utils import ensure_numpy
+
+
 def visualize_feature_selection(selector, feature_names=None, save_path=None):
     """
     可视化特征选择结果
