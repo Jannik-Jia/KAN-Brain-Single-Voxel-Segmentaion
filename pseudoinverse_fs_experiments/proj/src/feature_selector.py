@@ -112,6 +112,7 @@ class FeatureSelector:
                 max_features=100, l1_ratio=1.0, cv_folds=5, random_state=42,
                 scaling_before_selection=True, selection_metric='coefficient',
                 max_iter=1000, tol=1e-4, logger=None):
+
         self.method = method
         self.selection_mode = selection_mode
         self.selection_threshold = selection_threshold

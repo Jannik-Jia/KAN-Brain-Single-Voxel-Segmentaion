@@ -655,6 +655,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             cv_folds=selection_params.get('cv_folds', 5),
             random_state=42,
             scaling_before_selection=selection_params.get('scaling_before_selection', True),
+            max_iter=selection_params.get('max_iter', 1000),  
+            tol=selection_params.get('tol', 1e-4),  
             selection_metric=selection_params.get('selection_metric', 'coefficient'),
             logger=self.logger
         )
