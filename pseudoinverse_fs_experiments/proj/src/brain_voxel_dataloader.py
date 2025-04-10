@@ -282,13 +282,14 @@ class BrainVoxelDataLoader:
         )
     
 
-    # 修改preprocess_data函数，优化标准化逻辑
-
     def preprocess_data(self, apply_pca=False, n_components=50,
-                    normalization='standard', class_balance=False,
-                    target_samples=1000, random_state=42,
-                    auto_pca_variance=0.95,
-                    scaling_before_pca=True):  # 新增参数控制PCA前是否标准化
+                normalization='standard', class_balance=False,
+                target_samples=1000, random_state=42,
+                auto_pca_variance=0.95,
+                scaling_before_pca=True,
+                max_iter=1000,  # 新增参数
+                tol=1e-4):  # 新增参数
+
         """
         预处理数据，优化版本避免重复标准化
         
@@ -301,6 +302,8 @@ class BrainVoxelDataLoader:
             random_state: 随机种子
             auto_pca_variance: 如果不为None，自动寻找解释这一比例方差所需的组件数量
             scaling_before_pca: 是否在PCA前进行标准化 (避免重复标准化)
+            max_iter: 特征选择算法的最大迭代次数
+            tol: 特征选择算法的收敛阈值
         """
         processed_data = {}
         
@@ -470,17 +473,18 @@ class BrainVoxelDataLoader:
         return processed_data
 
 
-
     def preprocess_data_with_feature_selection(self, apply_pca=False, n_components=50,
-                                            normalization='standard', class_balance=False,
-                                            target_samples=1000, random_state=42,
-                                            feature_selection=None, selection_mode='threshold',
-                                            selection_threshold=0.01, max_features=100,
-                                            l1_ratio=1.0, cv_folds=5,
-                                            scaling_before_selection=True,
-                                            selection_metric='coefficient',
-                                            auto_pca_variance=0.95,
-                                            scaling_before_pca=True):
+                                         normalization='standard', class_balance=False,
+                                         target_samples=1000, random_state=42,
+                                         feature_selection=None, selection_mode='threshold',
+                                         selection_threshold=0.01, max_features=100,
+                                         l1_ratio=1.0, cv_folds=5,
+                                         scaling_before_selection=True,
+                                         selection_metric='coefficient',
+                                         auto_pca_variance=0.95,
+                                         scaling_before_pca=True,
+                                         max_iter=1000,  # 添加这个参数
+                                         tol=1e-4):  # 添加这个参数
         """
         预处理数据，包括可选的特征选择，优化版本避免重复标准化
         
@@ -506,6 +510,7 @@ class BrainVoxelDataLoader:
             预处理后的数据字典
         """
         # 使用优化后的预处理方法，避免重复标准化
+
         processed_data = self.preprocess_data(
             apply_pca=apply_pca,
             n_components=n_components,
@@ -515,8 +520,8 @@ class BrainVoxelDataLoader:
             random_state=random_state,
             auto_pca_variance=auto_pca_variance,
             scaling_before_pca=scaling_before_pca,
-            max_iter=params.get('max_iter', 1000), 
-            tol=params.get('tol', 1e-4)  
+            max_iter=max_iter,  # 使用函数参数
+            tol=tol  # 使用函数参数
         )
 
         
