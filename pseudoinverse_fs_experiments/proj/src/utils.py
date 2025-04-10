@@ -181,7 +181,7 @@ def create_feature_selection_without_pca_param_grid():
     
     # 特征选择参数网格 - 使用多种算法，参数和迭代次数
     feature_selection_param_grid = {
-        'feature_selection': ['lasso', 'elastic_net', 'elastic_net_torch'],  # 添加PyTorch实现
+        'feature_selection': ['lasso', 'elastic_net_torch'],  # 添加PyTorch实现
         'selection_mode': ['threshold', 'fixed'],
         'selection_threshold': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1],  # 增加更多阈值
         'max_features': [50, 100, 150, 200, 250, 300, 341],  # 增加更多特征数选项
@@ -251,7 +251,7 @@ def sample_parameter_combinations_for_feature_selection(param_grid, max_samples=
     
     # 3. 弹性网络 + 标准化 + 阈值选择
     elastic_threshold_config = lasso_threshold_config.copy()
-    elastic_threshold_config['feature_selection'] = 'elastic_net'
+    elastic_threshold_config['feature_selection'] = 'elastic_net_torch'
     elastic_threshold_config['l1_ratio'] = 0.5
     param_combinations.append(elastic_threshold_config)
     
@@ -260,6 +260,8 @@ def sample_parameter_combinations_for_feature_selection(param_grid, max_samples=
     elastic_fixed_config['selection_mode'] = 'fixed'
     elastic_fixed_config['max_features'] = 100
     param_combinations.append(elastic_fixed_config)
+
+    
     
     # 5. LASSO + 不标准化
     lasso_no_norm_config = lasso_threshold_config.copy()
@@ -287,7 +289,7 @@ def sample_parameter_combinations_for_feature_selection(param_grid, max_samples=
                         
                         # 随机选择其他参数
                         config['normalization'] = np.random.choice(normalization_options)
-                        if method == 'elastic_net':
+                        if method == 'elastic_net_torch':
                             config['l1_ratio'] = np.random.choice(l1_ratios)
                         
                         if config not in param_combinations:
@@ -302,7 +304,7 @@ def sample_parameter_combinations_for_feature_selection(param_grid, max_samples=
                         
                         # 随机选择其他参数
                         config['normalization'] = np.random.choice(normalization_options)
-                        if method == 'elastic_net':
+                        if method == 'elastic_net_torch':
                             config['l1_ratio'] = np.random.choice(l1_ratios)
                         
                         if config not in param_combinations:

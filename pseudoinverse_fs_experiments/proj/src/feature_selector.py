@@ -254,9 +254,8 @@ class FeatureSelector:
             if len(np.unique(y_cpu)) > 2:
                 if USE_GPU and has_cuda_ml():
                     # cuML不支持ElasticNet的LogisticRegression，所以我们使用PyTorch实现
-                    self.logger.info("cuML不支持ElasticNet, 使用PyTorch实现", 
-                                "ElasticNet not supported in cuML, using PyTorch implementation")
-                    return self.fit(X, y, class_weight)  # 递归调用使用PyTorch实现
+                    
+                    self.method = 'elastic_net_torch'  # 修改方法名
                 else:
                     # sklearn版本使用saga solver
                     base_model = sklearn.linear_model.LogisticRegression(
