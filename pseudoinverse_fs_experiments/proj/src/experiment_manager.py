@@ -641,7 +641,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             normalization=selection_params.get('normalization', 'standard'),
             class_balance=selection_params.get('class_balance', False),
             target_samples=selection_params.get('target_samples', 1000),
-            max_iter=params.get('max_iter', 1000),  # 添加这行
+            max_iter=selection_params.get('max_iter', 1000),  # 添加这行
             tol=params.get('tol', 1e-4)  # 添加这行
         )
         
