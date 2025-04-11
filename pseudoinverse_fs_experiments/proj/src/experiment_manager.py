@@ -740,6 +740,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         else:
             return params
 
+
     def run_experiment(self, params, force_rerun=False):
         """
         运行单个实验，支持特征选择，使用缓存数据减少重复计算
@@ -772,8 +773,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         # 保存参数
         with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
-            converted_params = self._convert_params(params)
-            json.dump(converted_params, f, indent=4)
+            json.dump(params, f, indent=4)
         
         # 更新状态为运行中
         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
@@ -783,10 +783,6 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         self.logger.info(f"开始实验 {experiment_id}", f"Starting experiment {experiment_id}")
         self.logger.info(f"参数: {params}", f"Parameters: {params}")
         
-        # 初始化变量，确保在所有路径上都有值
-        original_dim = 0
-        selected_dim = 0
-
         try:
             # 判断是否使用特征选择
             use_feature_selection = params.get('feature_selection') is not None
@@ -797,6 +793,15 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             # 提取参数
             auto_pca_variance = params.get('auto_pca_variance', None)
             scaling_before_pca = params.get('scaling_before_pca', True)
+            skip_pca = params.get('skip_pca', False)  # 添加对skip_pca参数的处理
+            apply_pca = params.get('apply_pca', False)
+            
+            # 如果skip_pca为True，确保apply_pca为False
+            if skip_pca:
+                apply_pca = False
+                params['apply_pca'] = False
+                self.logger.info("检测到skip_pca=True，强制设置apply_pca=False", 
+                            "Detected skip_pca=True, forcing apply_pca=False")
             
 
             # 优先使用缓存的预处理数据
@@ -814,7 +819,6 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     selector = processed_data.pop('feature_selector')
                     original_dim = selector.feature_importance.shape[0]
                     selected_dim = len(selector.selected_indices)
-
             elif use_feature_selection and self.feature_selection_mode == 'global':
                 # 全局特征选择模式
                 if self.global_selector is None:
@@ -839,9 +843,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 
             elif use_feature_selection and self.feature_selection_mode == 'per_experiment':
                 # 每次实验单独进行特征选择
-
                 processed_data = self.data_loader.preprocess_data_with_feature_selection(
-                    apply_pca=params.get('apply_pca', False),
+                    apply_pca=apply_pca,
                     n_components=params.get('n_components', 50),
                     auto_pca_variance=auto_pca_variance,
                     scaling_before_pca=scaling_before_pca,
@@ -856,33 +859,27 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     cv_folds=params.get('cv_folds', 5),
                     scaling_before_selection=params.get('scaling_before_selection', True),
                     selection_metric=params.get('selection_metric', 'coefficient'),
-                    max_iter=params.get('max_iter', 1000),  # 添加这行
-                    tol=params.get('tol', 1e-4)  # 添加这行
+                    skip_pca=skip_pca  # 传递skip_pca参数
                 )
                 
                 # 获取特征选择器并保存
-                if 'feature_selector' in processed_data:
-                    selector = processed_data.pop('feature_selector')
-                    selector.save(os.path.join(experiment_dir, "feature_selector.pkl"))
-                    
-                    # 可视化特征选择结果
-                    visualize_feature_selection(
-                        selector, 
-                        save_path=os.path.join(experiment_dir, "feature_selection_visualization.png")
-                    )
-                    
-                    # 记录原始和选择后的特征维度
-                    original_dim = selector.feature_importance.shape[0]
-                    selected_dim = len(selector.selected_indices)
-                else:
-                    # 如果没有特征选择器，使用处理后数据的维度
-                    original_dim = processed_data['train_X'].shape[1]
-                    selected_dim = original_dim
+                selector = processed_data.pop('feature_selector')
+                selector.save(os.path.join(experiment_dir, "feature_selector.pkl"))
+                
+                # 可视化特征选择结果
+                visualize_feature_selection(
+                    selector, 
+                    save_path=os.path.join(experiment_dir, "feature_selection_visualization.png")
+                )
+                
+                # 记录原始和选择后的特征维度
+                original_dim = selector.feature_importance.shape[0]
+                selected_dim = len(selector.selected_indices)
                 
             else:
                 # 不使用特征选择，正常处理数据
                 processed_data = self.data_loader.preprocess_data(
-                    apply_pca=params.get('apply_pca', False),
+                    apply_pca=apply_pca,
                     n_components=params.get('n_components', 50),
                     auto_pca_variance=auto_pca_variance,
                     scaling_before_pca=scaling_before_pca,
@@ -999,16 +996,16 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 'original_dim': original_dim,
                 'selected_dim': selected_dim,
                 'pca_components': params.get('n_components') if params.get('apply_pca') else None,
-                'auto_pca_variance': auto_pca_variance
+                'auto_pca_variance': auto_pca_variance,
+                'skip_pca': skip_pca  # 记录是否跳过PCA
             }
 
             # 保存评估结果
             self._save_results(experiment_dir, results)
 
-
             # 更新状态为已完成
             with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-                status_data = {
+                json.dump({
                     "status": "completed", 
                     "start_time": str(datetime.now()),
                     "end_time": str(datetime.now()),
@@ -1017,11 +1014,9 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     "original_dim": original_dim,
                     "selected_dim": selected_dim,
                     "pca_components": params.get('n_components') if params.get('apply_pca') else None,
-                    "auto_pca_variance": auto_pca_variance
-                }
-                # 转换NumPy类型
-                converted_status = self._convert_params(status_data)
-                json.dump(converted_status, f, indent=4)
+                    "auto_pca_variance": auto_pca_variance,
+                    "skip_pca": skip_pca  # 记录是否跳过PCA
+                }, f, indent=4)
             
             # 更新实验日志
             self._update_experiment_log_with_fs(
@@ -1039,22 +1034,18 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             # 更新状态为失败
             with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
-                error_data = {
+                json.dump({
                     "status": "failed",
                     "error": str(e),
                     "traceback": traceback.format_exc()
-                }
-                # 转换NumPy类型
-                converted_error = self._convert_params(error_data)
-                json.dump(converted_error, f, indent=4)
+                }, f, indent=4)
             
             # 更新实验日志
             self._update_experiment_log_with_fs(
                 experiment_id, params, None, None, None, 0, 0, 0, 0, "failed")
             
             raise e
-    
-
+        
 
     def _update_experiment_log_with_fs(self, experiment_id, params, train_result, test_result, 
                                     val_result, original_dim, selected_dim, train_time, 
@@ -1096,7 +1087,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         # 追加到日志文件
         with open(self.experiment_log_path, 'a') as f:
             f.write(log_entry)
-    
+
     def generate_summary_report_with_fs(self, top_n=10):
         """
         生成包含特征选择信息的汇总报告
@@ -1358,7 +1349,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 </div>
             """
         
-        # 5. PCA相关的可视化（如果有的话）
+        # 5. PCA相关的可视化
+        pca_components_impact_png = "pca_components_impact.png"
         if 'n_components' in log_df.columns and log_df['apply_pca'].any():
             plt.figure(figsize=(10, 6))
             sns.boxplot(x='n_components', y='test_accuracy', data=log_df[log_df['apply_pca']==True])
@@ -1367,13 +1359,13 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             plt.ylabel('Test Accuracy')
             plt.grid(True, axis='y', linestyle='--', alpha=0.7)
             plt.tight_layout()
-            pca_components_impact_path = os.path.join(report_dir, "pca_components_impact.png")
+            pca_components_impact_path = os.path.join(report_dir, pca_components_impact_png)
             plt.savefig(pca_components_impact_path, dpi=300)
             plt.close()
             
             html_report += f"""
                 <div class="chart">
-                    <img src="{os.path.relpath(pca_components_impact_path, self.base_dir)}" alt="PCA Components Impact" width="100%">
+                    <img src="{pca_components_impact_png}" alt="PCA Components Impact" width="100%">
                 </div>
             """
         
@@ -1388,29 +1380,42 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             best_exp_id = top_df.iloc[0]['experiment_id']
             best_exp_dir = os.path.join(self.base_dir, best_exp_id)
             
-            # 复制最佳实验的图表到报告目录
-            important_images = [
-                'feature_selection_visualization.png',
-                'feature_importance.png',
-                'weight_distribution.png', 
-                'performance_comparison.png', 
-                'confusion_matrix_test.png'
-            ]
+            # 创建一个字典用于保存最佳实验的图片文件信息
+            best_images = {
+                'feature_selection_visualization.png': 'Feature Selection Visualization',
+                'feature_importance.png': 'Feature Importance',
+                'weight_distribution.png': 'Weight Distribution', 
+                'performance_comparison.png': 'Performance Comparison', 
+                'confusion_matrix_test.png': 'Confusion Matrix (Test)'
+            }
             
-            for img_file in important_images:
-                img_path = os.path.join(best_exp_dir, img_file)
-                if os.path.exists(img_path):
-                    dest_path = os.path.join(report_dir, f"best_{img_file}")
-                    import shutil
-                    shutil.copy(img_path, dest_path)
+            # 处理最佳实验的图片
+            for img_file, img_title in best_images.items():
+                src_path = os.path.join(best_exp_dir, img_file)
+                if os.path.exists(src_path):
+                    # 使用一致的命名约定
+                    dest_filename = f"best_{img_file}"
+                    dest_path = os.path.join(report_dir, dest_filename)
                     
-                    img_title = img_file.replace('_', ' ').replace('.png', '').title()
-                    html_report += f"""
-                        <div class="chart">
-                            <h3>{img_title}</h3>
-                            <img src="{os.path.relpath(dest_path, self.base_dir)}" alt="{img_file}" width="100%">
-                        </div>
-                    """
+                    # 复制文件
+                    import shutil
+                    shutil.copy(src_path, dest_path)
+                    
+                    # 验证复制成功
+                    if os.path.exists(dest_path):
+                        # 使用直接的文件名而不是相对路径
+                        html_report += f"""
+                            <div class="chart">
+                                <h3>{img_title}</h3>
+                                <img src="{dest_filename}" alt="{img_title}" width="100%">
+                            </div>
+                        """
+                    else:
+                        self.logger.warning(f"无法复制最佳实验图片: {img_file}", 
+                                    f"Failed to copy best experiment image: {img_file}")
+                else:
+                    self.logger.info(f"最佳实验中不存在图片: {img_file}", 
+                                f"Image does not exist in best experiment: {img_file}")
         
         html_report += """
             <h2>Conclusion and Recommendations</h2>
@@ -1463,13 +1468,41 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         html_report += """
             </ul>
+            
+            <div style="margin-top: 30px; text-align: center; font-size: 0.8em; color: #666;">
+                <p>Generated using ExperimentManagerWithFeatureSelection</p>
+            </div>
         </body>
         </html>
         """
         
         # 保存HTML报告
-        with open(os.path.join(report_dir, "summary_report_with_fs.html"), 'w') as f:
+        html_report_path = os.path.join(report_dir, "summary_report_with_fs.html")
+        with open(html_report_path, 'w') as f:
             f.write(html_report)
         
-        self.logger.info(f"特征选择汇总报告已生成: {os.path.join(report_dir, 'summary_report_with_fs.html')}", 
-                    f"Feature selection summary report generated: {os.path.join(report_dir, 'summary_report_with_fs.html')}")
+        self.logger.info(f"特征选择汇总报告已生成: {html_report_path}", 
+                    f"Feature selection summary report generated: {html_report_path}")
+        
+        # 验证所有引用的图片是否存在
+        referenced_images = [
+            "pca_pca_components_accuracy.png",
+            "pca_pca_components_f1.png", 
+            fs_impact_png,
+            ratio_impact_png, 
+            l1_impact_png,
+            fs_comparison_png,
+            pca_components_impact_png
+        ]
+        
+        for img in referenced_images:
+            img_path = os.path.join(report_dir, img)
+            if not os.path.exists(img_path):
+                self.logger.warning(f"报告引用的图片不存在: {img}", f"Image referenced in report does not exist: {img}")
+
+        # 检查最佳实验图片
+        for img_file in best_images.keys():
+            best_img = f"best_{img_file}"
+            best_img_path = os.path.join(report_dir, best_img)
+            if not os.path.exists(best_img_path):
+                self.logger.warning(f"最佳实验图片不存在: {best_img}", f"Best experiment image does not exist: {best_img}")

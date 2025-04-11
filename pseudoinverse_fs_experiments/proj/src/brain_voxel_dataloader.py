@@ -474,17 +474,16 @@ class BrainVoxelDataLoader:
 
 
     def preprocess_data_with_feature_selection(self, apply_pca=False, n_components=50,
-                                         normalization='standard', class_balance=False,
-                                         target_samples=1000, random_state=42,
-                                         feature_selection=None, selection_mode='threshold',
-                                         selection_threshold=0.01, max_features=100,
-                                         l1_ratio=1.0, cv_folds=5,
-                                         scaling_before_selection=True,
-                                         selection_metric='coefficient',
-                                         auto_pca_variance=0.95,
-                                         scaling_before_pca=True,
-                                         max_iter=1000,  # 添加这个参数
-                                         tol=1e-4):  # 添加这个参数
+                                            normalization='standard', class_balance=False,
+                                            target_samples=1000, random_state=42,
+                                            feature_selection='lasso', selection_mode='threshold',
+                                            selection_threshold=0.01, max_features=100,
+                                            l1_ratio=1.0, cv_folds=5,
+                                            scaling_before_selection=True,
+                                            selection_metric='coefficient',
+                                            auto_pca_variance=0.95,
+                                            scaling_before_pca=True,
+                                            skip_pca=False):  # 新增参数，是否完全跳过PCA
         """
         预处理数据，包括可选的特征选择，优化版本避免重复标准化
         
@@ -495,7 +494,7 @@ class BrainVoxelDataLoader:
             class_balance: 是否进行类别平衡
             target_samples: 每个类别的目标样本数
             random_state: 随机种子
-            feature_selection: 特征选择方法，None, 'lasso'或'elastic_net'
+            feature_selection: 特征选择方法，'lasso'或'elastic_net'
             selection_mode: 特征选择模式，'threshold'或'fixed'
             selection_threshold: 特征选择阈值
             max_features: 最大特征数量
@@ -505,12 +504,18 @@ class BrainVoxelDataLoader:
             selection_metric: 特征重要性度量
             auto_pca_variance: 自动PCA方差比例
             scaling_before_pca: 是否在PCA前标准化
+            skip_pca: 是否完全跳过PCA，即在特征选择前不进行PCA降维，直接对原始特征进行选择
             
         返回:
             预处理后的数据字典
         """
-        # 使用优化后的预处理方法，避免重复标准化
+        # 如果skip_pca为True，强制将apply_pca设为False
+        if skip_pca:
+            apply_pca = False
+            self.logger.info("完全跳过PCA，直接在原始特征上进行选择", 
+                        "Completely skipping PCA, performing selection on original features")
 
+        # 使用优化后的预处理方法，避免重复标准化
         processed_data = self.preprocess_data(
             apply_pca=apply_pca,
             n_components=n_components,
@@ -519,12 +524,8 @@ class BrainVoxelDataLoader:
             target_samples=target_samples,
             random_state=random_state,
             auto_pca_variance=auto_pca_variance,
-            scaling_before_pca=scaling_before_pca,
-            max_iter=max_iter,  # 使用函数参数
-            tol=tol  # 使用函数参数
+            scaling_before_pca=scaling_before_pca
         )
-
-        
         
         # 如果不需要特征选择，直接返回
         if feature_selection is None:
@@ -569,6 +570,7 @@ class BrainVoxelDataLoader:
                     f"Feature selection completed, selected {len(selected_indices)} features")
         
         return processed_data
+
 
 class BrainVoxelSampler:
     """脑体素数据采样器，提供多种采样策略"""

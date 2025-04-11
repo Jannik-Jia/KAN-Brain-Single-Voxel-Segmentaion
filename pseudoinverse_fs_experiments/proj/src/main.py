@@ -12,7 +12,6 @@ from src.utils import sample_parameter_combinations, sample_parameter_combinatio
 from src.gpu_utils import init_gpu, has_cuda_ml  # 导入GPU初始化函数
 
 
-
 def setup_args():
     """设置命令行参数"""
     parser = argparse.ArgumentParser(description='伪逆线性模型特征选择实验')
@@ -34,6 +33,10 @@ def setup_args():
     parser.add_argument('--focus_on_fs', action='store_true',
                         help='专注于直接特征选择实验（不使用PCA）')
     
+    # 新增参数：特征选择时是否完全跳过PCA
+    parser.add_argument('--skip_pca', action='store_true', 
+                        help='特征选择时完全跳过PCA，直接在原始特征上进行选择')
+    
     # GPU 设置
     parser.add_argument('--use_gpu', action='store_true', help='使用GPU加速计算')
     parser.add_argument('--gpu_memory_fraction', type=float, default=0.8, 
@@ -50,14 +53,6 @@ def setup_args():
                         help='自动选择PCA组件数量以解释指定比例的方差 (0.0-1.0)')
     parser.add_argument('--scaling_before_pca', type=lambda x: (str(x).lower() == 'true'),
                         default=True, help='是否在PCA降维前进行标准化')
-    
-    # 添加特征选择参数
-    parser.add_argument('--max_iter', type=int, default=1000,
-                        help='特征选择算法最大迭代次数')
-    parser.add_argument('--tol', type=float, default=1e-4,
-                        help='特征选择算法收敛阈值')
-    parser.add_argument('--use_torch', action='store_true',
-                        help='使用PyTorch实现弹性网络')
     
     return parser.parse_args()
 
@@ -187,7 +182,7 @@ def run_baseline_experiments(experiment_manager, logger, args):
         return False
 
 
-def run_full_experiments(experiment_manager, max_experiments, logger, use_feature_selection=False):
+def run_full_experiments(experiment_manager, max_experiments, logger, use_feature_selection=False, skip_pca=False):
     """
     运行完整实验集，支持PCA或直接特征选择
     
@@ -196,12 +191,17 @@ def run_full_experiments(experiment_manager, max_experiments, logger, use_featur
         max_experiments: 最大实验数量 
         logger: 日志记录器
         use_feature_selection: 是否使用直接特征选择（不使用PCA）
+        skip_pca: 特征选择时是否完全跳过PCA
     """
     # 根据类型选择参数网格
     if use_feature_selection:
         logger.info("创建直接特征选择参数网格（不使用PCA）", 
                    "Creating direct feature selection parameter grid (without PCA)")
         param_grid = create_feature_selection_without_pca_param_grid()
+        
+        # 添加对skip_pca的记录
+        logger.info(f"特征选择时{'完全跳过PCA' if skip_pca else '可能使用PCA'}", 
+                   f"{'Completely skipping PCA' if skip_pca else 'May use PCA'} during feature selection")
         
         # 从参数网格中采样组合
         param_combinations = sample_parameter_combinations_for_feature_selection(
@@ -223,16 +223,29 @@ def run_full_experiments(experiment_manager, max_experiments, logger, use_featur
                    "Precomputing common data transformations to reduce redundant computation")
         
         # 选择几个常用配置进行预计算
-        common_configs = [
+        common_configs = []
+        
+        # 根据是否跳过PCA添加不同的预计算配置
+        if use_feature_selection and skip_pca:
+            # 跳过PCA的特征选择配置
+            common_configs.extend([
+                {'apply_pca': False, 'skip_pca': True, 'normalization': 'standard'},
+                {'apply_pca': False, 'skip_pca': True, 'normalization': 'minmax'},
+                {'apply_pca': False, 'skip_pca': True, 'normalization': None}
+            ])
+            logger.info("预计算直接特征选择（跳过PCA）的常用配置", 
+                      "Precomputing common configurations for direct feature selection (skipping PCA)")
+        else:
             # 基础PCA配置
-            {'apply_pca': True, 'n_components': 100, 'normalization': 'standard'},
-            {'apply_pca': True, 'n_components': 100, 'normalization': 'minmax'},
-            {'apply_pca': True, 'n_components': 100, 'normalization': None},
-            # 非PCA配置
-            {'apply_pca': False, 'normalization': 'standard'},
-            {'apply_pca': False, 'normalization': 'minmax'},
-            {'apply_pca': False, 'normalization': None},
-        ]
+            common_configs.extend([
+                {'apply_pca': True, 'n_components': 100, 'normalization': 'standard'},
+                {'apply_pca': True, 'n_components': 100, 'normalization': 'minmax'},
+                {'apply_pca': True, 'n_components': 100, 'normalization': None},
+                # 非PCA配置
+                {'apply_pca': False, 'normalization': 'standard'},
+                {'apply_pca': False, 'normalization': 'minmax'},
+                {'apply_pca': False, 'normalization': None},
+            ])
         
         # 预计算这些配置
         experiment_manager.data_loader.precompute_transformations(common_configs)
@@ -260,6 +273,7 @@ def run_full_experiments(experiment_manager, max_experiments, logger, use_featur
         
         return False
 
+
 def main():
     """主函数"""
     # 解析命令行参数
@@ -278,9 +292,14 @@ def main():
         log_name=f"experiment_{timestamp}.log"
     )
 
+    # 特征选择时是否跳过PCA
+    skip_pca = args.skip_pca or args.focus_on_fs  # 如果focus_on_fs为True，自动设置skip_pca为True
+
     if args.focus_on_fs:
         logger.info("开始伪逆线性模型实验（专注于直接特征选择）", 
                    "Starting pseudo-inverse linear model experiments focusing on direct feature selection")
+        logger.info(f"特征选择时{'完全跳过PCA' if skip_pca else '可能使用PCA'}", 
+                   f"{'Completely skipping PCA' if skip_pca else 'May use PCA'} during feature selection")
     else:
         logger.info("开始伪逆线性模型实验（专注于PCA方法）", 
                    "Starting pseudo-inverse linear model experiments focusing on PCA")
@@ -318,6 +337,7 @@ def main():
             f"  最大实验数量：{args.max_experiments}\n"
             f"  使用GPU加速：{args.use_gpu}\n"
             f"  直接特征选择：{args.focus_on_fs}\n"
+            f"  特征选择时跳过PCA：{skip_pca}\n"
             f"  自动PCA方差阈值：{args.auto_pca_variance if args.auto_pca_variance is not None else 'None'}", 
             
             f"Experiment parameters:\n"
@@ -329,6 +349,7 @@ def main():
             f"  Maximum number of experiments: {args.max_experiments}\n"
             f"  Use GPU acceleration: {args.use_gpu}\n"
             f"  Focus on feature selection: {args.focus_on_fs}\n"
+            f"  Skip PCA during feature selection: {skip_pca}\n"
             f"  Auto PCA variance threshold: {args.auto_pca_variance if args.auto_pca_variance is not None else 'None'}")
             
     # 创建数据加载器
@@ -368,7 +389,8 @@ def main():
                 experiment_manager, 
                 args.max_experiments, 
                 logger,
-                use_feature_selection=args.focus_on_fs  # 新参数决定实验类型
+                use_feature_selection=args.focus_on_fs,  # 是否专注于特征选择
+                skip_pca=skip_pca  # 特征选择时是否跳过PCA
             )
         else:
             logger.error("基准实验失败，跳过完整实验集", 
@@ -389,6 +411,9 @@ def main():
     
     print(f"\n{'所有实验和分析已完成' if success else '实验过程中出现错误'}。请查看结果目录获取详细报告。")
     print(f"结果目录: {os.path.abspath(args.exp_dir)}")
+
+
+
 
 
 if __name__ == "__main__":
