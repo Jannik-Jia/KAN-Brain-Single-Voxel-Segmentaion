@@ -12,17 +12,17 @@ TEST_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/r
 VAL_DIR="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
 
 # 设置结果保存目录
-EXPERIMENT_DIR="pseudoinverse_${EXPERIMENT_TYPE}_experiments"
+EXPERIMENT_DIR="pseudoinverse_${EXPERIMENT_TYPE}_experiments_fixed_mode"
 
-# 设置最大实验数量
-MAX_EXPERIMENTS=1000
+# 设置最大实验数量 - 增加实验数量以确保覆盖更多参数组合
+MAX_EXPERIMENTS=300
 
 # GPU相关设置
 USE_GPU=true                # 是否使用GPU加速（true/false）
 GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
 
 # 添加数据处理参数
-MAX_SAMPLES_PER_LABEL=500   # 每个标签最多使用的样本数
+MAX_SAMPLES_PER_LABEL=1   # 每个标签最多使用的样本数
 
 # 特征选择时是否跳过PCA
 SKIP_PCA=true               # 特征选择时是否完全跳过PCA（true/false）

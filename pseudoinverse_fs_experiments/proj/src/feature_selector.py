@@ -39,7 +39,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 class TorchElasticNet:
-    """使用PyTorch实现的弹性网络"""
+    """使用PyTorch实现的弹性网络，优化特征选择"""
     
     def __init__(self, alpha=1.0, l1_ratio=0.5, max_iter=1000, tol=1e-4, random_state=None):
         self.alpha = alpha
@@ -64,8 +64,11 @@ class TorchElasticNet:
         weights = nn.Parameter(torch.zeros(n_features, 1, requires_grad=True))
         bias = nn.Parameter(torch.zeros(1, requires_grad=True))
         
-        # 定义优化器
+        # 定义优化器 - 使用Adam优化器
         optimizer = optim.Adam([weights, bias], lr=0.01)
+        
+        # 跟踪收敛情况
+        prev_loss = float('inf')
         
         # 训练模型
         for epoch in range(self.max_iter):
@@ -88,8 +91,13 @@ class TorchElasticNet:
             loss.backward()
             optimizer.step()
             
+            # 打印进度（每100次迭代）
+            if epoch % 100 == 0:
+                print(f"Epoch {epoch}, Loss: {loss.item():.6f}, MSE: {mse_loss.item():.6f}, L1: {l1_penalty.item():.6f}, L2: {l2_penalty.item():.6f}")
+            
             # 检查收敛
             if epoch > 0 and abs(prev_loss - loss.item()) < self.tol:
+                print(f"Converged at epoch {epoch}")
                 break
                 
             prev_loss = loss.item()
@@ -101,8 +109,13 @@ class TorchElasticNet:
         return self
 
     def predict(self, X):
+        if self.coef_ is None:
+            raise ValueError("模型尚未拟合，请先调用fit方法")
+            
         X_tensor = torch.FloatTensor(X)
         return (torch.matmul(X_tensor, torch.FloatTensor(self.coef_)) + self.intercept_).numpy()
+
+
 
 
 class FeatureSelector:
@@ -309,6 +322,15 @@ class FeatureSelector:
         if self.selection_mode == 'threshold':
             # 根据阈值选择特征
             self.selected_indices = np.where(self.feature_importance > self.selection_threshold)[0]
+            # 添加安全检查 - 如果没有特征被选中，选择top_k个特征
+            if len(self.selected_indices) == 0:
+                self.logger.warning(f"使用阈值{self.selection_threshold}未选择到任何特征，回退到选择前20个特征",
+                                f"No features selected with threshold {self.selection_threshold}, falling back to selecting top 20 features")
+                # 选择top-k特征
+                self.selected_indices = np.argsort(self.feature_importance)[-20:]
+                # 改变选择模式为fixed
+                self.selection_mode = 'fixed'
+                self.max_features = 20
         else:
             # 固定数量模式
             if self.max_features < X_cpu.shape[1]:
@@ -317,20 +339,22 @@ class FeatureSelector:
             else:
                 # 如果max_features大于等于特征数，保留所有特征
                 self.selected_indices = np.arange(X_cpu.shape[1])
-        
+
         # 确保索引已排序
         self.selected_indices = np.sort(self.selected_indices)
-        
+
         # 转换到GPU以便后续操作
         self.feature_importance = to_gpu(self.feature_importance)
         self.selected_indices = to_gpu(self.selected_indices)
-        
+
         elapsed_time = time.time() - start_time
         self.logger.info(f"特征选择完成，选择了 {len(self.selected_indices)}/{X.shape[1]} 个特征，"
-                      f"耗时 {elapsed_time:.2f} 秒",
-                      f"Feature selection completed, selected {len(self.selected_indices)}/{X.shape[1]} "
-                      f"features in {elapsed_time:.2f} seconds")
-        
+                    f"耗时 {elapsed_time:.2f} 秒",
+                    f"Feature selection completed, selected {len(self.selected_indices)}/{X.shape[1]} "
+                    f"features in {elapsed_time:.2f} seconds")
+
+
+
         return self
     
     def transform(self, X):
