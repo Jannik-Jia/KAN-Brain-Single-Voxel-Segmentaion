@@ -1088,6 +1088,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         with open(self.experiment_log_path, 'a') as f:
             f.write(log_entry)
 
+
     def generate_summary_report_with_fs(self, top_n=10):
         """
         生成包含特征选择信息的汇总报告
@@ -1129,49 +1130,61 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         # 创建评估器实例
         evaluator = ModelEvaluator(logger=self.logger)
         
-        # 收集不同PCA组件数量的实验结果
-        self.logger.info("分析不同PCA组件数量的影响", "Analyzing impact of different PCA component counts")
-        
-        # 筛选使用PCA的实验
-        pca_experiments = log_df[log_df['apply_pca'] == True]
-        
-        # PCA组件分析结果
+        # 初始化变量，用于存储图片文件路径
+        fs_impact_path = None
+        ratio_impact_path = None
+        l1_impact_path = None
+        fs_comparison_path = None
+        pca_components_impact_path = None
         best_comp = None
         
-        if len(pca_experiments) > 0:
-            # 准备按组件数量分组的结果字典
-            results_by_components = {}
+        # 检查是否有PCA相关实验
+        has_pca_experiments = 'apply_pca' in log_df.columns and log_df['apply_pca'].any()
+        
+        # 如果有PCA实验，则分析PCA组件数量的影响
+        if has_pca_experiments:
+            self.logger.info("分析不同PCA组件数量的影响", "Analyzing impact of different PCA component counts")
             
-            # 首先找出使用了哪些不同的PCA组件数量
-            if 'n_components' in pca_experiments.columns:
-                # 对每个组件数量，找出测试集准确率最高的实验
-                component_groups = pca_experiments.groupby('n_components')
+            # 筛选使用PCA的实验
+            pca_experiments = log_df[log_df['apply_pca'] == True]
+            
+            # PCA组件分析结果
+            best_comp = None
+            
+            if len(pca_experiments) > 1:  # 确保有足够的PCA实验进行分析
+                # 准备按组件数量分组的结果字典
+                results_by_components = {}
                 
-                for n_comp, group in component_groups:
-                    # 按测试准确率排序并获取最佳实验
-                    best_exp = group.sort_values('test_accuracy', ascending=False).iloc[0]
-                    exp_id = best_exp['experiment_id']
-                    exp_dir = os.path.join(self.base_dir, exp_id)
+                # 首先找出使用了哪些不同的PCA组件数量
+                if 'n_components' in pca_experiments.columns:
+                    # 对每个组件数量，找出测试集准确率最高的实验
+                    component_groups = pca_experiments.groupby('n_components')
                     
-                    # 加载实验结果
-                    results = self._load_results(exp_dir)
-                    if results:
-                        results_by_components[int(n_comp)] = results
-                
-                # 使用评估器分析不同组件数量的影响
-                if results_by_components:
-                    best_comp = evaluator.analyze_pca_components(
-                        results_by_components, 
-                        save_dir=report_dir,
-                        prefix="pca_"
-                    )
+                    for n_comp, group in component_groups:
+                        # 按测试准确率排序并获取最佳实验
+                        best_exp = group.sort_values('test_accuracy', ascending=False).iloc[0]
+                        exp_id = best_exp['experiment_id']
+                        exp_dir = os.path.join(self.base_dir, exp_id)
+                        
+                        # 加载实验结果
+                        results = self._load_results(exp_dir)
+                        if results:
+                            results_by_components[int(n_comp)] = results
                     
-                    self.logger.info(f"PCA组件数量分析完成，最佳组件数: {best_comp}", 
-                                f"PCA component analysis completed, best component count: {best_comp}")
-                    
-                    # 在报告中添加最佳组件数的信息
-                    with open(os.path.join(report_dir, "pca_best_component.txt"), 'w') as f:
-                        f.write(f"Best PCA component count: {best_comp}\n")
+                    # 使用评估器分析不同组件数量的影响
+                    if results_by_components:
+                        best_comp = evaluator.analyze_pca_components(
+                            results_by_components, 
+                            save_dir=report_dir,
+                            prefix="pca_"
+                        )
+                        
+                        self.logger.info(f"PCA组件数量分析完成，最佳组件数: {best_comp}", 
+                                    f"PCA component analysis completed, best component count: {best_comp}")
+                        
+                        # 在报告中添加最佳组件数的信息
+                        with open(os.path.join(report_dir, "pca_best_component.txt"), 'w') as f:
+                            f.write(f"Best PCA component count: {best_comp}\n")
         
         # 生成HTML报告
         html_report = f"""
@@ -1220,12 +1233,20 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     <th>Test Accuracy</th>
                     <th>Test F1</th>
                     <th>Val Accuracy</th>
-                    <th>PCA</th>
-                    <th>Components</th>
                     <th>Feature Selection</th>
                     <th>Original Features</th>
                     <th>Selected Features</th>
                     <th>Selection Ratio</th>
+        """
+        
+        # 添加PCA列（如果有PCA相关实验）
+        if has_pca_experiments:
+            html_report += """
+                    <th>PCA</th>
+                    <th>Components</th>
+            """
+        
+        html_report += """
                 </tr>
         """
         
@@ -1236,12 +1257,20 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                     <td>{row['test_accuracy']:.4f}</td>
                     <td>{row['test_f1']:.4f}</td>
                     <td>{row['val_accuracy']:.4f}</td>
-                    <td>{'Yes' if row['apply_pca'] else 'No'}</td>
-                    <td>{row['n_components'] if 'n_components' in row and row['apply_pca'] else '-'}</td>
                     <td>{row['feature_selection']}</td>
                     <td>{int(row['original_features'])}</td>
                     <td>{int(row['selected_features'])}</td>
                     <td>{row['selection_ratio']:.2f}</td>
+            """
+            
+            # 添加PCA信息（如果有PCA相关实验）
+            if has_pca_experiments:
+                html_report += f"""
+                    <td>{'Yes' if 'apply_pca' in row and row['apply_pca'] else 'No'}</td>
+                    <td>{row['n_components'] if 'n_components' in row and 'apply_pca' in row and row['apply_pca'] else '-'}</td>
+                """
+            
+            html_report += """
                 </tr>
             """
         
@@ -1268,7 +1297,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             html_report += f"""
                 <div class="chart">
-                    <img src="{os.path.relpath(fs_impact_path, self.base_dir)}" alt="Feature Selection Impact" width="100%">
+                    <img src="feature_selection_impact.png" alt="Feature Selection Impact" width="100%">
                 </div>
             """
         
@@ -1286,7 +1315,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         html_report += f"""
             <div class="chart">
-                <img src="{os.path.relpath(ratio_impact_path, self.base_dir)}" alt="Selection Ratio Impact" width="100%">
+                <img src="selection_ratio_impact.png" alt="Selection Ratio Impact" width="100%">
             </div>
         """
         
@@ -1305,7 +1334,7 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             html_report += f"""
                 <div class="chart">
-                    <img src="{os.path.relpath(l1_impact_path, self.base_dir)}" alt="L1 Ratio Impact" width="100%">
+                    <img src="l1_ratio_impact.png" alt="L1 Ratio Impact" width="100%">
                 </div>
             """
         
@@ -1345,13 +1374,12 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             
             html_report += f"""
                 <div class="chart">
-                    <img src="{os.path.relpath(fs_comparison_path, self.base_dir)}" alt="Feature Selection Comparison" width="100%">
+                    <img src="feature_selection_comparison.png" alt="Feature Selection Comparison" width="100%">
                 </div>
             """
         
         # 5. PCA相关的可视化
-        pca_components_impact_png = "pca_components_impact.png"
-        if 'n_components' in log_df.columns and log_df['apply_pca'].any():
+        if has_pca_experiments and 'n_components' in log_df.columns:
             plt.figure(figsize=(10, 6))
             sns.boxplot(x='n_components', y='test_accuracy', data=log_df[log_df['apply_pca']==True])
             plt.title('Impact of PCA Components Count on Test Accuracy')
@@ -1359,13 +1387,13 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             plt.ylabel('Test Accuracy')
             plt.grid(True, axis='y', linestyle='--', alpha=0.7)
             plt.tight_layout()
-            pca_components_impact_path = os.path.join(report_dir, pca_components_impact_png)
+            pca_components_impact_path = os.path.join(report_dir, "pca_components_impact.png")
             plt.savefig(pca_components_impact_path, dpi=300)
             plt.close()
             
             html_report += f"""
                 <div class="chart">
-                    <img src="{pca_components_impact_png}" alt="PCA Components Impact" width="100%">
+                    <img src="pca_components_impact.png" alt="PCA Components Impact" width="100%">
                 </div>
             """
         
@@ -1458,9 +1486,9 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
                 <li><strong>Best Feature Selection Parameters:</strong>
                     <ul>
                         <li>Method: {best_row['feature_selection']}</li>
-                        <li>Selection mode: {best_row['selection_mode']}</li>
-                        <li>Threshold/Max features: {best_row['selection_threshold'] if best_row['selection_mode'] == 'threshold' else best_row['max_features']}</li>
-                        <li>L1 ratio: {best_row['l1_ratio']}</li>
+                        <li>Selection mode: {best_row['selection_mode'] if 'selection_mode' in best_row else 'fixed'}</li>
+                        <li>Features: {int(best_row['selected_features'])}</li>
+                        <li>L1 ratio: {best_row['l1_ratio'] if 'l1_ratio' in best_row else 'N/A'}</li>
                         <li>Feature reduction: from {int(best_row['original_features'])} to {int(best_row['selected_features'])} features ({best_row['selection_ratio']:.2f} ratio)</li>
                     </ul>
                 </li>
@@ -1483,26 +1511,3 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         
         self.logger.info(f"特征选择汇总报告已生成: {html_report_path}", 
                     f"Feature selection summary report generated: {html_report_path}")
-        
-        # 验证所有引用的图片是否存在
-        referenced_images = [
-            "pca_pca_components_accuracy.png",
-            "pca_pca_components_f1.png", 
-            fs_impact_png,
-            ratio_impact_png, 
-            l1_impact_png,
-            fs_comparison_png,
-            pca_components_impact_png
-        ]
-        
-        for img in referenced_images:
-            img_path = os.path.join(report_dir, img)
-            if not os.path.exists(img_path):
-                self.logger.warning(f"报告引用的图片不存在: {img}", f"Image referenced in report does not exist: {img}")
-
-        # 检查最佳实验图片
-        for img_file in best_images.keys():
-            best_img = f"best_{img_file}"
-            best_img_path = os.path.join(report_dir, best_img)
-            if not os.path.exists(best_img_path):
-                self.logger.warning(f"最佳实验图片不存在: {best_img}", f"Best experiment image does not exist: {best_img}")
