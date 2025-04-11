@@ -254,16 +254,16 @@ def run_baseline_experiments(experiment_manager, logger, args):
                 f"  Accuracy difference: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}"
             )
 
-        return True
-        
-    except Exception as e:
-        logger.error(f"基准测试实验失败: {str(e)}", f"Baseline test experiments failed: {str(e)}")
-        print(f"基准测试实验失败: {str(e)}")
-        # 显示堆栈跟踪以便调试
-        import traceback
-        traceback.print_exc()
-        
-        return False
+            return True
+            
+        except Exception as e:
+            logger.error(f"基准测试实验失败: {str(e)}", f"Baseline test experiments failed: {str(e)}")
+            print(f"基准测试实验失败: {str(e)}")
+            # 显示堆栈跟踪以便调试
+            import traceback
+            traceback.print_exc()
+            
+            return False
 
 
 def run_full_experiments(experiment_manager, max_experiments, logger, use_feature_selection=False, skip_pca=False):
