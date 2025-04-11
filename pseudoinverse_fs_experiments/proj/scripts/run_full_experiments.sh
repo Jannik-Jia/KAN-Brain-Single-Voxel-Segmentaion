@@ -22,7 +22,7 @@ USE_GPU=true                # 是否使用GPU加速（true/false）
 GPU_MEMORY_FRACTION=0.8     # GPU内存使用比例上限（0.0-1.0）
 
 # 添加数据处理参数
-MAX_SAMPLES_PER_LABEL=1   # 每个标签最多使用的样本数
+MAX_SAMPLES_PER_LABEL=2000   # 每个标签最多使用的样本数
 
 # 特征选择时是否跳过PCA
 SKIP_PCA=true               # 特征选择时是否完全跳过PCA（true/false）
@@ -50,6 +50,9 @@ if [ "$EXPERIMENT_TYPE" = "fs" ]; then
 else
     echo "专注于PCA实验"
 fi
+
+
+
 
 # 确保Python模块路径正确
 export PYTHONPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )"/.. && pwd )"

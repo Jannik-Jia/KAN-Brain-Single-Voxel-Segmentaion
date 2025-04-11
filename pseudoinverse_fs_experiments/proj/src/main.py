@@ -57,118 +57,202 @@ def setup_args():
     return parser.parse_args()
 
 
+
+
 def run_baseline_experiments(experiment_manager, logger, args):
     """运行基准测试实验"""
-    logger.info("运行基准测试实验（专注于PCA方法）", "Running baseline test experiment focusing on PCA methods")
-            
-    # 基准参数 - 使用PCA自动组件数量
-    baseline_params_pca = {
-        'apply_pca': args.apply_pca,
-        'n_components': args.pca_components,
-        'auto_pca_variance': args.auto_pca_variance,
-        'scaling_before_pca': args.scaling_before_pca,
-        'normalization': 'standard',
-        'class_balance': False,
-        'target_samples': args.max_samples_per_label,
-        'regularization': None,
-        'alpha': 0.01,
-        'feature_selection': None,
-        'selection_mode': 'threshold',
-        'selection_threshold': 0.01,
-        'max_features': 100,
-        'l1_ratio': 1.0,
-        'scaling_before_selection': True,
-        'selection_metric': 'coefficient'
-    }
-
-    # 带L2正则化的PCA基准
-    baseline_params_pca_l2 = baseline_params_pca.copy()
-    baseline_params_pca_l2['regularization'] = 'l2'
-    baseline_params_pca_l2['alpha'] = 0.1
     
-    # 带类别平衡的PCA基准
-    baseline_params_pca_balanced = baseline_params_pca.copy()
-    baseline_params_pca_balanced['class_balance'] = True
+    # 添加这个检查：如果是特征选择模式并且需要跳过PCA，则使用无PCA的基准测试
+    if args.focus_on_fs or args.skip_pca:
+        logger.info("运行基准测试实验（专注于特征选择，不使用PCA）", 
+                   "Running baseline test experiment focusing on feature selection without PCA")
+        
+        # 特征选择基准参数 - 不使用PCA
+        baseline_params_fs = {
+            'apply_pca': False,  # 不使用PCA
+            'normalization': 'standard',
+            'class_balance': False,
+            'target_samples': args.max_samples_per_label,
+            'regularization': None,
+            'alpha': 0.01,
+            'feature_selection': 'lasso',  # 使用LASSO特征选择
+            'selection_mode': 'fixed',
+            'selection_threshold': 0.01,
+            'max_features': 100,
+            'l1_ratio': 1.0,
+            'scaling_before_selection': True,
+            'selection_metric': 'coefficient'
+        }
 
-    try:
-        # 运行基本PCA实验
-        logger.info("运行基本PCA实验", "Running basic PCA experiment")
-        experiment_id_pca, results_pca = experiment_manager.run_experiment(baseline_params_pca)
+        # 带L2正则化的特征选择基准
+        baseline_params_fs_l2 = baseline_params_fs.copy()
+        baseline_params_fs_l2['regularization'] = 'l2'
+        baseline_params_fs_l2['alpha'] = 0.1
         
-        logger.info(f"基准实验（PCA）{experiment_id_pca} 完成", 
-                   f"Baseline experiment (PCA) {experiment_id_pca} completed")
-        
-        # 打印主要评估指标
-        logger.info(
-            f"基准实验（PCA）结果:\n"
-            f"  训练集准确率: {results_pca['train']['accuracy']:.4f}\n"
-            f"  测试集准确率: {results_pca['test']['accuracy']:.4f}\n"
-            f"  验证集准确率: {results_pca['val']['accuracy']:.4f}",
+        try:
+            # 运行基本特征选择实验
+            logger.info("运行基本特征选择实验（无PCA）", "Running basic feature selection experiment (without PCA)")
+            experiment_id_fs, results_fs = experiment_manager.run_experiment(baseline_params_fs)
             
-            f"Baseline experiment (PCA) results:\n"
-            f"  Training accuracy: {results_pca['train']['accuracy']:.4f}\n"
-            f"  Test accuracy: {results_pca['test']['accuracy']:.4f}\n"
-            f"  Validation accuracy: {results_pca['val']['accuracy']:.4f}"
-        )
-        
-        # 运行带L2正则化的PCA实验
-        logger.info("运行带L2正则化的PCA实验", "Running PCA experiment with L2 regularization")
-        experiment_id_pca_l2, results_pca_l2 = experiment_manager.run_experiment(baseline_params_pca_l2)
-        
-        logger.info(f"基准实验（PCA+L2正则化）{experiment_id_pca_l2} 完成", 
-                   f"Baseline experiment (PCA+L2 regularization) {experiment_id_pca_l2} completed")
-        
-        # 打印主要评估指标
-        logger.info(
-            f"基准实验（PCA+L2正则化）结果:\n"
-            f"  训练集准确率: {results_pca_l2['train']['accuracy']:.4f}\n"
-            f"  测试集准确率: {results_pca_l2['test']['accuracy']:.4f}\n"
-            f"  验证集准确率: {results_pca_l2['val']['accuracy']:.4f}",
+            logger.info(f"基准实验（特征选择）{experiment_id_fs} 完成", 
+                       f"Baseline experiment (feature selection) {experiment_id_fs} completed")
             
-            f"Baseline experiment (PCA+L2 regularization) results:\n"
-            f"  Training accuracy: {results_pca_l2['train']['accuracy']:.4f}\n"
-            f"  Test accuracy: {results_pca_l2['test']['accuracy']:.4f}\n"
-            f"  Validation accuracy: {results_pca_l2['val']['accuracy']:.4f}"
-        )
-        
-        # 运行带类别平衡的PCA实验
-        logger.info("运行带类别平衡的PCA实验", "Running PCA experiment with class balancing")
-        experiment_id_pca_balanced, results_pca_balanced = experiment_manager.run_experiment(baseline_params_pca_balanced)
-        
-        logger.info(f"基准实验（PCA+类平衡）{experiment_id_pca_balanced} 完成", 
-                   f"Baseline experiment (PCA+class balancing) {experiment_id_pca_balanced} completed")
-        
-        # 打印主要评估指标
-        logger.info(
-            f"基准实验（PCA+类平衡）结果:\n"
-            f"  训练集准确率: {results_pca_balanced['train']['accuracy']:.4f}\n"
-            f"  测试集准确率: {results_pca_balanced['test']['accuracy']:.4f}\n"
-            f"  验证集准确率: {results_pca_balanced['val']['accuracy']:.4f}",
+            # 打印主要评估指标
+            logger.info(
+                f"基准实验（特征选择）结果:\n"
+                f"  训练集准确率: {results_fs['train']['accuracy']:.4f}\n"
+                f"  测试集准确率: {results_fs['test']['accuracy']:.4f}\n"
+                f"  验证集准确率: {results_fs['val']['accuracy']:.4f}",
+                
+                f"Baseline experiment (feature selection) results:\n"
+                f"  Training accuracy: {results_fs['train']['accuracy']:.4f}\n"
+                f"  Test accuracy: {results_fs['test']['accuracy']:.4f}\n"
+                f"  Validation accuracy: {results_fs['val']['accuracy']:.4f}"
+            )
             
-            f"Baseline experiment (PCA+class balancing) results:\n"
-            f"  Training accuracy: {results_pca_balanced['train']['accuracy']:.4f}\n"
-            f"  Test accuracy: {results_pca_balanced['test']['accuracy']:.4f}\n"
-            f"  Validation accuracy: {results_pca_balanced['val']['accuracy']:.4f}"
-        )
-        
-        # 对比实验结果
-        logger.info(
-            f"基准实验对比:\n"
-            f"  PCA vs PCA+L2正则化:\n"
-            f"  测试集准确率: {results_pca['test']['accuracy']:.4f} vs {results_pca_l2['test']['accuracy']:.4f}\n"
-            f"  准确率差异: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n"
-            f"  PCA vs PCA+类平衡:\n"
-            f"  测试集准确率: {results_pca['test']['accuracy']:.4f} vs {results_pca_balanced['test']['accuracy']:.4f}\n"
-            f"  准确率差异: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}",
+            # 运行带L2正则化的特征选择实验
+            logger.info("运行带L2正则化的特征选择实验", "Running feature selection experiment with L2 regularization")
+            experiment_id_fs_l2, results_fs_l2 = experiment_manager.run_experiment(baseline_params_fs_l2)
             
-            f"Baseline experiments comparison:\n"
-            f"  PCA vs PCA+L2 regularization:\n"
-            f"  Test accuracy: {results_pca['test']['accuracy']:.4f} vs {results_pca_l2['test']['accuracy']:.4f}\n"
-            f"  Accuracy difference: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n"
-            f"  PCA vs PCA+class balancing:\n"
-            f"  Test accuracy: {results_pca['test']['accuracy']:.4f} vs {results_pca_balanced['test']['accuracy']:.4f}\n"
-            f"  Accuracy difference: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}"
-        )
+            logger.info(f"基准实验（特征选择+L2正则化）{experiment_id_fs_l2} 完成", 
+                       f"Baseline experiment (feature selection+L2 regularization) {experiment_id_fs_l2} completed")
+            
+            # 对比实验结果
+            logger.info(
+                f"基准实验对比:\n"
+                f"  特征选择 vs 特征选择+L2正则化:\n"
+                f"  测试集准确率: {results_fs['test']['accuracy']:.4f} vs {results_fs_l2['test']['accuracy']:.4f}\n"
+                f"  准确率差异: {results_fs_l2['test']['accuracy'] - results_fs['test']['accuracy']:.4f}",
+                
+                f"Baseline experiments comparison:\n"
+                f"  Feature selection vs Feature selection+L2 regularization:\n"
+                f"  Test accuracy: {results_fs['test']['accuracy']:.4f} vs {results_fs_l2['test']['accuracy']:.4f}\n"
+                f"  Accuracy difference: {results_fs_l2['test']['accuracy'] - results_fs['test']['accuracy']:.4f}"
+            )
+
+            return True
+            
+        except Exception as e:
+            logger.error(f"基准测试实验失败: {str(e)}", f"Baseline test experiments failed: {str(e)}")
+            print(f"基准测试实验失败: {str(e)}")
+            # 显示堆栈跟踪以便调试
+            import traceback
+            traceback.print_exc()
+            
+            return False
+    
+    # 原有的基于PCA的基准测试代码（当不是特征选择模式时执行）
+    else:
+        logger.info("运行基准测试实验（专注于PCA方法）", "Running baseline test experiment focusing on PCA methods")
+                
+        # 基准参数 - 使用PCA自动组件数量
+        baseline_params_pca = {
+            'apply_pca': args.apply_pca,
+            'n_components': args.pca_components,
+            'auto_pca_variance': args.auto_pca_variance,
+            'scaling_before_pca': args.scaling_before_pca,
+            'normalization': 'standard',
+            'class_balance': False,
+            'target_samples': args.max_samples_per_label,
+            'regularization': None,
+            'alpha': 0.01,
+            'feature_selection': None,
+            'selection_mode': 'threshold',
+            'selection_threshold': 0.01,
+            'max_features': 100,
+            'l1_ratio': 1.0,
+            'scaling_before_selection': True,
+            'selection_metric': 'coefficient'
+        }
+
+        # 带L2正则化的PCA基准
+        baseline_params_pca_l2 = baseline_params_pca.copy()
+        baseline_params_pca_l2['regularization'] = 'l2'
+        baseline_params_pca_l2['alpha'] = 0.1
+        
+        # 带类别平衡的PCA基准
+        baseline_params_pca_balanced = baseline_params_pca.copy()
+        baseline_params_pca_balanced['class_balance'] = True
+
+        try:
+            # 运行基本PCA实验
+            logger.info("运行基本PCA实验", "Running basic PCA experiment")
+            experiment_id_pca, results_pca = experiment_manager.run_experiment(baseline_params_pca)
+            
+            logger.info(f"基准实验（PCA）{experiment_id_pca} 完成", 
+                    f"Baseline experiment (PCA) {experiment_id_pca} completed")
+            
+            # 打印主要评估指标
+            logger.info(
+                f"基准实验（PCA）结果:\n"
+                f"  训练集准确率: {results_pca['train']['accuracy']:.4f}\n"
+                f"  测试集准确率: {results_pca['test']['accuracy']:.4f}\n"
+                f"  验证集准确率: {results_pca['val']['accuracy']:.4f}",
+                
+                f"Baseline experiment (PCA) results:\n"
+                f"  Training accuracy: {results_pca['train']['accuracy']:.4f}\n"
+                f"  Test accuracy: {results_pca['test']['accuracy']:.4f}\n"
+                f"  Validation accuracy: {results_pca['val']['accuracy']:.4f}"
+            )
+            
+            # 运行带L2正则化的PCA实验
+            logger.info("运行带L2正则化的PCA实验", "Running PCA experiment with L2 regularization")
+            experiment_id_pca_l2, results_pca_l2 = experiment_manager.run_experiment(baseline_params_pca_l2)
+            
+            logger.info(f"基准实验（PCA+L2正则化）{experiment_id_pca_l2} 完成", 
+                    f"Baseline experiment (PCA+L2 regularization) {experiment_id_pca_l2} completed")
+            
+            # 打印主要评估指标
+            logger.info(
+                f"基准实验（PCA+L2正则化）结果:\n"
+                f"  训练集准确率: {results_pca_l2['train']['accuracy']:.4f}\n"
+                f"  测试集准确率: {results_pca_l2['test']['accuracy']:.4f}\n"
+                f"  验证集准确率: {results_pca_l2['val']['accuracy']:.4f}",
+                
+                f"Baseline experiment (PCA+L2 regularization) results:\n"
+                f"  Training accuracy: {results_pca_l2['train']['accuracy']:.4f}\n"
+                f"  Test accuracy: {results_pca_l2['test']['accuracy']:.4f}\n"
+                f"  Validation accuracy: {results_pca_l2['val']['accuracy']:.4f}"
+            )
+            
+            # 运行带类别平衡的PCA实验
+            logger.info("运行带类别平衡的PCA实验", "Running PCA experiment with class balancing")
+            experiment_id_pca_balanced, results_pca_balanced = experiment_manager.run_experiment(baseline_params_pca_balanced)
+            
+            logger.info(f"基准实验（PCA+类平衡）{experiment_id_pca_balanced} 完成", 
+                    f"Baseline experiment (PCA+class balancing) {experiment_id_pca_balanced} completed")
+            
+            # 打印主要评估指标
+            logger.info(
+                f"基准实验（PCA+类平衡）结果:\n"
+                f"  训练集准确率: {results_pca_balanced['train']['accuracy']:.4f}\n"
+                f"  测试集准确率: {results_pca_balanced['test']['accuracy']:.4f}\n"
+                f"  验证集准确率: {results_pca_balanced['val']['accuracy']:.4f}",
+                
+                f"Baseline experiment (PCA+class balancing) results:\n"
+                f"  Training accuracy: {results_pca_balanced['train']['accuracy']:.4f}\n"
+                f"  Test accuracy: {results_pca_balanced['test']['accuracy']:.4f}\n"
+                f"  Validation accuracy: {results_pca_balanced['val']['accuracy']:.4f}"
+            )
+            
+            # 对比实验结果
+            logger.info(
+                f"基准实验对比:\n"
+                f"  PCA vs PCA+L2正则化:\n"
+                f"  测试集准确率: {results_pca['test']['accuracy']:.4f} vs {results_pca_l2['test']['accuracy']:.4f}\n"
+                f"  准确率差异: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n"
+                f"  PCA vs PCA+类平衡:\n"
+                f"  测试集准确率: {results_pca['test']['accuracy']:.4f} vs {results_pca_balanced['test']['accuracy']:.4f}\n"
+                f"  准确率差异: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}",
+                
+                f"Baseline experiments comparison:\n"
+                f"  PCA vs PCA+L2 regularization:\n"
+                f"  Test accuracy: {results_pca['test']['accuracy']:.4f} vs {results_pca_l2['test']['accuracy']:.4f}\n"
+                f"  Accuracy difference: {results_pca_l2['test']['accuracy'] - results_pca['test']['accuracy']:.4f}\n"
+                f"  PCA vs PCA+class balancing:\n"
+                f"  Test accuracy: {results_pca['test']['accuracy']:.4f} vs {results_pca_balanced['test']['accuracy']:.4f}\n"
+                f"  Accuracy difference: {results_pca_balanced['test']['accuracy'] - results_pca['test']['accuracy']:.4f}"
+            )
 
         return True
         
