@@ -740,6 +740,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         else:
             return params
 
+
+    
     def run_experiment(self, params, force_rerun=False):
         """
         运行单个实验，支持特征选择，使用缓存数据减少重复计算
@@ -770,10 +772,12 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
         # 创建实验目录
         os.makedirs(experiment_dir, exist_ok=True)
         
-        # 保存参数
-        with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
-            json.dump(params, f, indent=4)
         
+        with open(os.path.join(experiment_dir, "params.json"), 'w') as f:
+            # 转换参数中的NumPy类型
+            params_to_save = self._convert_params(params)
+            json.dump(params_to_save, f, indent=4)
+
         # 更新状态为运行中
         with open(os.path.join(experiment_dir, "status.json"), 'w') as f:
             json.dump({"status": "running", "start_time": str(datetime.now())}, f, indent=4)
