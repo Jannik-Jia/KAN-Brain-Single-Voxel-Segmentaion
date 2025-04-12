@@ -231,6 +231,7 @@ class ExperimentManager:
         with open(self.experiment_log_path, 'a') as f:
             f.write(log_entry)
     
+
     def _save_results(self, experiment_dir, results):
         """保存实验结果到JSON文件"""
         # 定义递归转换NumPy类型的函数
@@ -240,14 +241,14 @@ class ExperimentManager:
                 return {k: convert_numpy_types(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [convert_numpy_types(item) for item in obj]
+            elif isinstance(obj, np.bool_):  # 特别处理 np.bool_ 类型
+                return bool(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist() if obj.size > 0 else []
             elif isinstance(obj, np.integer):
                 return int(obj)
             elif isinstance(obj, np.floating):
                 return float(obj)
-            elif isinstance(obj, np.bool_):  # 特别处理np.bool_类型
-                return bool(obj)
             elif str(type(obj)).startswith("<class 'numpy"):  # 捕获其他NumPy类型
                 return obj.item() if hasattr(obj, 'item') else str(obj)
             else:
@@ -258,9 +259,8 @@ class ExperimentManager:
             # 转换NumPy类型为Python原生类型
             results_json = convert_numpy_types(results)
             json.dump(results_json, f, indent=4)
+        
 
-
-    
     def _load_results(self, experiment_dir):
         """加载保存的实验结果"""
         results_path = os.path.join(experiment_dir, "results.json")
@@ -727,8 +727,8 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             return {k: self._convert_params(v) for k, v in params.items()}
         elif isinstance(params, list):
             return [self._convert_params(item) for item in params]
-        elif isinstance(params, np.bool_):
-            return bool(params)
+        elif isinstance(params, np.bool_):  # 明确处理 bool_ 类型
+            return bool(params)  # 转换为 Python 原生 bool 类型
         elif isinstance(params, np.integer):
             return int(params)
         elif isinstance(params, np.floating):
@@ -739,7 +739,6 @@ class ExperimentManagerWithFeatureSelection(ExperimentManager):
             return params.item() if hasattr(params, 'item') else str(params)
         else:
             return params
-
 
     def run_experiment(self, params, force_rerun=False):
         """
