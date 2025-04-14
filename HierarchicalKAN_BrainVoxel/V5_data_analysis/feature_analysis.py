@@ -534,6 +534,223 @@ def analyze_feature_combinations(data, labels, feature_groups=None, top_k=50,
     
     return combinations_dict
 
+
+def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=100, 
+                            use_gpu=False, save_dir=None):
+    """
+    使用随机森林分析特征重要性
+    
+    参数:
+        data: 输入数据
+        labels: 类别标签
+        feature_groups: 特征组字典
+        n_estimators: 随机森林中树的数量
+        use_gpu: 是否使用GPU加速
+        save_dir: 结果保存目录
+    
+    返回:
+        importance_dict: 特征重要性分析结果字典
+    """
+    if feature_groups is None:
+        feature_groups = {
+            'all_features': list(range(data.shape[1]))
+        }
+    
+    if save_dir and not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    importance_dict = {}
+    
+    # 检查GPU使用标志和cuML可用性
+    if use_gpu and HAS_GPU:
+        # 添加一个额外的健全性检查
+        try:
+            # 尝试一个简单的cuML操作来验证GPU功能
+            test_array = cp.zeros((10, 10))
+            del test_array
+            cp.get_default_memory_pool().free_all_blocks()
+            logger.info("GPU检查通过，将使用GPU加速")
+            gpu_usable = True
+        except Exception as e:
+            logger.warning(f"GPU测试失败，将使用CPU: {str(e)}")
+            gpu_usable = False
+    else:
+        gpu_usable = False
+    
+    for group_name, indices in tqdm(feature_groups.items(), desc="分析特征重要性"):
+        logger.info(f"分析特征组 {group_name} 的特征重要性")
+        
+        # 提取特征组数据
+        group_data = data[:, indices]
+        
+        # 训练随机森林模型
+        start_time = time.time()
+        
+        # 对于GPU随机森林，添加更多安全参数，特别是将n_streams设为1
+        if gpu_usable:
+            try:
+                # 使用GPU版本的随机森林，但将n_streams设为1以提高稳定性
+                forest = cuRF(n_estimators=n_estimators, random_state=42, n_streams=1)
+                forest.fit(group_data, labels)
+                importances = forest.feature_importances_
+                
+                # 释放GPU内存
+                del forest
+                cp.get_default_memory_pool().free_all_blocks()
+                
+            except Exception as e:
+                logger.error(f"GPU处理失败，将使用CPU: {str(e)}")
+                
+                # 回退到CPU处理
+                forest = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
+                forest.fit(group_data, labels)
+                importances = forest.feature_importances_
+        else:
+            # 直接使用CPU处理
+            forest = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
+            forest.fit(group_data, labels)
+            importances = forest.feature_importances_
+        
+        elapsed = time.time() - start_time
+        logger.info(f"  随机森林训练完成，耗时 {elapsed:.2f} 秒")
+        
+        # 检查importances是否包含无穷大或NaN值
+        if not np.all(np.isfinite(importances)):
+            logger.warning(f"特征重要性包含无穷大或NaN值，将替换为0")
+            importances = np.nan_to_num(importances, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # 排序并分析重要性
+        indices_sorted = np.argsort(importances)[::-1]
+        sorted_importances = importances[indices_sorted]
+        sorted_feature_indices = [indices[i] for i in indices_sorted]
+        
+        # 计算累积重要性时确保数值稳定
+        cumulative_importance = np.cumsum(sorted_importances)
+        
+        # 归一化累积重要性以确保最大值为1
+        if cumulative_importance[-1] > 0:
+            cumulative_importance = cumulative_importance / cumulative_importance[-1]
+        
+        # 计算统计信息
+        n_features_90 = np.argmax(cumulative_importance >= 0.9) + 1 if np.any(cumulative_importance >= 0.9) else len(indices)
+        n_features_95 = np.argmax(cumulative_importance >= 0.95) + 1 if np.any(cumulative_importance >= 0.95) else len(indices)
+        n_features_99 = np.argmax(cumulative_importance >= 0.99) + 1 if np.any(cumulative_importance >= 0.99) else len(indices)
+        
+        logger.info(f"  覆盖90%重要性需要的特征数: {n_features_90} ({n_features_90/len(indices)*100:.1f}%)")
+        logger.info(f"  覆盖95%重要性需要的特征数: {n_features_95} ({n_features_95/len(indices)*100:.1f}%)")
+        logger.info(f"  覆盖99%重要性需要的特征数: {n_features_99} ({n_features_99/len(indices)*100:.1f}%)")
+        
+        # 保存结果
+        importance_dict[group_name] = {
+            'importances': importances,
+            'sorted_indices': indices_sorted,
+            'sorted_importances': sorted_importances,
+            'cumulative_importance': cumulative_importance,
+            'n_features_90': n_features_90,
+            'n_features_95': n_features_95,
+            'n_features_99': n_features_99
+        }
+        
+        # 可视化特征重要性
+        if save_dir:
+            try:
+                # 绘制特征重要性条形图
+                plt.figure(figsize=(14, 8))
+                
+                # 只绘制前30个特征
+                n_top = min(30, len(indices_sorted))
+                plt.barh(range(n_top), sorted_importances[:n_top])
+                plt.yticks(range(n_top), [f"Feature {indices[indices_sorted[i]]}" for i in range(n_top)])
+                plt.xlabel("Feature Importance")
+                plt.title(f"Top {n_top} Feature Importance for {group_name}")
+                plt.tight_layout()
+                plt.savefig(os.path.join(save_dir, f"{group_name}_feature_importance.png"), dpi=300)
+                plt.close()
+                
+                # 绘制累积重要性曲线
+                plt.figure(figsize=(10, 6))
+                
+                # 检查数据是否有效
+                if np.all(np.isfinite(cumulative_importance)):
+                    plt.plot(range(1, len(indices_sorted)+1), cumulative_importance)
+                    
+                    # 添加参考线
+                    for threshold, color, label in zip([0.9, 0.95, 0.99], ['r', 'g', 'b'], 
+                                                     ['90% Importance', '95% Importance', '99% Importance']):
+                        plt.axhline(y=threshold, color=color, linestyle='--', label=label)
+                        
+                        # 找到对应的特征数量
+                        n_features = np.argmax(cumulative_importance >= threshold) + 1 if np.any(cumulative_importance >= threshold) else len(indices)
+                        plt.axvline(x=n_features, color=color, linestyle=':')
+                    
+                    plt.xlabel("Number of Features")
+                    plt.ylabel("Cumulative Importance")
+                    plt.title(f"Cumulative Feature Importance for {group_name}")
+                    plt.legend()
+                    plt.grid(True)
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(save_dir, f"{group_name}_cumulative_importance.png"), dpi=300)
+                else:
+                    logger.warning(f"累积重要性包含无效值，跳过绘图")
+                plt.close()
+                
+                # 保存特征重要性排名到CSV
+                importance_df = pd.DataFrame({
+                    'feature_idx': [indices[i] for i in indices_sorted],
+                    'importance': sorted_importances,
+                    'cumulative_importance': cumulative_importance
+                })
+                importance_df.to_csv(os.path.join(save_dir, f"{group_name}_feature_importance.csv"), index=False)
+                
+            except Exception as e:
+                logger.error(f"可视化特征重要性时出错: {str(e)}")
+    
+    # 比较不同特征组的重要性分布
+    if len(feature_groups) > 1 and save_dir:
+        try:
+            plt.figure(figsize=(12, 6))
+            
+            # 绘制每个特征组所需的特征比例
+            groups = list(feature_groups.keys())
+            n90_ratios = [importance_dict[g]['n_features_90'] / len(feature_groups[g]) for g in groups]
+            n95_ratios = [importance_dict[g]['n_features_95'] / len(feature_groups[g]) for g in groups]
+            n99_ratios = [importance_dict[g]['n_features_99'] / len(feature_groups[g]) for g in groups]
+            
+            x = np.arange(len(groups))
+            width = 0.25
+            
+            plt.bar(x - width, n90_ratios, width, label='90% Importance')
+            plt.bar(x, n95_ratios, width, label='95% Importance')
+            plt.bar(x + width, n99_ratios, width, label='99% Importance')
+            
+            plt.xlabel('Feature Group')
+            plt.ylabel('Proportion of Features Needed')
+            plt.title('Feature Importance Distribution Across Groups')
+            plt.xticks(x, groups)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_dir, "feature_group_importance_comparison.png"), dpi=300)
+            plt.close()
+            
+            # 保存比较结果
+            comparison_df = pd.DataFrame({
+                'group': groups,
+                'total_features': [len(feature_groups[g]) for g in groups],
+                'n_features_90': [importance_dict[g]['n_features_90'] for g in groups],
+                'n_features_95': [importance_dict[g]['n_features_95'] for g in groups],
+                'n_features_99': [importance_dict[g]['n_features_99'] for g in groups],
+                'ratio_90': n90_ratios,
+                'ratio_95': n95_ratios,
+                'ratio_99': n99_ratios
+            })
+            comparison_df.to_csv(os.path.join(save_dir, "feature_group_importance_comparison.csv"), index=False)
+        
+        except Exception as e:
+            logger.error(f"比较特征组重要性时出错: {str(e)}")
+    
+    return importance_dict
+
+    
 if __name__ == "__main__":
     # 测试特征分析功能
     print("特征分析模块测试")
@@ -567,189 +784,3 @@ if __name__ == "__main__":
                                               use_gpu=False, save_dir=test_save_dir)
     
     print("测试完成")#!/usr/bin/env python
-
-
-
-
-def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=100, 
-                            use_gpu=False, save_dir=None):
-    """
-    使用随机森林分析特征重要性
-    
-    参数:
-        data: 输入数据
-        labels: 类别标签
-        feature_groups: 特征组字典
-        n_estimators: 随机森林中树的数量
-        use_gpu: 是否使用GPU加速
-        save_dir: 结果保存目录
-    
-    返回:
-        importance_dict: 特征重要性分析结果字典
-    """
-    if feature_groups is None:
-        feature_groups = {
-            'all_features': list(range(data.shape[1]))
-        }
-    
-    if save_dir and not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    
-    importance_dict = {}
-    
-    for group_name, indices in tqdm(feature_groups.items(), desc="分析特征重要性"):
-        logger.info(f"分析特征组 {group_name} 的特征重要性")
-        
-        # 提取特征组数据
-        group_data = data[:, indices]
-        # 训练随机森林模型
-        start_time = time.time()
-        if use_gpu and HAS_GPU:
-            try:
-                # 使用GPU版本的随机森林
-                forest = cuRF(n_estimators=n_estimators, random_state=42)
-                forest.fit(group_data, labels)
-                importances = forest.feature_importances_
-                
-                # cuML的feature_importances_属性返回numpy数组，无需转换
-                
-                # 释放GPU内存
-                del forest
-                cp.get_default_memory_pool().free_all_blocks()
-                
-            except Exception as e:
-                logger.error(f"GPU处理失败: {str(e)}")
-                logger.info("回退到CPU处理...")
-                
-                forest = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
-                forest.fit(group_data, labels)
-                importances = forest.feature_importances_
-        else:
-            forest = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
-            forest.fit(group_data, labels)
-            importances = forest.feature_importances_
-        
-        elapsed = time.time() - start_time
-        logger.info(f"  随机森林训练完成，耗时 {elapsed:.2f} 秒")
-        
-        # 排序并分析重要性
-        indices = np.argsort(importances)[::-1]
-        sorted_importances = importances[indices]
-        sorted_feature_indices = [indices[i] for i in range(len(indices))]
-        cumulative_importance = np.cumsum(sorted_importances)
-        
-        # 计算统计信息
-        n_features_90 = np.argmax(cumulative_importance >= 0.9) + 1
-        n_features_95 = np.argmax(cumulative_importance >= 0.95) + 1
-        n_features_99 = np.argmax(cumulative_importance >= 0.99) + 1
-        
-        logger.info(f"  覆盖90%重要性需要的特征数: {n_features_90} ({n_features_90/len(indices)*100:.1f}%)")
-        logger.info(f"  覆盖95%重要性需要的特征数: {n_features_95} ({n_features_95/len(indices)*100:.1f}%)")
-        logger.info(f"  覆盖99%重要性需要的特征数: {n_features_99} ({n_features_99/len(indices)*100:.1f}%)")
-        
-        # 保存结果
-        importance_dict[group_name] = {
-            'importances': importances,
-            'sorted_indices': indices,
-            'sorted_importances': sorted_importances,
-            'cumulative_importance': cumulative_importance,
-            'n_features_90': n_features_90,
-            'n_features_95': n_features_95,
-            'n_features_99': n_features_99
-        }
-        
-        # 可视化特征重要性
-        if save_dir:
-            # 绘制特征重要性条形图
-            plt.figure(figsize=(14, 8))
-            
-            # 只绘制前30个特征
-            n_top = min(30, len(indices))
-            plt.barh(range(n_top), sorted_importances[:n_top])
-            plt.yticks(range(n_top), [f"Feature {indices[i]}" for i in range(n_top)])
-            plt.xlabel("Feature Importance")
-            plt.title(f"Top {n_top} Feature Importance for {group_name}")
-            plt.tight_layout()
-            plt.savefig(os.path.join(save_dir, f"{group_name}_feature_importance.png"), dpi=300)
-            plt.close()
-            
-            # 绘制累积重要性曲线
-            plt.figure(figsize=(10, 6))
-            # 检查无穷大或NaN值
-            mask = np.isfinite(cumulative_importance)
-            if not np.all(mask):
-                logger.warning(f"发现{np.sum(~mask)}个非有限值，已在绘图中过滤")
-                x_values = np.array(range(1, len(indices)+1))[mask]
-                y_values = cumulative_importance[mask]
-                plt.plot(x_values, y_values)
-            else:
-                plt.plot(range(1, len(indices)+1), cumulative_importance)
-            plt.axhline(y=0.9, color='r', linestyle='--', label='90% Importance')
-
-
-
-
-
-
-            plt.axhline(y=0.95, color='g', linestyle='--', label='95% Importance')
-            plt.axhline(y=0.99, color='b', linestyle='--', label='99% Importance')
-            plt.axvline(x=n_features_90, color='r', linestyle=':')
-            plt.axvline(x=n_features_95, color='g', linestyle=':')
-            plt.axvline(x=n_features_99, color='b', linestyle=':')
-            plt.xlabel("Number of Features")
-            plt.ylabel("Cumulative Importance")
-            plt.title(f"Cumulative Feature Importance for {group_name}")
-            plt.legend()
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(os.path.join(save_dir, f"{group_name}_cumulative_importance.png"), dpi=300)
-            plt.close()
-            
-            # 保存特征重要性排名到CSV
-            importance_df = pd.DataFrame({
-                'feature_idx': [indices[i] for i in range(len(indices))],
-                'importance': sorted_importances,
-                'cumulative_importance': cumulative_importance
-            })
-            importance_df.to_csv(os.path.join(save_dir, f"{group_name}_feature_importance.csv"), index=False)
-    
-    # 比较不同特征组的重要性分布
-    if len(feature_groups) > 1 and save_dir:
-        plt.figure(figsize=(12, 6))
-        
-        # 绘制每个特征组所需的特征比例
-        groups = list(feature_groups.keys())
-        n90_ratios = [importance_dict[g]['n_features_90'] / len(feature_groups[g]) for g in groups]
-        n95_ratios = [importance_dict[g]['n_features_95'] / len(feature_groups[g]) for g in groups]
-        n99_ratios = [importance_dict[g]['n_features_99'] / len(feature_groups[g]) for g in groups]
-        
-        x = np.arange(len(groups))
-        width = 0.25
-        
-        plt.bar(x - width, n90_ratios, width, label='90% Importance')
-        plt.bar(x, n95_ratios, width, label='95% Importance')
-        plt.bar(x + width, n99_ratios, width, label='99% Importance')
-        
-        plt.xlabel('Feature Group')
-        plt.ylabel('Proportion of Features Needed')
-        plt.title('Feature Importance Distribution Across Groups')
-        plt.xticks(x, groups)
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "feature_group_importance_comparison.png"), dpi=300)
-        plt.close()
-        
-        # 保存比较结果
-        comparison_df = pd.DataFrame({
-            'group': groups,
-            'total_features': [len(feature_groups[g]) for g in groups],
-            'n_features_90': [importance_dict[g]['n_features_90'] for g in groups],
-            'n_features_95': [importance_dict[g]['n_features_95'] for g in groups],
-            'n_features_99': [importance_dict[g]['n_features_99'] for g in groups],
-            'ratio_90': n90_ratios,
-            'ratio_95': n95_ratios,
-            'ratio_99': n99_ratios
-        })
-        comparison_df.to_csv(os.path.join(save_dir, "feature_group_importance_comparison.csv"), index=False)
-    
-    return importance_dict
