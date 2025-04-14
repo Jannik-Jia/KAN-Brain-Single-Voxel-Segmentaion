@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脑MRI数据特性分析启动脚本
-# 直接使用固定路径的数据分析
+# 使用固定路径的数据
 
 # 设置环境变量
 export PYTHONPATH=$(pwd):$PYTHONPATH
@@ -50,12 +50,11 @@ esac
 
 # 启动分析脚本
 python main.py \
-    --data_dir "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data" \
+    --data_dir "dummy" \
     --output_dir "$OUTPUT_DIR" \
     --normalize none \
     --gpu \
-    $EXTRA_ARGS \
-    --load_brain_test_data > $LOG_FILE 2>&1 &
+    $EXTRA_ARGS > $LOG_FILE 2>&1 &
 
 # 获取进程ID
 PID=$!

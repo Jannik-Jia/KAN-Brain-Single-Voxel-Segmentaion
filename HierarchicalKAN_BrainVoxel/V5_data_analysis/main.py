@@ -17,7 +17,7 @@ import argparse
 from datetime import datetime
 
 # 导入自定义模块
-from data_loader import load_multiclass_data, preprocess_data, define_big_classes, map_to_big_classes
+from data_loader import preprocess_data, load_brain_voxel_test_data
 from basic_analysis import analyze_basic_stats, analyze_feature_correlation, analyze_class_separability
 from feature_analysis import analyze_feature_importance, evaluate_feature_selection_methods, analyze_feature_combinations
 from dim_reduction import perform_comprehensive_reduction, extract_pca_components
@@ -78,49 +78,22 @@ def perform_analysis(args):
     start_time = datetime.now()
     logger.info(f"开始MRI数据特性分析 - {start_time}")
     
-    # 加载数据
-    if hasattr(args, 'load_brain_test_data') and args.load_brain_test_data:
-        # 使用固定路径的脑MRI数据加载函数
-        logger.info("使用固定路径加载脑MRI测试数据...")
-        from data_loader import load_brain_voxel_test_data
-        dataset = load_brain_voxel_test_data(check_normalization=True)
+    # 加载数据 - 直接使用固定路径加载函数
+    logger.info("使用固定路径加载脑MRI测试数据...")
+    dataset = load_brain_voxel_test_data(check_normalization=True)
+    
+    if dataset is None:
+        logger.error("数据加载失败")
+        return
         
-        if dataset is None:
-            logger.error("数据加载失败")
-            return
-            
-        # 使用test数据进行分析
-        data = dataset['test_samples']
-        labels = dataset['test_labels']
-        feature_groups = dataset['feature_groups']
-    else:
-        # 使用原有的加载函数
-        logger.info(f"加载数据目录: {args.data_dir}")
-        logger.info(f"子集: {args.subset}")
-        logger.info(f"采样比例: {args.sample_ratio}")
-        
-        dataset = load_multiclass_data(args.data_dir, subset=args.subset, sample_ratio=args.sample_ratio)
-        
-        if f"{args.subset}_samples" not in dataset or f"{args.subset}_labels" not in dataset:
-            logger.error(f"未能加载指定的子集: {args.subset}")
-            return
-        
-        data = dataset[f"{args.subset}_samples"]
-        labels = dataset[f"{args.subset}_labels"]
-        feature_groups = dataset['feature_groups']
+    # 使用test数据进行分析
+    data = dataset['test_samples']
+    labels = dataset['test_labels']  # 使用整数标签
+    feature_groups = dataset['feature_groups']
     
     logger.info(f"加载的数据: {data.shape}")
     logger.info(f"标签: {labels.shape}")
     logger.info(f"特征组: {list(feature_groups.keys())}")
-    
-    # 获取大类标签（如果可用）
-    try:
-        fine_to_big, big_to_fine, big_class_names = define_big_classes()
-        big_labels = map_to_big_classes(labels, fine_to_big)
-    except Exception as e:
-        logger.warning(f"无法创建大类标签映射: {str(e)}")
-        big_labels = labels  # 使用原始标签
-        big_class_names = None
     
     # 第2步：数据预处理（只有在需要时）
     if args.normalize != 'none':
@@ -165,7 +138,7 @@ def perform_analysis(args):
         # 类别可分性分析
         logger.info("分析类别可分性...")
         separability_results = analyze_class_separability(
-            data, big_labels, feature_groups=feature_groups, 
+            data, labels, feature_groups=feature_groups, 
             use_gpu=args.gpu, save_dir=basic_dir
         )
         
@@ -176,8 +149,7 @@ def perform_analysis(args):
             f.write("======================\n\n")
             
             f.write(f"数据维度: {data.shape}\n")
-            f.write(f"类别数量: {len(np.unique(labels))}\n")
-            f.write(f"大类数量: {len(np.unique(big_labels))}\n\n")
+            f.write(f"类别数量: {len(np.unique(labels))}\n\n")
             
             f.write("特征组统计:\n")
             for group, indices in feature_groups.items():
@@ -215,7 +187,7 @@ def perform_analysis(args):
         # 特征重要性分析
         logger.info("分析特征重要性...")
         importance_results = analyze_feature_importance(
-            data, big_labels, feature_groups=feature_groups,
+            data, labels, feature_groups=feature_groups,
             use_gpu=args.gpu, save_dir=feature_dir
         )
         
@@ -224,14 +196,14 @@ def perform_analysis(args):
             methods = args.feature_methods.split(',')
             logger.info(f"评估特征选择方法: {methods}...")
             selection_results = evaluate_feature_selection_methods(
-                data, big_labels, feature_groups=feature_groups,
+                data, labels, feature_groups=feature_groups,
                 methods=methods, use_gpu=args.gpu, save_dir=feature_dir
             )
         
         # 特征组合分析
         logger.info("分析特征组合效果...")
         combination_results = analyze_feature_combinations(
-            data, big_labels, feature_groups=feature_groups,
+            data, labels, feature_groups=feature_groups,
             top_k=50, use_gpu=args.gpu, save_dir=feature_dir
         )
         
@@ -270,9 +242,9 @@ def perform_analysis(args):
         # 执行降维分析
         logger.info("执行降维分析...")
         reduction_results = perform_comprehensive_reduction(
-            data, big_labels, feature_groups=feature_groups,
+            data, labels, feature_groups=feature_groups,
             methods=dim_methods, use_gpu=args.gpu, 
-            class_names=big_class_names,
+            class_names=None,
             sample_ratio=min(0.5, args.sample_ratio),  # 限制样本数，避免计算过长
             save_dir=dim_dir
         )
@@ -317,16 +289,15 @@ def perform_analysis(args):
         f.write("数据概况:\n")
         f.write(f"  样本数量: {data.shape[0]}\n")
         f.write(f"  特征维度: {data.shape[1]}\n")
-        f.write(f"  类别数量: {len(np.unique(labels))}\n")
-        f.write(f"  大类数量: {len(np.unique(big_labels))}\n\n")
+        f.write(f"  类别数量: {len(np.unique(labels))}\n\n")
         
         # 类别分布特点
-        unique_big, counts_big = np.unique(big_labels, return_counts=True)
-        class_ratio = max(counts_big) / min(counts_big)
+        unique_classes, counts = np.unique(labels, return_counts=True)
+        class_ratio = max(counts) / min(counts)
         f.write("类别分布特点:\n")
-        f.write(f"  大类不平衡比例: {class_ratio:.2f}\n")
-        f.write(f"  最小类样本数: {min(counts_big)}\n")
-        f.write(f"  最大类样本数: {max(counts_big)}\n\n")
+        f.write(f"  类别不平衡比例: {class_ratio:.2f}\n")
+        f.write(f"  最小类样本数: {min(counts)}\n")
+        f.write(f"  最大类样本数: {max(counts)}\n\n")
         
         # 特征相关性和冗余性
         if 'corr_results' in locals():

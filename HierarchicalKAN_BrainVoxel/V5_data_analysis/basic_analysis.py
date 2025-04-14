@@ -240,6 +240,237 @@ def analyze_basic_stats(data, feature_groups=None, use_gpu=False, save_dir=None)
     
     return stats_dict
 
+# def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_dir=None, 
+#                               max_features_per_group=100):
+#     """
+#     分析特征之间的相关性
+    
+#     参数:
+#         data: 输入数据
+#         feature_groups: 特征组字典
+#         use_gpu: 是否使用GPU加速
+#         save_dir: 结果保存目录
+#         max_features_per_group: 每个特征组最多分析的特征数量
+    
+#     返回:
+#         corr_dict: 相关性分析结果字典
+#     """
+#     if feature_groups is None:
+#         feature_groups = {
+#             'all_features': list(range(data.shape[1]))
+#         }
+    
+#     if save_dir and not os.path.exists(save_dir):
+#         os.makedirs(save_dir)
+    
+#     corr_dict = {}
+    
+#     for group_name, indices in tqdm(feature_groups.items(), desc="分析特征相关性"):
+#         logger.info(f"分析特征组 {group_name} 内部相关性")
+        
+#         # 如果特征太多，随机采样一部分
+#         if len(indices) > max_features_per_group:
+#             logger.info(f"特征数量 ({len(indices)}) 超过限制 ({max_features_per_group})，随机采样")
+#             sampled_indices = np.random.choice(indices, max_features_per_group, replace=False)
+#             sampled_indices.sort()  # 保持索引有序
+#         else:
+#             sampled_indices = indices
+        
+#         # 提取特征组数据
+#         group_data = data[:, sampled_indices]
+        
+#         # 计算相关性矩阵
+#         if use_gpu and HAS_GPU:
+#             try:
+#                 # 使用cuDF计算相关性
+#                 import cudf
+#                 df_gpu = cudf.DataFrame(group_data)
+#                 corr_matrix = df_gpu.corr().values.get()
+                
+#                 # 释放GPU内存
+#                 del df_gpu
+#                 cp.get_default_memory_pool().free_all_blocks()
+                
+#             except Exception as e:
+#                 logger.error(f"GPU处理失败: {str(e)}")
+#                 logger.info("回退到CPU处理...")
+#                 corr_matrix = np.corrcoef(group_data.T)
+#         else:
+#             corr_matrix = np.corrcoef(group_data.T)
+        
+#         # 分析相关性统计
+#         # 取相关性矩阵的上三角部分
+#         upper_triangle = np.triu(corr_matrix, k=1)
+#         mask = upper_triangle != 0
+#         if np.any(mask):
+#             abs_corrs = np.abs(upper_triangle[mask])
+#             high_corr_ratio = np.mean(abs_corrs > 0.7)
+#             mean_abs_corr = np.mean(abs_corrs)
+#         else:
+#             high_corr_ratio = 0
+#             mean_abs_corr = 0
+        
+#         logger.info(f"  平均绝对相关系数: {mean_abs_corr:.4f}")
+#         logger.info(f"  高度相关 (|r| > 0.7) 特征占比: {high_corr_ratio:.4f}")
+        
+#         # 保存相关性分析结果
+#         corr_dict[group_name] = {
+#             'corr_matrix': corr_matrix,
+#             'feature_indices': sampled_indices,
+#             'mean_abs_corr': mean_abs_corr,
+#             'high_corr_ratio': high_corr_ratio
+#         }
+        
+#         # 可视化相关性矩阵
+#         if save_dir:
+#             plt.figure(figsize=(12, 10))
+#             mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+#             sns.heatmap(corr_matrix, mask=mask, cmap="coolwarm", 
+#                        vmin=-1, vmax=1, center=0, annot=False, 
+#                        square=True, linewidths=.5)
+#             plt.title(f"{group_name} Feature Correlation Matrix")
+#             plt.tight_layout()
+#             plt.savefig(os.path.join(save_dir, f"{group_name}_correlation.png"), dpi=300)
+#             plt.close()
+            
+#             # 保存相关性统计
+#             with open(os.path.join(save_dir, f"{group_name}_correlation_stats.txt"), 'w') as f:
+#                 f.write(f"特征组: {group_name}\n")
+#                 f.write(f"特征数量: {len(sampled_indices)}\n")
+#                 f.write(f"平均绝对相关系数: {mean_abs_corr:.4f}\n")
+#                 f.write(f"高度相关 (|r| > 0.7) 特征占比: {high_corr_ratio:.4f}\n")
+                
+#                 # 找出高度相关的特征对
+#                 highly_correlated = []
+#                 for i in range(corr_matrix.shape[0]):
+#                     for j in range(i+1, corr_matrix.shape[1]):
+#                         if abs(corr_matrix[i, j]) > 0.7:
+#                             highly_correlated.append((
+#                                 sampled_indices[i], 
+#                                 sampled_indices[j], 
+#                                 corr_matrix[i, j]
+#                             ))
+                
+#                 # 排序并输出
+#                 highly_correlated.sort(key=lambda x: abs(x[2]), reverse=True)
+#                 f.write("\n高度相关的特征对 (top 20):\n")
+#                 for i, (idx1, idx2, corr) in enumerate(highly_correlated[:20]):
+#                     f.write(f"{i+1}. 特征 {idx1} - 特征 {idx2}: {corr:.4f}\n")
+    
+#     # 分析特征组间相关性
+#     if len(feature_groups) > 1:
+#         logger.info("分析特征组间相关性")
+        
+#         # 计算每个特征组的代表性特征
+#         group_representatives = {}
+#         for group_name, indices in feature_groups.items():
+#             # 使用主成分分析提取代表性特征
+#             if len(indices) > 10:
+#                 # 随机选择10个特征
+#                 group_representatives[group_name] = np.random.choice(indices, 10, replace=False)
+#             else:
+#                 group_representatives[group_name] = indices
+        
+#         # 提取所有代表性特征
+#         all_repr_indices = []
+#         group_indices = []  # 记录每个特征属于哪个组
+#         for group_id, (group_name, indices) in enumerate(group_representatives.items()):
+#             all_repr_indices.extend(indices)
+#             group_indices.extend([group_id] * len(indices))
+        
+#         all_repr_data = data[:, all_repr_indices]
+        
+#         # 计算相关性矩阵
+#         if use_gpu and HAS_GPU:
+#             try:
+#                 import cudf
+#                 df_gpu = cudf.DataFrame(all_repr_data)
+#                 cross_corr_matrix = df_gpu.corr().values.get()
+                
+#                 # 释放GPU内存
+#                 del df_gpu
+#                 cp.get_default_memory_pool().free_all_blocks()
+#             except Exception as e:
+#                 logger.error(f"GPU处理失败: {str(e)}")
+#                 logger.info("回退到CPU处理...")
+#                 cross_corr_matrix = np.corrcoef(all_repr_data.T)
+#         else:
+#             cross_corr_matrix = np.corrcoef(all_repr_data.T)
+        
+#         # 计算特征组间平均相关性
+#         group_names = list(group_representatives.keys())
+#         n_groups = len(group_names)
+#         between_group_corr = np.zeros((n_groups, n_groups))
+        
+#         for i in range(n_groups):
+#             for j in range(n_groups):
+#                 if i == j:
+#                     continue
+                
+#                 # 获取组i和组j的索引
+#                 i_indices = [k for k, g in enumerate(group_indices) if g == i]
+#                 j_indices = [k for k, g in enumerate(group_indices) if g == j]
+                
+#                 # 提取组间相关系数
+#                 cross_corrs = np.abs(cross_corr_matrix[np.ix_(i_indices, j_indices)])
+#                 between_group_corr[i, j] = np.mean(cross_corrs)
+        
+#         logger.info("特征组间平均绝对相关系数:")
+#         for i in range(n_groups):
+#             for j in range(i+1, n_groups):
+#                 logger.info(f"  {group_names[i]} - {group_names[j]}: {between_group_corr[i, j]:.4f}")
+        
+#         # 可视化特征组间相关性
+#         if save_dir:
+#             plt.figure(figsize=(10, 8))
+#             sns.heatmap(between_group_corr, annot=True, cmap="YlGnBu", 
+#                        xticklabels=group_names, yticklabels=group_names)
+#             plt.title("Between-Group Feature Correlation")
+#             plt.tight_layout()
+#             plt.savefig(os.path.join(save_dir, "between_group_correlation.png"), dpi=300)
+#             plt.close()
+            
+#             # 保存组间相关性结果
+#             np.save(os.path.join(save_dir, "between_group_correlation.npy"), between_group_corr)
+            
+#             # 创建详细的交叉相关性可视化
+#             plt.figure(figsize=(14, 12))
+            
+#             # 创建组标签
+#             group_labels = []
+#             for group_id, group_name in enumerate(group_names):
+#                 count = len([g for g in group_indices if g == group_id])
+#                 group_labels.extend([group_name] * count)
+            
+#             # 重新排序相关性矩阵，按特征组划分
+#             ordered_indices = np.argsort(group_indices)
+#             ordered_matrix = cross_corr_matrix[np.ix_(ordered_indices, ordered_indices)]
+            
+#             # 绘制热图
+#             sns.heatmap(ordered_matrix, cmap="coolwarm", center=0, vmin=-1, vmax=1)
+            
+#             # 添加特征组分隔线
+#             group_sizes = [len(indices) for indices in group_representatives.values()]
+#             cumulative_sizes = np.cumsum(group_sizes)
+            
+#             for size in cumulative_sizes[:-1]:
+#                 plt.axhline(y=size, color='black', linestyle='-', linewidth=1)
+#                 plt.axvline(x=size, color='black', linestyle='-', linewidth=1)
+            
+#             # 添加组标签
+#             plt.title("Cross-Feature Correlation Matrix")
+#             plt.tight_layout()
+#             plt.savefig(os.path.join(save_dir, "cross_feature_correlation.png"), dpi=300)
+#             plt.close()
+        
+#         # 添加组间相关性结果到返回字典
+#         corr_dict['between_groups'] = {
+#             'corr_matrix': between_group_corr,
+#             'group_names': group_names
+#         }
+    
+#     return corr_dict
+
 def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_dir=None, 
                               max_features_per_group=100):
     """
@@ -265,6 +496,20 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
     
     corr_dict = {}
     
+    # 如果使用GPU，一次性将整个数据转移到GPU内存
+    if use_gpu and HAS_GPU:
+        try:
+            data_gpu = cp.asarray(data)
+            using_gpu = True
+            logger.info("数据已成功转移到GPU")
+        except Exception as e:
+            logger.error(f"无法将数据转移到GPU: {str(e)}")
+            logger.info("将使用CPU进行计算")
+            using_gpu = False
+    else:
+        using_gpu = False
+    
+    # 计算每个特征组的内部相关性
     for group_name, indices in tqdm(feature_groups.items(), desc="分析特征相关性"):
         logger.info(f"分析特征组 {group_name} 内部相关性")
         
@@ -276,36 +521,43 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
         else:
             sampled_indices = indices
         
-        # 提取特征组数据
-        group_data = data[:, sampled_indices]
-        
-        # 计算相关性矩阵
-        if use_gpu and HAS_GPU:
+        # 使用GPU加速计算相关性矩阵
+        if using_gpu:
             try:
-                # 使用cuDF计算相关性
-                import cudf
-                df_gpu = cudf.DataFrame(group_data)
-                corr_matrix = df_gpu.corr().values.get()
+                # 直接在GPU上索引数据，避免数据传输
+                group_data_gpu = data_gpu[:, sampled_indices]
                 
-                # 释放GPU内存
-                del df_gpu
-                cp.get_default_memory_pool().free_all_blocks()
+                # 使用cuPy直接计算相关性矩阵
+                # 注：对于大型矩阵，cuPy的corrcoef可能更高效
+                corr_matrix = cp.corrcoef(group_data_gpu.T)
+                
+                # 仅在需要时将结果转回CPU
+                corr_matrix_cpu = corr_matrix.get()
+                
+                # 如果内存紧张，可以释放不再需要的GPU变量
+                del corr_matrix
                 
             except Exception as e:
-                logger.error(f"GPU处理失败: {str(e)}")
-                logger.info("回退到CPU处理...")
-                corr_matrix = np.corrcoef(group_data.T)
+                logger.error(f"GPU计算相关性失败: {str(e)}")
+                logger.info("回退到CPU计算...")
+                
+                # 提取特征组数据(CPU)
+                group_data = data[:, sampled_indices]
+                corr_matrix_cpu = np.corrcoef(group_data.T)
         else:
-            corr_matrix = np.corrcoef(group_data.T)
+            # CPU方式计算相关性
+            group_data = data[:, sampled_indices]
+            corr_matrix_cpu = np.corrcoef(group_data.T)
         
-        # 分析相关性统计
-        # 取相关性矩阵的上三角部分
-        upper_triangle = np.triu(corr_matrix, k=1)
+        # 分析相关性统计(在CPU上)
+        # 取相关性矩阵的上三角部分，排除对角线
+        upper_triangle = np.triu(corr_matrix_cpu, k=1)
         mask = upper_triangle != 0
+        
         if np.any(mask):
             abs_corrs = np.abs(upper_triangle[mask])
-            high_corr_ratio = np.mean(abs_corrs > 0.7)
-            mean_abs_corr = np.mean(abs_corrs)
+            high_corr_ratio = np.mean(abs_corrs > 0.7) if len(abs_corrs) > 0 else 0
+            mean_abs_corr = np.mean(abs_corrs) if len(abs_corrs) > 0 else 0
         else:
             high_corr_ratio = 0
             mean_abs_corr = 0
@@ -315,7 +567,7 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
         
         # 保存相关性分析结果
         corr_dict[group_name] = {
-            'corr_matrix': corr_matrix,
+            'corr_matrix': corr_matrix_cpu,
             'feature_indices': sampled_indices,
             'mean_abs_corr': mean_abs_corr,
             'high_corr_ratio': high_corr_ratio
@@ -324,8 +576,8 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
         # 可视化相关性矩阵
         if save_dir:
             plt.figure(figsize=(12, 10))
-            mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
-            sns.heatmap(corr_matrix, mask=mask, cmap="coolwarm", 
+            mask_plt = np.triu(np.ones_like(corr_matrix_cpu, dtype=bool))
+            sns.heatmap(corr_matrix_cpu, mask=mask_plt, cmap="coolwarm", 
                        vmin=-1, vmax=1, center=0, annot=False, 
                        square=True, linewidths=.5)
             plt.title(f"{group_name} Feature Correlation Matrix")
@@ -342,13 +594,13 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
                 
                 # 找出高度相关的特征对
                 highly_correlated = []
-                for i in range(corr_matrix.shape[0]):
-                    for j in range(i+1, corr_matrix.shape[1]):
-                        if abs(corr_matrix[i, j]) > 0.7:
+                for i in range(corr_matrix_cpu.shape[0]):
+                    for j in range(i+1, corr_matrix_cpu.shape[1]):
+                        if abs(corr_matrix_cpu[i, j]) > 0.7:
                             highly_correlated.append((
                                 sampled_indices[i], 
                                 sampled_indices[j], 
-                                corr_matrix[i, j]
+                                corr_matrix_cpu[i, j]
                             ))
                 
                 # 排序并输出
@@ -364,9 +616,8 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
         # 计算每个特征组的代表性特征
         group_representatives = {}
         for group_name, indices in feature_groups.items():
-            # 使用主成分分析提取代表性特征
+            # 如果特征组太大，随机选择代表性特征
             if len(indices) > 10:
-                # 随机选择10个特征
                 group_representatives[group_name] = np.random.choice(indices, 10, replace=False)
             else:
                 group_representatives[group_name] = indices
@@ -378,23 +629,21 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
             all_repr_indices.extend(indices)
             group_indices.extend([group_id] * len(indices))
         
-        all_repr_data = data[:, all_repr_indices]
-        
-        # 计算相关性矩阵
-        if use_gpu and HAS_GPU:
+        # 使用GPU计算特征组间相关性
+        if using_gpu:
             try:
-                import cudf
-                df_gpu = cudf.DataFrame(all_repr_data)
-                cross_corr_matrix = df_gpu.corr().values.get()
+                # 直接在GPU上索引数据
+                all_repr_data_gpu = data_gpu[:, all_repr_indices]
+                cross_corr_matrix = cp.corrcoef(all_repr_data_gpu.T).get()
                 
-                # 释放GPU内存
-                del df_gpu
-                cp.get_default_memory_pool().free_all_blocks()
             except Exception as e:
-                logger.error(f"GPU处理失败: {str(e)}")
-                logger.info("回退到CPU处理...")
+                logger.error(f"GPU计算特征组间相关性失败: {str(e)}")
+                logger.info("回退到CPU计算...")
+                
+                all_repr_data = data[:, all_repr_indices]
                 cross_corr_matrix = np.corrcoef(all_repr_data.T)
         else:
+            all_repr_data = data[:, all_repr_indices]
             cross_corr_matrix = np.corrcoef(all_repr_data.T)
         
         # 计算特征组间平均相关性
@@ -413,7 +662,7 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
                 
                 # 提取组间相关系数
                 cross_corrs = np.abs(cross_corr_matrix[np.ix_(i_indices, j_indices)])
-                between_group_corr[i, j] = np.mean(cross_corrs)
+                between_group_corr[i, j] = np.mean(cross_corrs) if cross_corrs.size > 0 else 0
         
         logger.info("特征组间平均绝对相关系数:")
         for i in range(n_groups):
@@ -469,7 +718,14 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
             'group_names': group_names
         }
     
+    # 最后释放GPU内存
+    if using_gpu:
+        del data_gpu
+        cp.get_default_memory_pool().free_all_blocks()
+    
     return corr_dict
+
+    
 
 def analyze_class_separability(data, labels, feature_groups=None, use_gpu=False, save_dir=None):
     """
