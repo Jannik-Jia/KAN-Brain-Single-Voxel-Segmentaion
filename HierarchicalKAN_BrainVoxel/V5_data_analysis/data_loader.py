@@ -54,11 +54,12 @@ def load_brain_voxel_test_data(check_normalization=True):
     返回:
         dataset: 包含数据和标签的字典
     """
-    # 固定的数据路径
+
     base_path = '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data'
-    test_label_dir = os.path.join(base_path, 'test_set_by_label')
+    test_label_dir = os.path.join(base_path, 'restructured/test')
     
     logger.info(f"从固定路径加载测试数据: {test_label_dir}")
+
     
     # 读取标签索引文件
     index_file = os.path.join(test_label_dir, "test_label_index.txt")
