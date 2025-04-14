@@ -44,7 +44,8 @@ def parse_args():
                       help='使用的数据子集 (default: val)')
     parser.add_argument('--sample_ratio', type=float, default=1.0, help='数据采样比例 (0.0-1.0)')
     parser.add_argument('--load_by_label', action='store_true', help='使用按标签分类方式加载数据')
-
+    parser.add_argument('--load_brain_test_data', action='store_true', help='使用固定路径加载脑测试数据')
+    
     
     # 输出参数
     parser.add_argument('--output_dir', type=str, default='analysis_results', help='结果输出目录')

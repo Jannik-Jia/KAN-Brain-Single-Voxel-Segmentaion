@@ -48,31 +48,14 @@ case $ANALYSIS_TYPE in
         ;;
 esac
 
-# 启动分析脚本，使用--load_brain_test_data参数指示使用固定路径加载
-python - <<EOF > $LOG_FILE 2>&1 &
-import os
-import sys
-import numpy as np
-import argparse
-from main import logger, perform_analysis
-
-# 配置参数
-class Args:
-    def __init__(self):
-        self.output_dir = "$OUTPUT_DIR"
-        self.normalize = "none"  # 不进行额外标准化
-        self.gpu = True  # 使用GPU
-        self.skip_basic = "--skip_basic" in "$EXTRA_ARGS"
-        self.skip_feature = "--skip_feature" in "$EXTRA_ARGS" 
-        self.skip_dim_reduction = "--skip_dim_reduction" in "$EXTRA_ARGS"
-        self.dim_methods = "pca,tsne,umap"
-        self.feature_methods = "rf,mi"
-        self.load_brain_test_data = True  # 指示使用我们的固定路径数据加载器
-
-args = Args()
-logger.info("使用固定路径加载脑MRI数据")
-perform_analysis(args)
-EOF
+# 启动分析脚本
+python main.py \
+    --data_dir "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data" \
+    --output_dir "$OUTPUT_DIR" \
+    --normalize none \
+    --gpu \
+    $EXTRA_ARGS \
+    --load_brain_test_data > $LOG_FILE 2>&1 &
 
 # 获取进程ID
 PID=$!

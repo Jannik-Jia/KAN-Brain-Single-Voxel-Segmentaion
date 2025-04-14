@@ -46,7 +46,7 @@ FEATURE_GROUPS = {
 
 def load_brain_voxel_test_data(check_normalization=True):
     """
-    直接加载脑部MRI测试数据（固定路径版本）
+    加载脑部MRI测试数据集，处理one-hot标签格式
     
     参数:
         check_normalization: 是否检查数据是否已标准化
@@ -99,7 +99,7 @@ def load_brain_voxel_test_data(check_normalization=True):
     
     # 初始化数据和标签列表
     all_data = []
-    all_labels = []
+    all_onehot_labels = []  # 存储one-hot编码标签
     
     # 加载每个标签的数据
     for label_id in tqdm(valid_labels, desc="加载标签数据"):
@@ -114,22 +114,41 @@ def load_brain_voxel_test_data(check_normalization=True):
             # 加载数据文件
             label_data = np.load(data_file)
             
-            # 对于每个样本，添加数据和标签
-            n_samples = label_data.shape[0]
-            all_data.append(label_data)
+            # 假设标签文件包含特征数据和one-hot编码标签
+            # 我们需要确定哪部分是特征，哪部分是标签
             
-            # 创建标签：所有样本都是同一个标签
-            labels = np.full(n_samples, label_id, dtype=np.int32)
-            all_labels.append(labels)
+            # 如果数据是二维的，可能已经只包含特征
+            if len(label_data.shape) == 2:
+                features = label_data
+                # 创建该标签的one-hot编码
+                n_samples = features.shape[0]
+                onehot = np.zeros((n_samples, 102))
+                onehot[:, label_id] = 1
+            # 如果数据包含标签，可能需要分离
+            # 注意：这里假设最后102列是one-hot标签，实际情况可能需要调整
+            elif label_data.shape[1] > 341 + 102:  # 特征341维 + 标签102维
+                features = label_data[:, :-102]  # 假设前面是特征
+                onehot = label_data[:, -102:]    # 假设后面是标签
+            else:
+                # 如果数据格式不明确，可能需要特殊处理
+                # 这里假设数据只包含特征
+                features = label_data
+                # 创建该标签的one-hot编码
+                n_samples = features.shape[0]
+                onehot = np.zeros((n_samples, 102))
+                onehot[:, label_id] = 1
+            
+            all_data.append(features)
+            all_onehot_labels.append(onehot)
                 
-            logger.info(f"加载标签 {label_id} 的 {n_samples} 个样本")
+            logger.info(f"加载标签 {label_id} 的 {features.shape[0]} 个样本，特征维度: {features.shape[1]}")
             
         except Exception as e:
             logger.error(f"加载标签 {label_id} 的数据时出错: {str(e)}")
     
-    # 合并所有数据
+    # 转换为numpy数组
     all_data = np.vstack(all_data) if all_data else np.array([])
-    all_labels = np.concatenate(all_labels) if all_labels else np.array([])
+    all_onehot_labels = np.vstack(all_onehot_labels) if all_onehot_labels else np.array([])
     
     # 检查数据是否已标准化
     if check_normalization and all_data.size > 0:
@@ -148,27 +167,30 @@ def load_brain_voxel_test_data(check_normalization=True):
             logger.info(f"  特征均值范围: [{np.min(feature_means):.4f}, {np.max(feature_means):.4f}]")
             logger.info(f"  特征标准差范围: [{np.min(feature_stds):.4f}, {np.max(feature_stds):.4f}]")
     
+    # 从one-hot转换为整数标签（便于某些分析）
+    int_labels = np.argmax(all_onehot_labels, axis=1) if all_onehot_labels.size > 0 else np.array([])
+    
     # 统计各标签的样本数量
-    if len(all_labels) > 0:
-        unique_labels, label_counts = np.unique(all_labels, return_counts=True)
-        for label, count in zip(unique_labels, label_counts):
+    if int_labels.size > 0:
+        unique_labels, counts = np.unique(int_labels, return_counts=True)
+        for label, count in zip(unique_labels, counts):
             logger.info(f"标签 {label}: {count} 个样本")
     
     # 构建结果字典
     result = {
         'test_samples': all_data,
-        'test_labels': all_labels,
+        'test_labels': int_labels,  # 整数标签，便于某些分析
+        'test_labels_onehot': all_onehot_labels,  # 原始one-hot标签
         'feature_groups': FEATURE_GROUPS,  # 使用预定义的特征组
         'label_info': label_info,
         'valid_labels': valid_labels
     }
     
-    logger.info(f"测试数据加载完成: {all_data.shape}, 标签: {all_labels.shape}")
+    logger.info(f"测试数据加载完成: {all_data.shape}, 标签: {all_onehot_labels.shape}")
     if all_data.size > 0:
         logger.info(f"数据范围: [{np.min(all_data):.4f}, {np.max(all_data):.4f}]")
     
     return result
-    
 
 
 def load_voxel_data_by_label(test_label_dir, feature_dim=341, check_normalization=True):
