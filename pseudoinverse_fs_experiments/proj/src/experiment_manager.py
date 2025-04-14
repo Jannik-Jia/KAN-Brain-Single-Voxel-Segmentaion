@@ -230,36 +230,41 @@ class ExperimentManager:
         # 追加到日志文件
         with open(self.experiment_log_path, 'a') as f:
             f.write(log_entry)
-    
 
+        
+    
     def _save_results(self, experiment_dir, results):
-        """保存实验结果到JSON文件"""
-        # 定义递归转换NumPy类型的函数
-        def convert_numpy_types(obj):
-            """递归转换字典中的NumPy类型为Python原生类型"""
-            if isinstance(obj, dict):
-                return {k: convert_numpy_types(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_numpy_types(item) for item in obj]
-            elif isinstance(obj, np.bool_):  # 特别处理 np.bool_ 类型
-                return bool(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist() if obj.size > 0 else []
-            elif isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif str(type(obj)).startswith("<class 'numpy"):  # 捕获其他NumPy类型
-                return obj.item() if hasattr(obj, 'item') else str(obj)
-            else:
-                return obj
+        """保存实验结果到JSON文件 - 已禁用"""
+        # 直接返回，不保存 result.json 文件
+        return
         
-        # 保存评估结果
-        with open(os.path.join(experiment_dir, "results.json"), 'w') as f:
-            # 转换NumPy类型为Python原生类型
-            results_json = convert_numpy_types(results)
-            json.dump(results_json, f, indent=4)
+        # # 以下代码不会执行
+        # # 定义递归转换NumPy类型的函数
+        # def convert_numpy_types(obj):
+        #     """递归转换字典中的NumPy类型为Python原生类型"""
+        #     if isinstance(obj, dict):
+        #         return {k: convert_numpy_types(v) for k, v in obj.items()}
+        #     elif isinstance(obj, list):
+        #         return [convert_numpy_types(item) for item in obj]
+        #     elif isinstance(obj, np.bool_):  # 特别处理 np.bool_ 类型
+        #         return bool(obj)
+        #     elif isinstance(obj, np.ndarray):
+        #         return obj.tolist() if obj.size > 0 else []
+        #     elif isinstance(obj, np.integer):
+        #         return int(obj)
+        #     elif isinstance(obj, np.floating):
+        #         return float(obj)
+        #     elif str(type(obj)).startswith("<class 'numpy"):  # 捕获其他NumPy类型
+        #         return obj.item() if hasattr(obj, 'item') else str(obj)
+        #     else:
+        #         return obj
         
+        # # 保存评估结果
+        # with open(os.path.join(experiment_dir, "results.json"), 'w') as f:
+        #     # 转换NumPy类型为Python原生类型
+        #     results_json = convert_numpy_types(results)
+        #     json.dump(results_json, f, indent=4)
+            
 
     def _load_results(self, experiment_dir):
         """加载保存的实验结果"""
