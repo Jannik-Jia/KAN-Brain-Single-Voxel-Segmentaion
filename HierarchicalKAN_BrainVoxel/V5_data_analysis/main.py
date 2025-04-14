@@ -33,6 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('main')
 
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description="MRI数据特性分析工具")
@@ -42,6 +43,8 @@ def parse_args():
     parser.add_argument('--subset', type=str, default='val', choices=['train', 'val', 'test', 'all'],
                       help='使用的数据子集 (default: val)')
     parser.add_argument('--sample_ratio', type=float, default=1.0, help='数据采样比例 (0.0-1.0)')
+    parser.add_argument('--load_by_label', action='store_true', help='使用按标签分类方式加载数据')
+
     
     # 输出参数
     parser.add_argument('--output_dir', type=str, default='analysis_results', help='结果输出目录')
@@ -64,55 +67,78 @@ def parse_args():
     
     return parser.parse_args()
 
-def main():
-    """主执行函数"""
-    # 解析命令行参数
-    args = parse_args()
-    
+
+def perform_analysis(args):
+    """执行分析函数，支持直接从参数调用"""
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
     
     # 记录开始时间
     start_time = datetime.now()
     logger.info(f"开始MRI数据特性分析 - {start_time}")
-    logger.info(f"数据目录: {args.data_dir}")
-    logger.info(f"子集: {args.subset}")
-    logger.info(f"采样比例: {args.sample_ratio}")
-    logger.info(f"输出目录: {args.output_dir}")
-    logger.info(f"标准化方法: {args.normalize}")
-    logger.info(f"GPU加速: {args.gpu}")
     
-    # 第1步：加载数据
-    logger.info("\n======== 第1步：加载数据 ========")
-    dataset = load_multiclass_data(args.data_dir, subset=args.subset, sample_ratio=args.sample_ratio)
-    
-    if f"{args.subset}_samples" not in dataset or f"{args.subset}_labels" not in dataset:
-        logger.error(f"未能加载指定的子集: {args.subset}")
-        return
-    
-    data = dataset[f"{args.subset}_samples"]
-    labels = dataset[f"{args.subset}_labels"]
-    feature_groups = dataset['feature_groups']
+    # 加载数据
+    if hasattr(args, 'load_brain_test_data') and args.load_brain_test_data:
+        # 使用固定路径的脑MRI数据加载函数
+        logger.info("使用固定路径加载脑MRI测试数据...")
+        from data_loader import load_brain_voxel_test_data
+        dataset = load_brain_voxel_test_data(check_normalization=True)
+        
+        if dataset is None:
+            logger.error("数据加载失败")
+            return
+            
+        # 使用test数据进行分析
+        data = dataset['test_samples']
+        labels = dataset['test_labels']
+        feature_groups = dataset['feature_groups']
+    else:
+        # 使用原有的加载函数
+        logger.info(f"加载数据目录: {args.data_dir}")
+        logger.info(f"子集: {args.subset}")
+        logger.info(f"采样比例: {args.sample_ratio}")
+        
+        dataset = load_multiclass_data(args.data_dir, subset=args.subset, sample_ratio=args.sample_ratio)
+        
+        if f"{args.subset}_samples" not in dataset or f"{args.subset}_labels" not in dataset:
+            logger.error(f"未能加载指定的子集: {args.subset}")
+            return
+        
+        data = dataset[f"{args.subset}_samples"]
+        labels = dataset[f"{args.subset}_labels"]
+        feature_groups = dataset['feature_groups']
     
     logger.info(f"加载的数据: {data.shape}")
     logger.info(f"标签: {labels.shape}")
     logger.info(f"特征组: {list(feature_groups.keys())}")
     
-    # 获取大类标签
-    fine_to_big, big_to_fine, big_class_names = define_big_classes()
-    big_labels = map_to_big_classes(labels, fine_to_big)
+    # 获取大类标签（如果可用）
+    try:
+        fine_to_big, big_to_fine, big_class_names = define_big_classes()
+        big_labels = map_to_big_classes(labels, fine_to_big)
+    except Exception as e:
+        logger.warning(f"无法创建大类标签映射: {str(e)}")
+        big_labels = labels  # 使用原始标签
+        big_class_names = None
     
-    # 第2步：数据预处理
-    logger.info("\n======== 第2步：数据预处理 ========")
-    processed_data, preprocessing_info = preprocess_data(
-        data, labels, feature_groups=feature_groups, 
-        normalize_method=args.normalize, use_gpu=args.gpu
-    )
-    
-    logger.info(f"预处理完成")
-    for group, group_data in processed_data.items():
-        logger.info(f"  {group}: {group_data.shape}")
-    
+    # 第2步：数据预处理（只有在需要时）
+    if args.normalize != 'none':
+        logger.info("\n======== 第2步：数据预处理 ========")
+        processed_data, preprocessing_info = preprocess_data(
+            data, labels, feature_groups=feature_groups, 
+            normalize_method=args.normalize, use_gpu=args.gpu
+        )
+        
+        logger.info(f"预处理完成")
+        for group, group_data in processed_data.items():
+            logger.info(f"  {group}: {group_data.shape}")
+    else:
+        logger.info("\n======== 第2步：跳过数据预处理（数据已标准化）========")
+        # 创建一个简单的处理后数据字典，仅包含原始数据
+        processed_data = {
+            'all_features': data
+        }
+
     # 第3步：基本统计分析
     if not args.skip_basic:
         logger.info("\n======== 第3步：基本统计分析 ========")
@@ -414,5 +440,15 @@ def main():
     elapsed = end_time - start_time
     logger.info(f"\n分析完成 - 总耗时: {elapsed.total_seconds()/60:.2f}分钟")
 
+
+
+def main():
+    """主执行函数"""
+    # 解析命令行参数
+    args = parse_args()
+    
+    # 执行分析
+    perform_analysis(args)
+    
 if __name__ == "__main__":
     main()

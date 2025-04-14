@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# MRI数据特性分析启动脚本
-# 使用nohup在后台运行分析任务
+# 脑MRI数据特性分析启动脚本
+# 直接使用固定路径的数据分析
 
 # 设置环境变量
 export PYTHONPATH=$(pwd):$PYTHONPATH
@@ -9,32 +9,70 @@ export CUDA_VISIBLE_DEVICES=0  # 使用第一个GPU，根据需要修改
 
 # 创建输出和日志目录
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTPUT_DIR="analysis_results_$TIMESTAMP"
+OUTPUT_DIR="brain_analysis_results_$TIMESTAMP"
 LOG_DIR="logs"
 mkdir -p $OUTPUT_DIR
 mkdir -p $LOG_DIR
 
-# 获取数据目录参数
-if [ "$#" -lt 1 ]; then
-    echo "用法: $0 <数据目录> [其他参数]"
-    echo "例如: $0 /path/to/mri_data --gpu --subset val"
-    exit 1
-fi
-
-DATA_DIR=$1
-shift  # 移除第一个参数，保留其余参数
-
 # 定义日志文件
-LOG_FILE="$LOG_DIR/analysis_$TIMESTAMP.log"
+LOG_FILE="$LOG_DIR/brain_analysis_$TIMESTAMP.log"
 
-echo "开始MRI数据分析任务..."
-echo "数据目录: $DATA_DIR"
+echo "开始脑MRI数据分析任务..."
 echo "输出目录: $OUTPUT_DIR"
 echo "日志文件: $LOG_FILE"
-echo "附加参数: $@"
 
-# 启动分析程序
-nohup python main.py --data_dir $DATA_DIR --output_dir $OUTPUT_DIR $@ > $LOG_FILE 2>&1 &
+# 添加一个简单的配置，用于选择分析类型
+# 默认为全部分析
+ANALYSIS_TYPE="all"  # 可选值: all, basic, feature, dim_reduction
+
+# 如果提供了参数，则使用参数作为分析类型
+if [ "$#" -ge 1 ]; then
+    ANALYSIS_TYPE=$1
+    echo "分析类型: $ANALYSIS_TYPE"
+fi
+
+# 根据分析类型设置参数
+EXTRA_ARGS=""
+case $ANALYSIS_TYPE in
+    "basic")
+        EXTRA_ARGS="--skip_feature --skip_dim_reduction"
+        ;;
+    "feature")
+        EXTRA_ARGS="--skip_basic --skip_dim_reduction"
+        ;;
+    "dim_reduction")
+        EXTRA_ARGS="--skip_basic --skip_feature"
+        ;;
+    *)
+        EXTRA_ARGS=""  # 默认全部分析
+        ;;
+esac
+
+# 启动分析脚本，使用--load_brain_test_data参数指示使用固定路径加载
+python - <<EOF > $LOG_FILE 2>&1 &
+import os
+import sys
+import numpy as np
+import argparse
+from main import logger, perform_analysis
+
+# 配置参数
+class Args:
+    def __init__(self):
+        self.output_dir = "$OUTPUT_DIR"
+        self.normalize = "none"  # 不进行额外标准化
+        self.gpu = True  # 使用GPU
+        self.skip_basic = "--skip_basic" in "$EXTRA_ARGS"
+        self.skip_feature = "--skip_feature" in "$EXTRA_ARGS" 
+        self.skip_dim_reduction = "--skip_dim_reduction" in "$EXTRA_ARGS"
+        self.dim_methods = "pca,tsne,umap"
+        self.feature_methods = "rf,mi"
+        self.load_brain_test_data = True  # 指示使用我们的固定路径数据加载器
+
+args = Args()
+logger.info("使用固定路径加载脑MRI数据")
+perform_analysis(args)
+EOF
 
 # 获取进程ID
 PID=$!

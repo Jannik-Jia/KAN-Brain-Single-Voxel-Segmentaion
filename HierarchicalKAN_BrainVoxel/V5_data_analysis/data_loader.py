@@ -44,83 +44,256 @@ FEATURE_GROUPS = {
     'all_features': list(range(0, 341))       # 全部特征 (0-340)
 }
 
-def load_multiclass_data(data_dir, subset='val', sample_ratio=1.0, verbose=True):
+def load_brain_voxel_test_data(check_normalization=True):
     """
-    加载MRI数据集
+    直接加载脑部MRI测试数据（固定路径版本）
     
     参数:
-        data_dir: 数据目录
-        subset: 子集名称 ('train', 'val', 'test', 'all')
-        sample_ratio: 采样比例，用于减少计算量
-        verbose: 是否输出详细信息
-    
+        check_normalization: 是否检查数据是否已标准化
+        
     返回:
         dataset: 包含数据和标签的字典
     """
-    if verbose:
-        logger.info(f"加载{subset}子集数据，采样比例: {sample_ratio:.2f}")
+    # 固定的数据路径
+    base_path = '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data'
+    test_label_dir = os.path.join(base_path, 'test_set_by_label')
     
-    # 确定数据路径
-    if subset == 'all':
-        subsets = ['train', 'val', 'test']
-    else:
-        subsets = [subset]
+    logger.info(f"从固定路径加载测试数据: {test_label_dir}")
     
-    result = {}
+    # 读取标签索引文件
+    index_file = os.path.join(test_label_dir, "test_label_index.txt")
+    if not os.path.exists(index_file):
+        index_file = os.path.join(test_label_dir, "label_index.txt")
+        if not os.path.exists(index_file):
+            logger.error(f"标签索引文件不存在: {index_file}")
+            return None
     
-    for set_name in subsets:
-        try:
-            # 尝试直接使用numpy加载预处理好的数据
-            data_path = os.path.join(data_dir, f"{set_name}_samples.npy")
-            labels_path = os.path.join(data_dir, f"{set_name}_labels.npy")
-            
-            if os.path.exists(data_path) and os.path.exists(labels_path):
-                data = np.load(data_path)
-                labels = np.load(labels_path)
-                
-                if verbose:
-                    logger.info(f"从NPY文件加载{set_name}数据成功: {data.shape}")
-            else:
-                # 尝试从原始数据文件夹加载数据
-                data_dir_subset = os.path.join(data_dir, set_name)
-                if not os.path.exists(data_dir_subset):
-                    logger.warning(f"未找到{set_name}数据目录: {data_dir_subset}")
-                    continue
-                
-                # 实现原始数据加载逻辑，这里简化处理
-                # 假设与之前提供的代码中的load_multiclass_data_from_dirs类似
-                logger.info(f"从原始文件加载{set_name}数据...")
-                
-                # 此处应该根据实际情况实现数据加载
-                # 为简化示例，这里假设数据已预处理好
-                raise NotImplementedError("原始数据加载功能尚未实现，请提供预处理好的NPY文件")
-            
-            # 如果需要采样以减少计算量
-            if sample_ratio < 1.0:
-                n_samples = int(len(data) * sample_ratio)
-                indices = np.random.choice(len(data), n_samples, replace=False)
-                data = data[indices]
-                labels = labels[indices]
-                if verbose:
-                    logger.info(f"采样后数据大小: {data.shape}")
-            
-            # 存储加载的数据
-            result[f"{set_name}_samples"] = data
-            result[f"{set_name}_labels"] = labels
-            
-            if verbose:
-                logger.info(f"{set_name}数据加载完成: {data.shape}, 标签: {labels.shape}")
-                logger.info(f"数据范围: [{np.min(data):.4f}, {np.max(data):.4f}]")
-                unique_labels = np.unique(labels)
-                logger.info(f"标签类别数: {len(unique_labels)}")
+    # 加载标签信息
+    label_info = {}
+    with open(index_file, 'r') as f:
+        # 跳过表头（如果有）
+        first_line = f.readline().strip()
+        if not first_line[0].isdigit():  # 如果第一行不是以数字开头，认为是表头
+            pass  # 已经跳过了第一行
+        else:
+            # 如果第一行是数据，重新处理
+            parts = first_line.split(',')
+            if len(parts) >= 3:
+                label_id = int(parts[0])
+                voxel_count = int(parts[1])
+                filename = parts[2] if parts[2] else None
+                label_info[label_id] = {'count': voxel_count, 'filename': filename}
         
-        except Exception as e:
-            logger.error(f"加载{set_name}数据时出错: {str(e)}")
+        # 处理剩余行
+        for line in f:
+            parts = line.strip().split(',')
+            if len(parts) >= 3:
+                label_id = int(parts[0])
+                voxel_count = int(parts[1])
+                filename = parts[2] if parts[2] else None
+                label_info[label_id] = {'count': voxel_count, 'filename': filename}
     
-    # 添加特征组信息
-    result['feature_groups'] = FEATURE_GROUPS
+    # 获取有效标签（有体素数据的标签）
+    valid_labels = [label_id for label_id, info in label_info.items() if info['count'] > 0]
+    logger.info(f"找到 {len(valid_labels)} 个有效标签")
+    
+    # 初始化数据和标签列表
+    all_data = []
+    all_labels = []
+    
+    # 加载每个标签的数据
+    for label_id in tqdm(valid_labels, desc="加载标签数据"):
+        info = label_info[label_id]
+        if info['count'] == 0 or not info['filename']:
+            continue
+            
+        # 构建文件路径
+        data_file = os.path.join(test_label_dir, info['filename'])
+        
+        try:
+            # 加载数据文件
+            label_data = np.load(data_file)
+            
+            # 对于每个样本，添加数据和标签
+            n_samples = label_data.shape[0]
+            all_data.append(label_data)
+            
+            # 创建标签：所有样本都是同一个标签
+            labels = np.full(n_samples, label_id, dtype=np.int32)
+            all_labels.append(labels)
+                
+            logger.info(f"加载标签 {label_id} 的 {n_samples} 个样本")
+            
+        except Exception as e:
+            logger.error(f"加载标签 {label_id} 的数据时出错: {str(e)}")
+    
+    # 合并所有数据
+    all_data = np.vstack(all_data) if all_data else np.array([])
+    all_labels = np.concatenate(all_labels) if all_labels else np.array([])
+    
+    # 检查数据是否已标准化
+    if check_normalization and all_data.size > 0:
+        # 计算每个特征的均值和标准差
+        feature_means = np.mean(all_data, axis=0)
+        feature_stds = np.std(all_data, axis=0)
+        
+        # 检查均值是否接近0，标准差是否接近1
+        mean_near_zero = np.allclose(feature_means, 0, atol=0.1)
+        std_near_one = np.allclose(feature_stds, 1, atol=0.5)
+        
+        if mean_near_zero and std_near_one:
+            logger.info("数据检查: 数据已经过标准化处理（均值接近0，标准差接近1）")
+        else:
+            logger.info("数据检查: 数据可能未标准化")
+            logger.info(f"  特征均值范围: [{np.min(feature_means):.4f}, {np.max(feature_means):.4f}]")
+            logger.info(f"  特征标准差范围: [{np.min(feature_stds):.4f}, {np.max(feature_stds):.4f}]")
+    
+    # 统计各标签的样本数量
+    if len(all_labels) > 0:
+        unique_labels, label_counts = np.unique(all_labels, return_counts=True)
+        for label, count in zip(unique_labels, label_counts):
+            logger.info(f"标签 {label}: {count} 个样本")
+    
+    # 构建结果字典
+    result = {
+        'test_samples': all_data,
+        'test_labels': all_labels,
+        'feature_groups': FEATURE_GROUPS,  # 使用预定义的特征组
+        'label_info': label_info,
+        'valid_labels': valid_labels
+    }
+    
+    logger.info(f"测试数据加载完成: {all_data.shape}, 标签: {all_labels.shape}")
+    if all_data.size > 0:
+        logger.info(f"数据范围: [{np.min(all_data):.4f}, {np.max(all_data):.4f}]")
     
     return result
+    
+
+
+def load_voxel_data_by_label(test_label_dir, feature_dim=341, check_normalization=True):
+    """
+    加载按label分类存储的脑体素数据，支持one-hot标签格式
+    
+    参数:
+        test_label_dir: 测试数据目录，包含按标签分类的数据
+        feature_dim: 特征维度，默认为341
+        check_normalization: 是否检查数据是否已标准化
+        
+    返回:
+        dataset: 包含数据和标签的字典
+    """
+    logger.info(f"加载按标签分类的测试数据，从目录: {test_label_dir}")
+    
+    # 读取标签索引文件
+    index_file = os.path.join(test_label_dir, "label_index.txt")
+    if not os.path.exists(index_file):
+        index_file = os.path.join(test_label_dir, "test_label_index.txt")
+        if not os.path.exists(index_file):
+            logger.error(f"标签索引文件不存在: {index_file}")
+            return None
+    
+    # 加载标签信息
+    label_info = {}
+    with open(index_file, 'r') as f:
+        # 跳过表头
+        next(f)
+        for line in f:
+            parts = line.strip().split(',')
+            if len(parts) >= 3:
+                label_id = int(parts[0])
+                voxel_count = int(parts[1])
+                filename = parts[2] if parts[2] else None
+                label_info[label_id] = {'count': voxel_count, 'filename': filename}
+    
+    # 获取有效标签（有体素数据的标签）
+    valid_labels = [label_id for label_id, info in label_info.items() if info['count'] > 0]
+    logger.info(f"找到 {len(valid_labels)} 个有效标签")
+    
+    # 初始化数据和标签列表
+    all_data = []
+    all_labels = []
+    
+    # 加载每个标签的数据
+    for label_id in tqdm(valid_labels, desc="加载标签数据"):
+        info = label_info[label_id]
+        if info['count'] == 0 or not info['filename']:
+            continue
+            
+        # 构建文件路径
+        data_file = os.path.join(test_label_dir, info['filename'])
+        
+        try:
+            # 加载数据文件
+            label_data = np.load(data_file)
+            
+            # 创建该标签的one-hot编码（初始化为零矩阵）
+            # 假设总共有102个标签类别
+            n_samples = label_data.shape[0]
+            
+            # 对于每个样本，添加数据和one-hot标签
+            for i in range(n_samples):
+                all_data.append(label_data[i])
+                
+                # 创建one-hot标签
+                one_hot = np.zeros(102)
+                one_hot[label_id] = 1
+                all_labels.append(one_hot)
+                
+            logger.info(f"加载标签 {label_id} 的 {n_samples} 个样本")
+            
+        except Exception as e:
+            logger.error(f"加载标签 {label_id} 的数据时出错: {str(e)}")
+    
+    # 转换为numpy数组
+    all_data = np.array(all_data)
+    all_labels = np.array(all_labels)
+    
+    # 检查数据是否已标准化
+    if check_normalization:
+        # 计算每个特征的均值和标准差
+        feature_means = np.mean(all_data, axis=0)
+        feature_stds = np.std(all_data, axis=0)
+        
+        # 检查均值是否接近0，标准差是否接近1
+        mean_near_zero = np.allclose(feature_means, 0, atol=0.1)
+        std_near_one = np.allclose(feature_stds, 1, atol=0.5)
+        
+        if mean_near_zero and std_near_one:
+            logger.info("数据检查: 数据已经过标准化处理（均值接近0，标准差接近1）")
+        else:
+            logger.info("数据检查: 数据可能未标准化")
+            logger.info(f"  特征均值范围: [{np.min(feature_means):.4f}, {np.max(feature_means):.4f}]")
+            logger.info(f"  特征标准差范围: [{np.min(feature_stds):.4f}, {np.max(feature_stds):.4f}]")
+    
+    # 统计各标签的样本数量
+    if len(all_labels) > 0:
+        label_counts = np.sum(all_labels, axis=0)
+        for i, count in enumerate(label_counts):
+            if count > 0:
+                logger.info(f"标签 {i}: {int(count)} 个样本")
+    
+    # 从one-hot转换回单一整数标签，便于后续分析
+    # 找出每个样本中为1的位置作为类别标签
+    labels_single = np.argmax(all_labels, axis=1)
+    
+    # 构建结果字典
+    result = {
+        'test_samples': all_data,
+        'test_labels': labels_single,  # 使用整数标签
+        'test_labels_onehot': all_labels,  # 保留one-hot标签
+        'feature_groups': FEATURE_GROUPS,  # 使用预定义的特征组
+        'label_info': label_info,
+        'valid_labels': valid_labels
+    }
+    
+    logger.info(f"测试数据加载完成: {all_data.shape}, 标签: {all_labels.shape}")
+    logger.info(f"数据范围: [{np.min(all_data):.4f}, {np.max(all_data):.4f}]")
+    
+    return result
+
+
+
 
 def load_mat_file(file_path):
     """
