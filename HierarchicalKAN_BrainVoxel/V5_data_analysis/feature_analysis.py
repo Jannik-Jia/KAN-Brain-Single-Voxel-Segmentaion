@@ -199,9 +199,9 @@ def evaluate_feature_selection_methods(data, labels, feature_groups=None, method
                     'accuracy': acc,
                     'std': std,
                     'indices': selected_indices,
-                    'relative_improvement': (acc - baseline_acc) / baseline_acc
+                    'relative_improvement': (acc - baseline_acc) / baseline_acc if baseline_acc != 0 else 0
                 }
-            
+                            
             method_results[method] = k_results
         
         selection_dict[group_name] = method_results
@@ -675,8 +675,22 @@ def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=1
             
             # 绘制累积重要性曲线
             plt.figure(figsize=(10, 6))
-            plt.plot(range(1, len(indices)+1), cumulative_importance)
+            # 检查无穷大或NaN值
+            mask = np.isfinite(cumulative_importance)
+            if not np.all(mask):
+                logger.warning(f"发现{np.sum(~mask)}个非有限值，已在绘图中过滤")
+                x_values = np.array(range(1, len(indices)+1))[mask]
+                y_values = cumulative_importance[mask]
+                plt.plot(x_values, y_values)
+            else:
+                plt.plot(range(1, len(indices)+1), cumulative_importance)
             plt.axhline(y=0.9, color='r', linestyle='--', label='90% Importance')
+
+
+
+
+
+
             plt.axhline(y=0.95, color='g', linestyle='--', label='95% Importance')
             plt.axhline(y=0.99, color='b', linestyle='--', label='99% Importance')
             plt.axvline(x=n_features_90, color='r', linestyle=':')

@@ -556,8 +556,13 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
         
         if np.any(mask):
             abs_corrs = np.abs(upper_triangle[mask])
-            high_corr_ratio = np.mean(abs_corrs > 0.7) if len(abs_corrs) > 0 else 0
-            mean_abs_corr = np.mean(abs_corrs) if len(abs_corrs) > 0 else 0
+            # 添加空数组检查
+            if abs_corrs.size > 0:
+                high_corr_ratio = np.mean(abs_corrs > 0.7)
+                mean_abs_corr = np.mean(abs_corrs)
+            else:
+                high_corr_ratio = 0
+                mean_abs_corr = 0
         else:
             high_corr_ratio = 0
             mean_abs_corr = 0
@@ -726,7 +731,6 @@ def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_d
     return corr_dict
 
     
-
 def analyze_class_separability(data, labels, feature_groups=None, use_gpu=False, save_dir=None):
     """
     分析各特征组对类别区分的贡献度
@@ -803,7 +807,21 @@ def analyze_class_separability(data, labels, feature_groups=None, use_gpu=False,
             plt.ylabel("Frequency")
             
             plt.subplot(1, 2, 2)
-            plt.hist(-np.log10(p_vals), bins=30)
+            # 处理p值为0或接近0的情况
+            log_p_vals = -np.log10(p_vals)
+            # 替换无穷大值为最大有限值的1.1倍
+            finite_mask = np.isfinite(log_p_vals)
+            if not np.all(finite_mask):
+                # 如果有无穷大值，找出最大有限值
+                if np.any(finite_mask):
+                    max_finite = np.max(log_p_vals[finite_mask])
+                    # 替换无穷大值为最大有限值的1.1倍
+                    log_p_vals[~finite_mask] = max_finite * 1.1
+                else:
+                    # 如果全部是无穷大，设置为一个合理的大值
+                    log_p_vals = np.ones_like(log_p_vals) * 20  # 相当于p值为10^-20
+            
+            plt.hist(log_p_vals, bins=30)
             plt.title(f"{group_name} -log10(p-value) Distribution")
             plt.xlabel("-log10(p-value)")
             plt.ylabel("Frequency")
@@ -837,7 +855,7 @@ def analyze_class_separability(data, labels, feature_groups=None, use_gpu=False,
                 'feature_idx': indices,
                 'f_value': f_vals,
                 'p_value': p_vals,
-                '-log10(p)': -np.log10(p_vals)
+                '-log10(p)': log_p_vals  # 使用处理后的log_p_vals
             })
             importance_df = importance_df.sort_values('f_value', ascending=False)
             importance_df.to_csv(os.path.join(save_dir, f"{group_name}_feature_importance.csv"), index=False)
