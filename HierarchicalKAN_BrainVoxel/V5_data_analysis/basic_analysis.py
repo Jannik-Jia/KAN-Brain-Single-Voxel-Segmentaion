@@ -472,7 +472,7 @@ def analyze_basic_stats(data, feature_groups=None, use_gpu=False, save_dir=None)
 #     return corr_dict
 
 def analyze_feature_correlation(data, feature_groups=None, use_gpu=False, save_dir=None, 
-                              max_features_per_group=100):
+                              max_features_per_group=400):
     """
     分析特征之间的相关性
     
