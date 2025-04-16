@@ -560,22 +560,87 @@ def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=1
         os.makedirs(save_dir)
     
     importance_dict = {}
-    
+
     # 检查GPU使用标志和cuML可用性
+    gpu_usable = False
     if use_gpu and HAS_GPU:
-        # 添加一个额外的健全性检查
+        # 添加更详细的诊断输出
         try:
             # 尝试一个简单的cuML操作来验证GPU功能
+            logger.info("开始GPU测试...")
             test_array = cp.zeros((10, 10))
+            logger.info(f"创建测试数组，形状: {test_array.shape}")
+            logger.info("释放测试数组...")
             del test_array
             cp.get_default_memory_pool().free_all_blocks()
-            logger.info("GPU检查通过，将使用GPU加速")
+            logger.info("GPU内存清理完成")
+            
+            # 进一步测试cuML的RandomForestClassifier
+            logger.info("测试cuML RandomForestClassifier初始化...")
+            # 创建一个小型测试数据集
+            X_test = cp.random.random((100, 5))
+            y_test = cp.random.randint(0, 2, 100)
+            logger.info(f"创建测试数据, X形状: {X_test.shape}, y形状: {y_test.shape}")
+            
+            # 打印cuML RandomForestClassifier的默认参数
+            rf_params = {
+                'n_estimators': n_estimators,
+                'random_state': 42,
+                'n_streams': 1,  # 限制流数量提高稳定性
+                'max_samples': 1.0,  # 确保使用所有样本
+                'max_depth': 16,  # 限制树的深度
+                'max_features': 'sqrt',  # 使用特征的平方根数量
+            }
+            logger.info(f"cuML RandomForest参数: {rf_params}")
+            
+            rf_test = cuRF(**rf_params)
+            logger.info("RandomForestClassifier初始化成功")
+            
+            # 拟合小型测试模型
+            logger.info("测试拟合小型数据...")
+            rf_test.fit(X_test, y_test)
+            logger.info("测试拟合成功")
+            
+            # 验证特征重要性计算
+            logger.info("测试特征重要性获取...")
+            test_importances = rf_test.feature_importances_
+            logger.info(f"测试特征重要性形状: {test_importances.shape}")
+            
+            # 清理测试资源
+            del rf_test, X_test, y_test, test_importances
+            cp.get_default_memory_pool().free_all_blocks()
+            
+            logger.info("GPU测试完全通过，将使用GPU加速")
             gpu_usable = True
         except Exception as e:
-            logger.warning(f"GPU测试失败，将使用CPU: {str(e)}")
+            logger.error(f"GPU初始测试失败，详细错误: {str(e)}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            logger.warning("将使用CPU进行后续计算")
             gpu_usable = False
     else:
         gpu_usable = False
+        logger.info("根据设置或环境，不使用GPU"
+    
+    # 添加参数兼容性检查
+    compatible_params = {
+        'n_estimators': n_estimators,
+        'random_state': 42
+    }
+    
+    if gpu_usable:
+        # cuML特有参数
+        compatible_params.update({
+            'n_streams': 1,  # 提高稳定性
+            'max_samples': 1.0,  # 使用所有样本
+            'max_depth': 16,  # 限制树深度避免OOM
+        })
+    else:
+        # scikit-learn特有参数
+        compatible_params.update({
+            'class_weight': 'balanced',
+            'n_jobs': -1  # 使用所有CPU核心
+        })
+     logger.info(f"将使用以下参数训练随机森林: {compatible_params}")
     
     for group_name, indices in tqdm(feature_groups.items(), desc="分析特征重要性"):
         logger.info(f"分析特征组 {group_name} 的特征重要性")
@@ -583,31 +648,77 @@ def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=1
         # 提取特征组数据
         group_data = data[:, indices]
         
+        # 记录数据基本统计信息，辅助调试
+        logger.info(f"  数据形状: {group_data.shape}")
+        logger.info(f"  标签形状: {labels.shape}")
+        logger.info(f"  标签范围: [{np.min(labels)}, {np.max(labels)}]")
+        logger.info(f"  唯一标签数: {len(np.unique(labels))}")
+        logger.info(f"  特征值范围: [{np.min(group_data):.4f}, {np.max(group_data):.4f}]")
+        
+        # 检查数据有效性
+        if np.isnan(group_data).any():
+            logger.warning("  数据包含NaN值，将替换为0")
+            group_data = np.nan_to_num(group_data, nan=0.0)
+        
+        if np.isinf(group_data).any():
+            logger.warning("  数据包含无穷值，将替换为有限值")
+            group_data = np.nan_to_num(group_data, posinf=1e10, neginf=-1e10)
+        
         # 训练随机森林模型
         start_time = time.time()
         
-        # 对于GPU随机森林，添加更多安全参数，特别是将n_streams设为1
-        if gpu_usable:
-            try:
-                # 使用GPU版本的随机森林，但将n_streams设为1以提高稳定性
-                forest = cuRF(n_estimators=n_estimators, random_state=42, n_streams=1)
-                forest.fit(group_data, labels)
-                importances = forest.feature_importances_
+        # 尝试使用GPU训练随机森林，但有额外的错误处理和回退逻辑
+        try:
+            if gpu_usable:
+                logger.info("  使用GPU训练随机森林...")
+                # 复制数据到GPU
+                try:
+                    logger.info("  将数据转移到GPU...")
+                    group_data_gpu = cp.array(group_data)
+                    labels_gpu = cp.array(labels)
+                    logger.info("  数据成功转移到GPU")
+                    
+                    # 创建并训练模型，使用兼容参数
+                    logger.info("  初始化GPU随机森林...")
+                    forest = cuRF(**compatible_params)
+                    
+                    # 分阶段拟合，便于定位问题
+                    logger.info("  开始拟合模型...")
+                    forest.fit(group_data_gpu, labels_gpu)
+                    logger.info("  模型拟合完成")
+                    
+                    # 获取特征重要性
+                    logger.info("  计算特征重要性...")
+                    importances = forest.feature_importances_
+                    
+                    # 转回CPU
+                    logger.info("  将特征重要性转回CPU...")
+                    importances = importances.get() if hasattr(importances, 'get') else importances
+                    logger.info("  特征重要性转移完成")
+                    
+                    # 释放GPU内存
+                    logger.info("  释放GPU内存...")
+                    del forest, group_data_gpu, labels_gpu
+                    cp.get_default_memory_pool().free_all_blocks()
+                    logger.info("  GPU内存释放完成")
+                    
+                except Exception as e:
+                    logger.error(f"  GPU处理过程中出错: {str(e)}")
+                    logger.error(f"  错误类型: {type(e).__name__}")
+                    logger.info("  回退到CPU处理...")
+                    raise RuntimeError("GPU处理失败，回退到CPU")
+            else:
+                raise RuntimeError("按计划使用CPU")
                 
-                # 释放GPU内存
-                del forest
-                cp.get_default_memory_pool().free_all_blocks()
-                
-            except Exception as e:
-                logger.error(f"GPU处理失败，将使用CPU: {str(e)}")
-                
-                # 回退到CPU处理
-                forest = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
-                forest.fit(group_data, labels)
-                importances = forest.feature_importances_
-        else:
-            # 直接使用CPU处理
-            forest = RandomForestClassifier(n_estimators=n_estimators, random_state=42, class_weight='balanced')
+        except Exception as e:
+            # CPU回退处理
+            logger.info("  使用CPU训练随机森林...")
+            cpu_params = {k: v for k, v in compatible_params.items() 
+                         if k not in ['n_streams', 'max_samples']}
+            if 'class_weight' not in cpu_params:
+                cpu_params['class_weight'] = 'balanced'
+            
+            forest = RandomForestClassifier(**cpu_params)
             forest.fit(group_data, labels)
             importances = forest.feature_importances_
         
