@@ -53,6 +53,7 @@ python main.py \
     --data_dir "dummy" \
     --output_dir "$OUTPUT_DIR" \
     --normalize none \
+    --sample_ratio 0.1 \
     --gpu \
     $EXTRA_ARGS > $LOG_FILE 2>&1 &
 
