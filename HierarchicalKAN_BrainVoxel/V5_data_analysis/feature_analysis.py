@@ -619,7 +619,7 @@ def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=1
             gpu_usable = False
     else:
         gpu_usable = False
-        logger.info("根据设置或环境，不使用GPU"
+        logger.info("根据设置或环境，不使用GPU")
     
     # 添加参数兼容性检查
     compatible_params = {
@@ -640,7 +640,8 @@ def analyze_feature_importance(data, labels, feature_groups=None, n_estimators=1
             'class_weight': 'balanced',
             'n_jobs': -1  # 使用所有CPU核心
         })
-     logger.info(f"将使用以下参数训练随机森林: {compatible_params}")
+    
+    logger.info(f"将使用以下参数训练随机森林: {compatible_params}")
     
     for group_name, indices in tqdm(feature_groups.items(), desc="分析特征重要性"):
         logger.info(f"分析特征组 {group_name} 的特征重要性")
