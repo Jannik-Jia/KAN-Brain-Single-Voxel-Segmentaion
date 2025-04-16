@@ -1,0 +1,18 @@
+{
+    "data_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured",
+    "train_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train",
+    "test_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test",
+    "val_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val",
+    "output_dir": "data/processed",
+    "feature_groups": {
+        "diffusion": [0, 14],
+        "cest": [225, 340],
+        "qti": [15, 224]
+    },
+    "diffusion_description": "包含AD, C_MD, C_M, RD, C_c, C_mu, FA, K_bulk, K_shear, V_MD, MD, V_iso, MK, V_shear, uFA, uK特征",
+    "cest_description": "包含CEST频谱数据",
+    "qti_description": "包含mdm_QTI_NII_mc_s_xps特征",
+    "apply_pca": true,
+    "n_components": 0,
+    "normalization": "standard"
+}
