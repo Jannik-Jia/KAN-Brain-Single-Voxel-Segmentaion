@@ -18,8 +18,8 @@ from copy import deepcopy
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from src.utils.logging_utils import Logger
-from src.utils.input_validator import InputValidator
+from utils.logging_utils import Logger
+from utils.input_validator import InputValidator
 
 class GroupEvaluator:
     """特征组评估工具，用于分析不同特征组对模型性能的贡献"""

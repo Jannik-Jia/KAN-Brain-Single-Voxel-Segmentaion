@@ -7,9 +7,9 @@ import time
 # 添加src目录到Python路径
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.data.data_loader import DataLoader
-from src.data.preprocessor import Preprocessor
-from src.utils.logging_utils import Logger
+from data.data_loader import DataLoader
+from data.preprocessor import Preprocessor
+from utils.logging_utils import Logger
 
 def main():
     """数据预处理主函数"""

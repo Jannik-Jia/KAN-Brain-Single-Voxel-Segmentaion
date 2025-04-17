@@ -8,9 +8,9 @@ import logging
 # 添加src目录到Python路径
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.models.baseline import BaselineMLP, FeatureGroupMLP, DeepMLP
-from src.training.baseline_trainer import BaselineTrainer
-from src.utils.logging_utils import Logger
+from models.baseline import BaselineMLP, FeatureGroupMLP, DeepMLP
+from training.baseline_trainer import BaselineTrainer
+from utils.logging_utils import Logger
 
 def main():
     """训练基线模型主函数"""

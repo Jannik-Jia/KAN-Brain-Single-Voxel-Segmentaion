@@ -15,7 +15,7 @@ import sys
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from src.utils.logging_utils import Logger
+from utils.logging_utils import Logger
 
 class FeatureAnalyzer:
     """特征分析工具，提供详细的特征统计和可视化"""

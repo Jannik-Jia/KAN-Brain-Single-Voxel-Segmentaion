@@ -9,7 +9,7 @@ import sys
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from src.utils.logging_utils import Logger
+from utils.logging_utils import Logger
 
 class InputValidator:
     """输入验证工具，用于验证模型和数据输入的有效性"""
