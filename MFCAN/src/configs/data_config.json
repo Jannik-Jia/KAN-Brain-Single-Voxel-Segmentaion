@@ -12,7 +12,7 @@
     "diffusion_description": "包含AD, C_MD, C_M, RD, C_c, C_mu, FA, K_bulk, K_shear, V_MD, MD, V_iso, MK, V_shear, uFA, uK特征",
     "cest_description": "包含CEST频谱数据",
     "qti_description": "包含mdm_QTI_NII_mc_s_xps特征",
-    "apply_pca": False,
+    "apply_pca": false,
     "n_components": 0,
     "normalization": "standard"
 }
