@@ -1,0 +1,357 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+阶段二：基线模型训练脚本
+使用特征工程后的数据训练基线模型
+"""
+
+import os
+import argparse
+import json
+import sys
+import time
+import numpy as np
+import torch
+from datetime import datetime
+
+# 添加项目根目录到系统路径
+sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+from models.baseline import BaselineMLP, FeatureGroupMLP, DeepMLP
+from training.baseline_trainer import BaselineTrainer
+from evaluation.group_evaluator import GroupEvaluator
+from utils.logging_utils import Logger
+
+def load_h5_data(file_path):
+    """加载HDF5格式的数据"""
+    import h5py
+    data_dict = {}
+    
+    with h5py.File(file_path, 'r') as f:
+        # 读取所有组和数据集
+        def visit_group(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                # 将数据集加载到内存
+                parts = name.split('/')
+                current_dict = data_dict
+                for i, part in enumerate(parts[:-1]):
+                    if part not in current_dict:
+                        current_dict[part] = {}
+                    current_dict = current_dict[part]
+                current_dict[parts[-1]] = obj[()]
+        
+        f.visititems(visit_group)
+    
+    return data_dict
+
+def main():
+    """基线模型训练主函数"""
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='脑MRI数据基线模型训练')
+    parser.add_argument('--config', type=str, default='configs/base_config.json', help='配置文件路径')
+    parser.add_argument('--selected_features', type=str, default=None, help='特征选择结果文件路径')
+    parser.add_argument('--transformed_features', type=str, default=None, help='特征变换结果文件路径')
+    parser.add_argument('--output_dir', type=str, default=None, help='输出目录，若不指定则使用配置文件中的设置')
+    parser.add_argument('--model_type', type=str, default='deep_mlp', 
+                       choices=['mlp', 'group_mlp', 'deep_mlp'], help='模型类型')
+    parser.add_argument('--feature_type', type=str, default='selected', 
+                       choices=['original', 'selected', 'pca', 'combined'], help='使用的特征类型')
+    args = parser.parse_args()
+    
+    # 设置时间戳
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # 设置日志
+    logger_manager = Logger("Stage2_BaselineTraining", log_dir="logs/stage2")
+    logger = logger_manager.get_logger()
+    
+    logger.info("="*80)
+    logger.info("阶段二：开始基线模型训练")
+    logger.info(f"配置文件: {args.config}")
+    logger.info(f"模型类型: {args.model_type}")
+    logger.info(f"特征类型: {args.feature_type}")
+    
+    # 加载配置
+    try:
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+        logger.info("成功加载配置文件")
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}")
+        return
+    
+    # 设置输出目录
+    base_output_dir = args.output_dir or config.get('paths', {}).get('results_dir', 'results')
+    output_dir = os.path.join(base_output_dir, 'baseline', f"{args.model_type}_{args.feature_type}_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+    logger.info(f"输出目录: {output_dir}")
+    
+    # 记录实验开始
+    experiment_name = f"阶段二：{args.model_type}基线模型训练({args.feature_type}特征)"
+    logger_manager.log_experiment_start(experiment_name, f"时间戳: {timestamp}")
+    
+    start_time = time.time()
+    
+    # 步骤1：加载特征数据
+    logger.info("步骤1: 加载特征数据...")
+    features_path = None
+    
+    if args.feature_type == 'selected' and args.selected_features:
+        features_path = args.selected_features
+        logger.info(f"使用特征选择结果: {features_path}")
+    elif args.feature_type == 'pca' and args.transformed_features:
+        features_path = args.transformed_features
+        logger.info(f"使用特征变换结果: {features_path}")
+    elif args.feature_type == 'combined':
+        # 如果使用组合特征，同时加载选择和变换的特征
+        if args.selected_features and args.transformed_features:
+            selected_data = load_h5_data(args.selected_features)
+            transformed_data = load_h5_data(args.transformed_features)
+            logger.info(f"使用组合特征 (特征选择+PCA变换)")
+        else:
+            logger.error("组合特征模式需要同时提供特征选择和特征变换结果路径")
+            return
+    else:
+        # 默认使用预处理后的原始特征
+        features_path = config.get('paths', {}).get('processed_data_dir', 'data/processed')
+        features_path = os.path.join(features_path, 'preprocessed_data.h5')
+        if not os.path.exists(features_path):
+            logger.error(f"找不到预处理数据文件: {features_path}")
+            return
+        logger.info(f"使用预处理后的原始特征: {features_path}")
+    
+    # 加载特征数据
+    try:
+        if args.feature_type != 'combined':
+            data_dict = load_h5_data(features_path)
+            logger.info("特征数据加载成功")
+        
+        # 提取训练、验证和测试数据
+        if args.feature_type == 'original':
+            # 从预处理数据中提取原始特征
+            train_features = data_dict.get('train', {}).get('features')
+            train_labels = data_dict.get('train', {}).get('labels')
+            val_features = data_dict.get('val', {}).get('features')
+            val_labels = data_dict.get('val', {}).get('labels')
+            test_features = data_dict.get('test', {}).get('features')
+            test_labels = data_dict.get('test', {}).get('labels')
+            
+            # 提取特征组数据 (用于group_mlp模型)
+            group_features = {}
+            for key in data_dict.keys():
+                if key.startswith('group_'):
+                    group_name = key.replace('group_', '')
+                    group_features[group_name] = {
+                        'train': data_dict[key]['train']['features'],
+                        'val': data_dict[key]['val']['features'],
+                        'test': data_dict[key]['test']['features']
+                    }
+            
+        elif args.feature_type == 'selected':
+            # 从特征选择结果中提取特征
+            # 默认使用移除冗余后的'all'组特征
+            if 'all' in data_dict:
+                train_features = data_dict['all']['train']
+                train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
+                val_features = data_dict['all']['val']
+                val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
+                test_features = data_dict['all']['test']
+                test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
+                
+                # 提取特征组数据 (用于group_mlp模型)
+                group_features = {}
+                for key in data_dict.keys():
+                    if key != 'all':
+                        group_features[key] = {
+                            'train': data_dict[key]['train'],
+                            'val': data_dict[key]['val'],
+                            'test': data_dict[key]['test']
+                        }
+            else:
+                logger.error("在特征选择结果中找不到'all'组特征")
+                return
+                
+        elif args.feature_type == 'pca':
+            # 从特征变换结果中提取PCA特征
+            if 'pca' in data_dict:
+                train_features = data_dict['pca']['train']
+                train_labels = data_dict['pca']['train_labels'] if 'train_labels' in data_dict['pca'] else None
+                val_features = data_dict['pca']['val']
+                val_labels = data_dict['pca']['val_labels'] if 'val_labels' in data_dict['pca'] else None
+                test_features = data_dict['pca']['test']
+                test_labels = data_dict['pca']['test_labels'] if 'test_labels' in data_dict['pca'] else None
+                
+                # 提取特征组PCA数据 (用于group_mlp模型)
+                group_features = {}
+                for key in data_dict.keys():
+                    if key != 'pca' and 'pca' in data_dict[key]:
+                        group_features[key] = {
+                            'train': data_dict[key]['pca']['train'],
+                            'val': data_dict[key]['pca']['val'],
+                            'test': data_dict[key]['pca']['test']
+                        }
+            else:
+                logger.error("在特征变换结果中找不到PCA特征")
+                return
+                
+        elif args.feature_type == 'combined':
+            # 组合特征选择和PCA特征
+            # 例如：使用特征选择结果中的'all'组特征和各特征组的PCA特征
+            
+            # 首先加载特征选择结果中的'all'组特征
+            if 'all' in selected_data:
+                train_features = selected_data['all']['train']
+                train_labels = selected_data['all']['train_labels'] if 'train_labels' in selected_data['all'] else None
+                val_features = selected_data['all']['val']
+                val_labels = selected_data['all']['val_labels'] if 'val_labels' in selected_data['all'] else None
+                test_features = selected_data['all']['test']
+                test_labels = selected_data['all']['test_labels'] if 'test_labels' in selected_data['all'] else None
+            else:
+                logger.error("在特征选择结果中找不到'all'组特征")
+                return
+                
+            # 提取特征组PCA数据 (用于group_mlp模型)
+            group_features = {}
+            for key in transformed_data.keys():
+                if key != 'pca' and 'pca' in transformed_data[key]:
+                    group_features[key] = {
+                        'train': transformed_data[key]['pca']['train'],
+                        'val': transformed_data[key]['pca']['val'],
+                        'test': transformed_data[key]['pca']['test']
+                    }
+        
+        # 检查是否成功提取特征和标签
+        if train_features is None or train_labels is None:
+            logger.error("无法从数据中提取特征和标签")
+            return
+            
+        logger.info(f"成功提取特征 - 训练集: {train_features.shape}, 验证集: {val_features.shape}, 测试集: {test_features.shape}")
+        logger.info(f"提取了 {len(group_features)} 个特征组用于group_mlp模型")
+            
+    except Exception as e:
+        logger.error(f"处理特征数据失败: {e}")
+        return
+    
+    # 步骤2：创建模型
+    logger.info("步骤2: 创建模型...")
+    try:
+        model_config = config.get('baseline_model', {})
+        
+        if args.model_type == 'mlp':
+            # 基础MLP模型
+            hidden_dims = model_config.get('hidden_dims', [1024, 512, 256])
+            dropout_rate = model_config.get('dropout_rate', 0.3)
+            
+            input_dim = train_features.shape[1]
+            num_classes = len(np.unique(train_labels))
+            
+            model = BaselineMLP(
+                input_dim=input_dim,
+                hidden_dims=hidden_dims,
+                num_classes=num_classes,
+                dropout_rate=dropout_rate
+            )
+            
+            logger.info(f"创建BaselineMLP模型 - 输入维度: {input_dim}, 隐藏层: {hidden_dims}, 输出类别: {num_classes}")
+            
+        elif args.model_type == 'group_mlp':
+            # 特征组MLP模型
+            # 提取每个特征组的维度
+            group_dims = {}
+            for group_name, group_data in group_features.items():
+                group_dims[group_name] = group_data['train'].shape[1]
+            
+            # 使用配置文件中的隐藏层维度或设置默认值
+            group_hidden_dims = {}
+            for group_name in group_dims.keys():
+                if group_name in model_config.get('group_hidden_dims', {}):
+                    group_hidden_dims[group_name] = model_config['group_hidden_dims'][group_name]
+                else:
+                    # 默认隐藏层维度
+                    group_hidden_dims[group_name] = [256, 128]
+            
+            num_classes = len(np.unique(train_labels))
+            fusion_method = model_config.get('fusion_method', 'attention')
+            dropout_rate = model_config.get('dropout_rate', 0.3)
+            
+            model = FeatureGroupMLP(
+                group_dims=group_dims,
+                hidden_dims=group_hidden_dims,
+                num_classes=num_classes,
+                fusion_method=fusion_method,
+                dropout_rate=dropout_rate
+            )
+            
+            logger.info(f"创建FeatureGroupMLP模型 - 特征组: {list(group_dims.keys())}, 融合方法: {fusion_method}")
+            
+        elif args.model_type == 'deep_mlp':
+            # 增强版DeepMLP模型
+            hidden_dims = model_config.get('hidden_dims', [1024, 512, 256])
+            dropout_rate = model_config.get('dropout_rate', 0.3)
+            use_residual = model_config.get('use_residual', True)
+            use_self_attention = model_config.get('use_self_attention', True)
+            use_feature_interaction = model_config.get('use_feature_interaction', True)
+            num_attn_heads = model_config.get('num_attn_heads', 8)
+            attn_layers = model_config.get('attn_layers', [1, 3])
+            
+            input_dim = train_features.shape[1]
+            num_classes = len(np.unique(train_labels))
+            
+            model = DeepMLP(
+                input_dim=input_dim,
+                hidden_dims=hidden_dims,
+                num_classes=num_classes,
+                use_residual=use_residual,
+                use_self_attention=use_self_attention,
+                use_feature_interaction=use_feature_interaction,
+                dropout_rates=[dropout_rate] * len(hidden_dims),
+                num_attn_heads=num_attn_heads,
+                attn_layers=attn_layers
+            )
+            
+            logger.info(f"创建DeepMLP模型 - 输入维度: {input_dim}, 隐藏层: {hidden_dims}, 使用残差: {use_residual}, 使用自注意力: {use_self_attention}")
+        
+        # 记录模型参数数量
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(f"模型总参数量: {total_params:,}")
+        
+    except Exception as e:
+        logger.error(f"创建模型失败: {e}")
+        return
+    
+    # 步骤3：训练模型
+    logger.info("步骤3: 训练模型...")
+    try:
+        # 更新配置，指定保存目录
+        model_config['save_dir'] = output_dir
+        
+        # 创建临时配置文件
+        temp_config_path = os.path.join(output_dir, 'model_config.json')
+        with open(temp_config_path, 'w') as f:
+            json.dump(model_config, f, indent=2)
+        
+        # 创建训练器
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        logger.info(f"使用设备: {device}")
+        
+        if args.model_type in ['mlp', 'deep_mlp']:
+            # 使用标准训练器
+            trainer = BaselineTrainer(model, temp_config_path, device)
+            
+            # 准备数据
+            import torch.utils.data as data
+            train_tensor_x = torch.tensor(train_features, dtype=torch.float32)
+            train_tensor_y = torch.tensor(train_labels, dtype=torch.long)
+            val_tensor_x = torch.tensor(val_features, dtype=torch.float32)
+            val_tensor_y = torch.tensor(val_labels, dtype=torch.long)
+            test_tensor_x = torch.tensor(test_features, dtype=torch.float32)
+            test_tensor_y = torch.tensor(test_labels, dtype=torch.long)
+            
+            train_dataset = data.TensorDataset(train_tensor_x, train_tensor_y)
+            val_dataset = data.TensorDataset(val_tensor_x, val_tensor_y)
+            test_dataset = data.TensorDataset(test_tensor_x, test_tensor_y)
+            
+            batch_size = model_config.get('batch_size', 128)
+            train_loader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            val_loader = data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+            test_loader = data.

@@ -1,0 +1,46 @@
+brain-mri-classification/
+├── configs/                  # 配置文件
+│   ├── base_config.json      # 基础配置
+│   ├── data_config.json      # 数据配置
+│   └── experiments/          # 实验配置
+├── data/                     # 数据目录
+│   ├── raw/                  # 原始数据
+│   ├── processed/            # 处理后数据
+│   └── feature_subsets/      # 特征子集
+├── src/                      # 源代码
+│   ├── data/                 # 数据处理代码
+│   │   ├── data_loader.py    # 数据加载器
+│   │   └── preprocessor.py   # 数据预处理器
+│   ├── analysis/             # 分析模块
+│   │   ├── basic_analyzer.py         # 基础统计分析
+│   │   ├── correlation_analyzer.py   # 相关性分析
+│   │   ├── separability_analyzer.py  # 类别可分性分析
+│   │   └── feature_importance.py     # 特征重要性分析
+│   ├── feature_engineering/  # 特征工程模块
+│   │   ├── feature_selector.py       # 特征选择
+│   │   └── dimension_reducer.py      # 降维与特征变换
+│   ├── models/               # 模型定义
+│   │   ├── baseline.py               # 基线模型
+│   │   └── encoders/                 # 编码器模块
+│   ├── training/             # 训练代码
+│   │   └── baseline_trainer.py       # 基线训练器
+│   └── evaluation/           # 评估代码
+│       └── group_evaluator.py        # 特征组评估
+├── utils/                    # 工具函数
+│   ├── logging_utils.py              # 日志工具
+│   └── input_validator.py            # 输入验证
+├── scripts/                  # 执行脚本
+│   ├── stage1_data_processing.py     # 阶段一：数据处理
+│   ├── stage1_data_analysis.py       # 阶段一：数据分析
+│   ├── stage2_feature_engineering.py # 阶段二：特征工程
+│   └── stage2_baseline_training.py   # 阶段二：基线训练
+├── results/                  # 结果输出
+│   ├── analysis/             # 分析结果
+│   ├── feature_engineering/  # 特征工程结果
+│   ├── training/             # 训练结果
+│   └── evaluation/           # 评估结果
+├── models/                   # 模型存储
+│   ├── checkpoints/          # 检查点
+│   ├── final/                # 最终模型
+│   └── transformers/         # 特征变换器
+└── notebooks/                # 分析笔记本
