@@ -2,7 +2,9 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy import scipy_stats
+from scipy import stats as scipy_stats
+
+
 import json
 from datetime import datetime
 
