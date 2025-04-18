@@ -194,15 +194,16 @@ def main():
         
         # 分析全部特征的类别可分性
         logger.info("分析全部特征的类别可分性...")
+
         feature_significance = separability_analyzer.compute_feature_significance(train_features, train_labels)
         discriminative_features = separability_analyzer.identify_discriminative_features(
             train_features, train_labels, feature_significance)
         class_similarity = separability_analyzer.analyze_class_similarity(train_features, train_labels)
-        
-        # 可视化分析结果
+
+        # 可视化分析结果 
         separability_analyzer.visualize_class_separability(feature_significance, prefix='all')
         separability_analyzer.visualize_class_similarity(class_similarity, prefix='all')
-        
+
         # 保存分析结果
         separability_analyzer.save_analysis_results(
             feature_significance, discriminative_features, class_similarity, prefix='all')
@@ -222,7 +223,7 @@ def main():
                 group_significance, prefix=group_name)
             separability_analyzer.visualize_class_similarity(
                 group_similarity, prefix=group_name)
-            
+                
             # 保存特征组分析结果
             separability_analyzer.save_analysis_results(
                 group_significance, group_discriminative, group_similarity, prefix=group_name)

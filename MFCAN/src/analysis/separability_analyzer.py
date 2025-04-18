@@ -271,76 +271,6 @@ class ClassSeparabilityAnalyzer:
                 self.logger.error(f"计算类别相似度失败: {e}")
             raise
     
-    def visualize_class_separability(self, significance_df, prefix='all'):
-        """
-        可视化类别可分性
-        
-        参数:
-            significance_df: 特征显著性数据框
-            prefix: 文件前缀
-        """
-        if self.logger:
-            self.logger.info(f"可视化 {prefix} 组的类别可分性")
-        
-        # 创建输出子目录
-        vis_dir = os.path.join(self.output_dir, 'visualizations')
-        os.makedirs(vis_dir, exist_ok=True)
-        
-        try:
-            # 绘制类别相似度热图
-            plt.figure(figsize=(12, 10))
-            sns.heatmap(similarity_df, annot=True, cmap='YlGnBu', vmin=0, vmax=1, fmt='.2f')
-            plt.title(f'{prefix} 组类别相似度矩阵')
-            
-            # 保存图表
-            save_path = os.path.join(vis_dir, f"{prefix}_class_similarity.png")
-            plt.savefig(save_path, bbox_inches='tight')
-            plt.close()
-            
-            if self.logger:
-                self.logger.info(f"类别相似度热图已保存至 {save_path}")
-                
-            # 如果类别数量小于等于20，绘制类别相似度网络图
-            if len(similarity_df) <= 20:
-                plt.figure(figsize=(14, 12))
-                
-                # 使用多维缩放将相似度嵌入到二维空间
-                from sklearn.manifold import MDS
-                similarity_array = similarity_df.values
-                mds = MDS(n_components=2, dissimilarity='precomputed', random_state=42)
-                # 转换为距离矩阵
-                distances = 1 - similarity_array
-                pos = mds.fit_transform(distances)
-                
-                # 绘制节点
-                plt.scatter(pos[:, 0], pos[:, 1], s=200, c='skyblue', edgecolors='black')
-                
-                # 添加类别标签
-                for i, label in enumerate(similarity_df.index):
-                    plt.annotate(label, (pos[i, 0], pos[i, 1]), fontsize=12, ha='center', va='center')
-                
-                # 绘制连接线，只有相似度高于0.5的类别对之间绘制连线
-                threshold = 0.5
-                for i in range(len(similarity_df)):
-                    for j in range(i+1, len(similarity_df)):
-                        if similarity_array[i, j] > threshold:
-                            plt.plot([pos[i, 0], pos[j, 0]], [pos[i, 1], pos[j, 1]], 
-                                  'gray', alpha=similarity_array[i, j], linewidth=similarity_array[i, j]*3)
-                
-                plt.title(f'{prefix} 组类别相似度网络图 (相似度 > {threshold})')
-                plt.axis('off')
-                
-                # 保存图表
-                save_path = os.path.join(vis_dir, f"{prefix}_class_similarity_network.png")
-                plt.savefig(save_path, bbox_inches='tight')
-                plt.close()
-                
-                if self.logger:
-                    self.logger.info(f"类别相似度网络图已保存至 {save_path}")
-                    
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"生成类别相似性可视化失败: {e}")
     
     def save_analysis_results(self, significance_df, discriminative_features, 
                             similarity_df, prefix='all'):
@@ -722,17 +652,16 @@ class ClassSeparabilityAnalyzer:
             if self.logger:
                 self.logger.error(f"生成类别可分性分析汇总报告失败: {e}")
 
-    
-    def visualize_class_similarity(self, similarity_df, prefix='all'):
+    def visualize_class_separability(self, significance_df, prefix='all'):
         """
-        可视化类别相似性
+        可视化类别可分性（基于特征显著性）
         
         参数:
-            similarity_df: 类别相似度数据框
+            significance_df: 特征显著性数据框
             prefix: 文件前缀
         """
         if self.logger:
-            self.logger.info(f"可视化 {prefix} 组的类别相似性")
+            self.logger.info(f"可视化 {prefix} 组的类别可分性")
         
         # 创建输出子目录
         vis_dir = os.path.join(self.output_dir, 'visualizations')
@@ -773,7 +702,7 @@ class ClassSeparabilityAnalyzer:
             plt.close()
             
             if self.logger:
-                self.logger.info(f"类别区分能力可视化已保存至 {save_path}")
+                self.logger.info(f"类别可分性可视化已保存至 {save_path}")
             
             # 绘制P值直方图
             plt.figure(figsize=(10, 6))
@@ -796,13 +725,13 @@ class ClassSeparabilityAnalyzer:
             # 绘制互信息与F值关系散点图
             plt.figure(figsize=(10, 8))
             plt.scatter(significance_df['Normalized_F'], significance_df['Normalized_MI'], 
-                      alpha=0.7, c=significance_df['Combined_Score'], cmap='viridis')
+                    alpha=0.7, c=significance_df['Combined_Score'], cmap='viridis')
             
             # 添加前10个特征的标签
             for i, row in significance_df.head(10).iterrows():
                 plt.annotate(row['Feature'], 
-                           (row['Normalized_F'], row['Normalized_MI']),
-                           fontsize=9)
+                        (row['Normalized_F'], row['Normalized_MI']),
+                        fontsize=9)
             
             plt.colorbar(label='综合得分')
             plt.title(f'{prefix} 组特征的F值与互信息关系')
@@ -821,3 +750,74 @@ class ClassSeparabilityAnalyzer:
         except Exception as e:
             if self.logger:
                 self.logger.error(f"生成类别可分性可视化失败: {e}")
+
+    def visualize_class_similarity(self, similarity_df, prefix='all'):
+        """
+        可视化类别相似性
+        
+        参数:
+            similarity_df: 类别相似度数据框
+            prefix: 文件前缀
+        """
+        if self.logger:
+            self.logger.info(f"可视化 {prefix} 组的类别相似性")
+        
+        # 创建输出子目录
+        vis_dir = os.path.join(self.output_dir, 'visualizations')
+        os.makedirs(vis_dir, exist_ok=True)
+        
+        try:
+            # 绘制类别相似度热图
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(similarity_df, annot=True, cmap='YlGnBu', vmin=0, vmax=1, fmt='.2f')
+            plt.title(f'{prefix} 组类别相似度矩阵')
+            
+            # 保存图表
+            save_path = os.path.join(vis_dir, f"{prefix}_class_similarity.png")
+            plt.savefig(save_path, bbox_inches='tight')
+            plt.close()
+            
+            if self.logger:
+                self.logger.info(f"类别相似度热图已保存至 {save_path}")
+                
+            # 如果类别数量小于等于20，绘制类别相似度网络图
+            if len(similarity_df) <= 20:
+                plt.figure(figsize=(14, 12))
+                
+                # 使用多维缩放将相似度嵌入到二维空间
+                from sklearn.manifold import MDS
+                similarity_array = similarity_df.values
+                mds = MDS(n_components=2, dissimilarity='precomputed', random_state=42)
+                # 转换为距离矩阵
+                distances = 1 - similarity_array
+                pos = mds.fit_transform(distances)
+                
+                # 绘制节点
+                plt.scatter(pos[:, 0], pos[:, 1], s=200, c='skyblue', edgecolors='black')
+                
+                # 添加类别标签
+                for i, label in enumerate(similarity_df.index):
+                    plt.annotate(label, (pos[i, 0], pos[i, 1]), fontsize=12, ha='center', va='center')
+                
+                # 绘制连接线，只有相似度高于0.5的类别对之间绘制连线
+                threshold = 0.5
+                for i in range(len(similarity_df)):
+                    for j in range(i+1, len(similarity_df)):
+                        if similarity_array[i, j] > threshold:
+                            plt.plot([pos[i, 0], pos[j, 0]], [pos[i, 1], pos[j, 1]], 
+                                'gray', alpha=similarity_array[i, j], linewidth=similarity_array[i, j]*3)
+                
+                plt.title(f'{prefix} 组类别相似度网络图 (相似度 > {threshold})')
+                plt.axis('off')
+                
+                # 保存图表
+                save_path = os.path.join(vis_dir, f"{prefix}_class_similarity_network.png")
+                plt.savefig(save_path, bbox_inches='tight')
+                plt.close()
+                
+                if self.logger:
+                    self.logger.info(f"类别相似度网络图已保存至 {save_path}")
+                    
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"生成类别相似性可视化失败: {e}")

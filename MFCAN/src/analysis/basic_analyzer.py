@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy import stats
+from scipy import scipy_stats
 import json
 from datetime import datetime
 
@@ -55,7 +55,9 @@ class BasicAnalyzer:
         
         if feature_names is None:
             feature_names = [f"Feature_{i}" for i in range(features.shape[1])]
-        
+
+        stats = {}
+
         # 计算基本统计量
         stats = {
             'Mean': np.mean(features, axis=0),
@@ -65,8 +67,8 @@ class BasicAnalyzer:
             'Median': np.median(features, axis=0),
             '25%': np.percentile(features, 25, axis=0),
             '75%': np.percentile(features, 75, axis=0),
-            'Skewness': stats.skew(features, axis=0),
-            'Kurtosis': stats.kurtosis(features, axis=0),
+            'Skewness': scipy_stats.skew(features, axis=0),
+            'Kurtosis': scipy_stats.kurtosis(features, axis=0),
             'Missing': np.isnan(features).sum(axis=0),
             'Zeros': (features == 0).sum(axis=0)
         }
@@ -433,7 +435,7 @@ class BasicAnalyzer:
                 
                 # 添加正态性检验结果
                 if sampled_features.shape[0] > 8:  # 最小样本大小要求
-                    k2, p = stats.normaltest(sampled_features[:, idx])
+                    k2, p = scipy_stats.normaltest(sampled_features[:, idx])
                     plt.figtext(0.01, 0.01, f'正态性检验 p值: {p:.4f}', 
                                wrap=True, fontsize=10)
                 

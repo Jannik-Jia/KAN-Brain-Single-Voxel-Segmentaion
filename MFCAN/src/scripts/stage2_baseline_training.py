@@ -354,4 +354,214 @@ def main():
             batch_size = model_config.get('batch_size', 128)
             train_loader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-            test_loader = data.
+            test_loader = data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            
+            data_loaders = {
+                'train': train_loader,
+                'val': val_loader,
+                'test': test_loader
+            }
+            
+            # 训练模型
+            history = trainer.train(data_loaders)
+            
+            # 评估模型
+            metrics = trainer.evaluate(data_loaders['test'])
+            
+            logger.info(f"训练完成 - 测试集准确率: {metrics['accuracy']:.4f}, 测试集F1分数: {metrics['f1_weighted']:.4f}")
+            
+        elif args.model_type == 'group_mlp':
+            # 使用特征组评估器进行训练
+            # 首先创建一个简化版的特征组数据集字典
+            group_data_dict = {}
+            
+            # 添加训练集
+            train_group = {}
+            for group_name, group_data in group_features.items():
+                train_group[group_name] = torch.tensor(group_data['train'], dtype=torch.float32)
+            group_data_dict['train'] = {
+                'features': train_group,
+                'labels': torch.tensor(train_labels, dtype=torch.long)
+            }
+            
+            # 添加验证集
+            val_group = {}
+            for group_name, group_data in group_features.items():
+                val_group[group_name] = torch.tensor(group_data['val'], dtype=torch.float32)
+            group_data_dict['val'] = {
+                'features': val_group,
+                'labels': torch.tensor(val_labels, dtype=torch.long)
+            }
+            
+            # 添加测试集
+            test_group = {}
+            for group_name, group_data in group_features.items():
+                test_group[group_name] = torch.tensor(group_data['test'], dtype=torch.float32)
+            group_data_dict['test'] = {
+                'features': test_group,
+                'labels': torch.tensor(test_labels, dtype=torch.long)
+            }
+            
+            # 使用GroupEvaluator训练和评估模型
+            evaluator = GroupEvaluator(
+                model_template=model,
+                config_path=temp_config_path,
+                output_dir=output_dir,
+                logger=logger,
+                device=device
+            )
+            
+            # 准备数据加载器
+            data_loaders, feature_dims = evaluator._prepare_data_loaders(group_data_dict)
+            
+            # 训练和评估
+            metrics = evaluator.train_and_evaluate(data_loaders, feature_dims, list(group_features.keys()))
+            
+            logger.info(f"训练完成 - 测试集准确率: {metrics['accuracy']:.4f}, 测试集F1分数: {metrics['f1_weighted']:.4f}")
+        
+    except Exception as e:
+        logger.error(f"训练模型失败: {e}")
+        logger_manager.log_experiment_end(experiment_name, {"状态": "失败", "阶段": "模型训练", "错误": str(e)})
+        return
+    
+    # 步骤4：评估特征有效性（对比不同特征类型）
+    if args.feature_type != 'original':
+        logger.info("步骤4: 评估特征工程有效性...")
+        try:
+            # 创建评估结果总结
+            evaluation_summary = {
+                "model_type": args.model_type,
+                "feature_type": args.feature_type,
+                "accuracy": float(metrics['accuracy']),
+                "f1_weighted": float(metrics['f1_weighted']),
+                "f1_macro": float(metrics.get('f1_macro', 0)),
+                "params_count": total_params,
+                "feature_dims": train_features.shape[1]
+            }
+            
+            # 保存评估结果
+            summary_path = os.path.join(output_dir, 'evaluation_summary.json')
+            with open(summary_path, 'w') as f:
+                json.dump(evaluation_summary, f, indent=4)
+                
+            logger.info(f"特征工程评估摘要已保存至 {summary_path}")
+            
+            # 创建可读性报告
+            report_path = os.path.join(output_dir, 'feature_effectiveness_report.md')
+            with open(report_path, 'w') as f:
+                f.write(f"# {args.model_type.upper()} 模型特征有效性评估\n\n")
+                f.write(f"## 特征类型: {args.feature_type}\n\n")
+                f.write(f"分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                f.write("## 模型性能\n\n")
+                f.write(f"- 准确率: {metrics['accuracy']:.4f}\n")
+                f.write(f"- 加权F1分数: {metrics['f1_weighted']:.4f}\n")
+                if 'f1_macro' in metrics:
+                    f.write(f"- 宏平均F1分数: {metrics['f1_macro']:.4f}\n")
+                f.write(f"- 特征维度: {train_features.shape[1]}\n")
+                f.write(f"- 模型参数数量: {total_params:,}\n\n")
+                
+                f.write("## 特征有效性分析\n\n")
+                
+                if args.feature_type == 'selected':
+                    # 特征选择有效性分析
+                    original_dims = config.get('feature_groups', {}).get('diffusion', {}).get('input_dim', 0) + \
+                                    config.get('feature_groups', {}).get('qti', {}).get('input_dim', 0) + \
+                                    config.get('feature_groups', {}).get('cest', {}).get('input_dim', 0)
+                    if original_dims == 0:
+                        original_dims = 341  # 默认值
+                        
+                    reduction_ratio = (original_dims - train_features.shape[1]) / original_dims * 100
+                    
+                    f.write(f"### 特征选择效果\n\n")
+                    f.write(f"- 原始特征维度: {original_dims}\n")
+                    f.write(f"- 选择后特征维度: {train_features.shape[1]}\n")
+                    f.write(f"- 维度减少比例: {reduction_ratio:.1f}%\n\n")
+                    
+                    if reduction_ratio > 70:
+                        f.write("特征选择效果**显著**，保留了最重要的特征同时大幅减少了维度。\n\n")
+                    elif reduction_ratio > 30:
+                        f.write("特征选择效果**中等**，适度减少了特征维度。\n\n")
+                    else:
+                        f.write("特征选择效果**有限**，仅少量减少了特征维度。\n\n")
+                    
+                elif args.feature_type == 'pca':
+                    # PCA降维有效性分析
+                    original_dims = config.get('feature_groups', {}).get('diffusion', {}).get('input_dim', 0) + \
+                                    config.get('feature_groups', {}).get('qti', {}).get('input_dim', 0) + \
+                                    config.get('feature_groups', {}).get('cest', {}).get('input_dim', 0)
+                    if original_dims == 0:
+                        original_dims = 341  # 默认值
+                        
+                    reduction_ratio = (original_dims - train_features.shape[1]) / original_dims * 100
+                    
+                    f.write(f"### PCA降维效果\n\n")
+                    f.write(f"- 原始特征维度: {original_dims}\n")
+                    f.write(f"- PCA降维后维度: {train_features.shape[1]}\n")
+                    f.write(f"- 维度减少比例: {reduction_ratio:.1f}%\n\n")
+                    
+                    if reduction_ratio > 70:
+                        f.write("PCA降维效果**显著**，极大地减少了特征维度同时保留了主要信息。\n\n")
+                    elif reduction_ratio > 30:
+                        f.write("PCA降维效果**中等**，在保留信息的同时减少了特征维度。\n\n")
+                    else:
+                        f.write("PCA降维效果**有限**，仅少量减少了特征维度。\n\n")
+                    
+                elif args.feature_type == 'combined':
+                    # 组合特征有效性分析
+                    f.write(f"### 组合特征效果\n\n")
+                    f.write(f"- 特征选择和PCA降维的组合提供了一种平衡的特征表示。\n")
+                    f.write(f"- 最终特征维度: {train_features.shape[1]}\n\n")
+                    
+                f.write("## 建议\n\n")
+                
+                # 根据评估结果给出建议
+                f.write("基于当前评估结果，对模型训练提出以下建议：\n\n")
+                
+                if metrics['accuracy'] > 0.8:
+                    f.write("1. **模型性能良好**：当前模型已达到较高准确率，可以考虑部署使用。\n")
+                elif metrics['accuracy'] > 0.6:
+                    f.write("1. **模型性能中等**：可尝试调整模型超参数或尝试更复杂的模型架构提升性能。\n")
+                else:
+                    f.write("1. **模型性能有限**：建议重新审视特征工程策略，或考虑更高级的模型架构。\n")
+                
+                if args.model_type == 'group_mlp':
+                    f.write("2. **特征组融合**：当前使用特征组分别建模再融合的策略，可以进一步优化每个特征组的处理方式和融合机制。\n")
+                else:
+                    f.write("2. **特征表示**：可以尝试不同的特征表示方法，比如结合特征选择和降维的混合策略。\n")
+                
+                f.write("3. **进一步实验**：建议与其他模型架构和特征工程策略进行对比实验，寻找最佳组合。\n")
+                
+            logger.info(f"特征有效性报告已保存至 {report_path}")
+            
+        except Exception as e:
+            logger.error(f"评估特征有效性失败: {e}")
+    
+    end_time = time.time()
+    training_time = end_time - start_time
+    
+    # 记录实验结束
+    results = {
+        "状态": "成功",
+        "训练时间(秒)": training_time,
+        "准确率": float(metrics['accuracy']),
+        "F1分数": float(metrics['f1_weighted']),
+        "模型类型": args.model_type,
+        "特征类型": args.feature_type,
+        "特征维度": train_features.shape[1],
+        "参数数量": total_params
+    }
+    logger_manager.log_experiment_end(experiment_name, results)
+    
+    logger.info(f"基线模型训练完成！总耗时: {training_time:.2f} 秒")
+    logger.info(f"模型保存在: {output_dir}")
+    
+    return {
+        'model_dir': output_dir,
+        'accuracy': float(metrics['accuracy']),
+        'f1_score': float(metrics['f1_weighted']),
+        'timestamp': timestamp
+    }
+
+if __name__ == "__main__":
+    main()
