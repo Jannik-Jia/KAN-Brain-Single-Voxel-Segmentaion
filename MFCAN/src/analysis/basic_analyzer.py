@@ -123,106 +123,106 @@ class BasicAnalyzer:
         self._generate_stats_md_report(stats_df, prefix, basic_stats_dir)
     
     def _visualize_basic_stats(self, stats_df, group_name, output_dir):
-    """可视化基本统计量"""
-    if self.logger:
-        self.logger.info(f"可视化 {group_name} 组的基本统计量")
-    
-    try:
-        # 创建统计量分布图
-        plt.figure(figsize=(20, 15))
-        
-        # 均值分布
-        plt.subplot(3, 3, 1)
-        plt.hist(stats_df['Mean'], bins=30, alpha=0.7)
-        plt.title(f'{group_name} Mean Distribution')
-        plt.xlabel('Mean')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 标准差分布
-        plt.subplot(3, 3, 2)
-        plt.hist(stats_df['Std'], bins=30, alpha=0.7)
-        plt.title(f'{group_name} Std Deviation Distribution')
-        plt.xlabel('Standard Deviation')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 中位数分布
-        plt.subplot(3, 3, 3)
-        plt.hist(stats_df['Median'], bins=30, alpha=0.7)
-        plt.title(f'{group_name} Median Distribution')
-        plt.xlabel('Median')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 偏度分布
-        plt.subplot(3, 3, 4)
-        plt.hist(stats_df['Skewness'], bins=30, alpha=0.7)
-        plt.title(f'{group_name} Skewness Distribution')
-        plt.xlabel('Skewness')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 峰度分布
-        plt.subplot(3, 3, 5)
-        plt.hist(stats_df['Kurtosis'], bins=30, alpha=0.7)
-        plt.title(f'{group_name} Kurtosis Distribution')
-        plt.xlabel('Kurtosis')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 范围分布
-        plt.subplot(3, 3, 6)
-        ranges = stats_df['Max'] - stats_df['Min']
-        plt.hist(ranges, bins=30, alpha=0.7)
-        plt.title(f'{group_name} Range Distribution')
-        plt.xlabel('Range')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 异常值比例
-        plt.subplot(3, 3, 7)
-        z_scores = (stats_df['Mean'] - stats_df['Median']) / stats_df['Std'].replace(0, 1)  # 避免除以零
-        plt.hist(z_scores, bins=30, alpha=0.7)
-        plt.title(f'{group_name} Mean-Median Deviation (z-score)')
-        plt.xlabel('Z-score')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 零值比例
-        plt.subplot(3, 3, 8)
-        zero_ratio = stats_df['Zeros'] / self.stats_results[group_name]['features_shape'][0]
-        plt.hist(zero_ratio, bins=30, alpha=0.7)
-        plt.title(f'{group_name} Zero Value Ratio')
-        plt.xlabel('Zero Ratio')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        # 缺失值比例
-        plt.subplot(3, 3, 9)
-        missing_ratio = stats_df['Missing'] / self.stats_results[group_name]['features_shape'][0]
-        plt.hist(missing_ratio, bins=30, alpha=0.7)
-        plt.title(f'{group_name} Missing Value Ratio')
-        plt.xlabel('Missing Ratio')
-        plt.ylabel('Frequency')
-        plt.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        # 保存图表
-        save_path = os.path.join(output_dir, f"{group_name}_stats_distribution.png")
-        plt.savefig(save_path)
-        plt.close()
-        
+        """可视化基本统计量"""
         if self.logger:
-            self.logger.info(f"统计量分布图已保存至 {save_path}")
+            self.logger.info(f"可视化 {group_name} 组的基本统计量")
+        
+        try:
+            # 创建统计量分布图
+            plt.figure(figsize=(20, 15))
             
-        # 创建箱线图
-        self._create_boxplots(stats_df, group_name, output_dir)
+            # 均值分布
+            plt.subplot(3, 3, 1)
+            plt.hist(stats_df['Mean'], bins=30, alpha=0.7)
+            plt.title(f'{group_name} Mean Distribution')
+            plt.xlabel('Mean')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
             
-    except Exception as e:
-        if self.logger:
-            self.logger.error(f"生成统计量可视化失败: {e}")
+            # 标准差分布
+            plt.subplot(3, 3, 2)
+            plt.hist(stats_df['Std'], bins=30, alpha=0.7)
+            plt.title(f'{group_name} Std Deviation Distribution')
+            plt.xlabel('Standard Deviation')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 中位数分布
+            plt.subplot(3, 3, 3)
+            plt.hist(stats_df['Median'], bins=30, alpha=0.7)
+            plt.title(f'{group_name} Median Distribution')
+            plt.xlabel('Median')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 偏度分布
+            plt.subplot(3, 3, 4)
+            plt.hist(stats_df['Skewness'], bins=30, alpha=0.7)
+            plt.title(f'{group_name} Skewness Distribution')
+            plt.xlabel('Skewness')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 峰度分布
+            plt.subplot(3, 3, 5)
+            plt.hist(stats_df['Kurtosis'], bins=30, alpha=0.7)
+            plt.title(f'{group_name} Kurtosis Distribution')
+            plt.xlabel('Kurtosis')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 范围分布
+            plt.subplot(3, 3, 6)
+            ranges = stats_df['Max'] - stats_df['Min']
+            plt.hist(ranges, bins=30, alpha=0.7)
+            plt.title(f'{group_name} Range Distribution')
+            plt.xlabel('Range')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 异常值比例
+            plt.subplot(3, 3, 7)
+            z_scores = (stats_df['Mean'] - stats_df['Median']) / stats_df['Std'].replace(0, 1)  # 避免除以零
+            plt.hist(z_scores, bins=30, alpha=0.7)
+            plt.title(f'{group_name} Mean-Median Deviation (z-score)')
+            plt.xlabel('Z-score')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 零值比例
+            plt.subplot(3, 3, 8)
+            zero_ratio = stats_df['Zeros'] / self.stats_results[group_name]['features_shape'][0]
+            plt.hist(zero_ratio, bins=30, alpha=0.7)
+            plt.title(f'{group_name} Zero Value Ratio')
+            plt.xlabel('Zero Ratio')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            # 缺失值比例
+            plt.subplot(3, 3, 9)
+            missing_ratio = stats_df['Missing'] / self.stats_results[group_name]['features_shape'][0]
+            plt.hist(missing_ratio, bins=30, alpha=0.7)
+            plt.title(f'{group_name} Missing Value Ratio')
+            plt.xlabel('Missing Ratio')
+            plt.ylabel('Frequency')
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            
+            # 保存图表
+            save_path = os.path.join(output_dir, f"{group_name}_stats_distribution.png")
+            plt.savefig(save_path)
+            plt.close()
+            
+            if self.logger:
+                self.logger.info(f"统计量分布图已保存至 {save_path}")
+                
+            # 创建箱线图
+            self._create_boxplots(stats_df, group_name, output_dir)
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"生成统计量可视化失败: {e}")
 
     def _create_boxplots(self, stats_df, group_name, output_dir):
         """创建特征统计的箱线图"""
