@@ -622,9 +622,9 @@ class GroupEvaluator:
                 data.append(size_df['accuracy'].values)
             
             plt.boxplot(data, labels=group_sizes)
-            plt.title('不同特征组大小的准确率分布')
-            plt.xlabel('特征组数量')
-            plt.ylabel('准确率')
+            plt.title('Accuracy distribution for different feature group sizes')
+            plt.xlabel('Number of feature groups')
+            plt.ylabel('Accuracy')
             plt.grid(True, alpha=0.3)
             
             # F1分数对比
@@ -635,9 +635,9 @@ class GroupEvaluator:
                 data.append(size_df['f1_macro'].values)
             
             plt.boxplot(data, labels=group_sizes)
-            plt.title('不同特征组大小的宏平均F1分数分布')
-            plt.xlabel('特征组数量')
-            plt.ylabel('宏平均F1')
+            plt.title('Macro-averaged F1 score distribution for different feature group sizes')
+            plt.xlabel('Number of feature groups')
+            plt.ylabel('Macro-averaged F1')
             plt.grid(True, alpha=0.3)
             
             plt.tight_layout()
@@ -689,7 +689,7 @@ class GroupEvaluator:
             sns.heatmap(contribution_matrix, annot=True, cmap='YlGnBu', 
                        xticklabels=all_groups, yticklabels=all_groups)
             
-            plt.title('特征组贡献热图')
+            plt.title('Feature group contribution heatmap')
             plt.tight_layout()
             
             # 保存图表
@@ -727,17 +727,17 @@ class GroupEvaluator:
             
             plt.subplot(2, 1, 1)
             plt.bar(single_group_df['group_name'], single_group_df['accuracy'], color='steelblue')
-            plt.title('单个特征组的准确率')
-            plt.xlabel('特征组')
-            plt.ylabel('准确率')
+            plt.title('Accuracy of individual feature groups')
+            plt.xlabel('Feature group')
+            plt.ylabel('Accuracy')
             plt.xticks(rotation=45, ha='right')
             plt.grid(True, alpha=0.3)
             
             plt.subplot(2, 1, 2)
             plt.bar(single_group_df['group_name'], single_group_df['f1_macro'], color='forestgreen')
-            plt.title('单个特征组的宏平均F1')
-            plt.xlabel('特征组')
-            plt.ylabel('宏平均F1')
+            plt.title('Macro-averaged F1 of individual feature groups')
+            plt.xlabel('Feature group')
+            plt.ylabel('Macro-averaged F1')
             plt.xticks(rotation=45, ha='right')
             plt.grid(True, alpha=0.3)
             

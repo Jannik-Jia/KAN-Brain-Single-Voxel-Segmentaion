@@ -49,6 +49,11 @@ def main():
     parser.add_argument('--config', type=str, default='configs/data_config.json', help='配置文件路径')
     parser.add_argument('--data_path', type=str, default='data/processed/feature_groups.h5', help='特征组数据路径')
     parser.add_argument('--output_dir', type=str, default=None, help='输出目录，若不指定则使用配置文件中的设置')
+    parser.add_argument('--max_classes', type=int, default=20, help='最大处理的类别数量，设为0处理所有类别')
+    parser.add_argument('--max_samples', type=int, default=1000, help='每个类别最大样本数，通过抽样减少计算量')
+    parser.add_argument('--use_gpu', action='store_true', help='是否使用GPU加速计算')
+    parser.add_argument('--batch_size', type=int, default=10, help='GPU批处理大小（类别批次大小）')
+
     args = parser.parse_args()
     
     # 设置时间戳
@@ -194,10 +199,16 @@ def main():
         
         # 分析全部特征的类别可分性
         logger.info("分析全部特征的类别可分性...")
-
         feature_significance = separability_analyzer.compute_feature_significance(train_features, train_labels)
         discriminative_features = separability_analyzer.identify_discriminative_features(
-            train_features, train_labels, feature_significance)
+            train_features, train_labels, feature_significance, 
+            feature_group='all', 
+            max_classes=args.max_classes if args.max_classes > 0 else None,
+            max_samples=args.max_samples,
+            use_gpu=args.use_gpu,
+            batch_size=args.batch_size
+        )
+
         class_similarity = separability_analyzer.analyze_class_similarity(train_features, train_labels)
 
         # 可视化分析结果 

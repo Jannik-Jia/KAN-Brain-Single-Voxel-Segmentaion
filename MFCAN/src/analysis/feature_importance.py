@@ -288,113 +288,114 @@ class FeatureImportanceAnalyzer:
     def visualize_importance(self, ranked_features, prefix='all'):
         """
         可视化特征重要性
-        
+
         参数:
             ranked_features: 排序后的特征列表
             prefix: 文件前缀
         """
         if self.logger:
             self.logger.info(f"可视化 {prefix} 组的特征重要性")
-        
+
         if not ranked_features:
             if self.logger:
                 self.logger.warning("没有特征排名可用于可视化")
             return
-        
+
         # 创建输出子目录
         vis_dir = os.path.join(self.output_dir, 'visualizations')
         os.makedirs(vis_dir, exist_ok=True)
-        
+
         try:
             # 提取特征名称和重要性
             feature_names = [feature['Feature'] for feature in ranked_features]
             importance_values = [feature['Importance'] for feature in ranked_features]
-            
+
             # 只显示前20个特征
             top_n = min(20, len(ranked_features))
             top_features = feature_names[:top_n]
             top_importance = importance_values[:top_n]
-            
+
             # 创建条形图
             plt.figure(figsize=(12, 10))
             bars = plt.barh(top_features[::-1], top_importance[::-1])
-            
+
             # 为每个条形添加值标签
             for i, bar in enumerate(bars):
                 width = bar.get_width()
                 plt.text(width + 0.01, bar.get_y() + bar.get_height()/2, 
-                       f'{width:.4f}', ha='left', va='center')
-            
-            plt.title(f'{prefix} 组前{top_n}个最重要特征')
-            plt.xlabel('重要性分数')
+                    f'{width:.4f}', ha='left', va='center')
+
+            plt.title(f'Top {top_n} Important Features ({prefix})')
+            plt.xlabel('Importance Score')
             plt.tight_layout()
-            
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_top_features_importance.png")
             plt.savefig(save_path, bbox_inches='tight')
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"特征重要性条形图已保存至 {save_path}")
-            
+
             # 创建累积重要性图
             plt.figure(figsize=(12, 8))
             # 计算累积重要性
             cumulative_importance = np.cumsum(importance_values) / sum(importance_values)
-            
+
             plt.plot(range(1, len(cumulative_importance) + 1), cumulative_importance, 'b-')
-            
+
             # 标记80%, 90%, 95%的点
             for coverage in [0.8, 0.9, 0.95]:
                 idx = np.argmax(cumulative_importance >= coverage)
                 feature_count = idx + 1
                 plt.axvline(x=feature_count, color='r', linestyle='--')
-                plt.text(feature_count + 0.5, coverage, f'特征数: {feature_count}\n覆盖率: {coverage:.2f}', 
-                       ha='left', va='center')
-            
-            plt.title(f'{prefix} 组特征重要性累积分布')
-            plt.xlabel('特征数量')
-            plt.ylabel('累积重要性')
+                plt.text(feature_count + 0.5, coverage, f'Features: {feature_count}\nCoverage: {coverage:.2f}', 
+                    ha='left', va='center')
+
+            plt.title(f'Cumulative Feature Importance ({prefix})')
+            plt.xlabel('Number of Features')
+            plt.ylabel('Cumulative Importance')
             plt.grid(True, alpha=0.3)
-            
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_cumulative_importance.png")
             plt.savefig(save_path)
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"累积重要性图已保存至 {save_path}")
-            
+
             # 可视化特征重要性分布
             plt.figure(figsize=(12, 8))
-            
+
             plt.hist(importance_values, bins=50, alpha=0.7)
-            plt.title(f'{prefix} 组特征重要性分布')
-            plt.xlabel('重要性分数')
-            plt.ylabel('频率')
+            plt.title(f'Feature Importance Distribution ({prefix})')
+            plt.xlabel('Importance Score')
+            plt.ylabel('Frequency')
             plt.grid(True, alpha=0.3)
-            
+
             # 计算并标记重要性阈值
             for coverage in [0.8, 0.9, 0.95]:
                 idx = np.argmax(cumulative_importance >= coverage)
                 if idx < len(importance_values):
                     threshold = importance_values[idx]
                     plt.axvline(x=threshold, color='r', linestyle='--', 
-                               label=f'{coverage:.0%} 覆盖率阈值: {threshold:.4f}')
-            
+                            label=f'{int(coverage * 100)}% Coverage Threshold: {threshold:.4f}')
+
             plt.legend()
-            
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_importance_distribution.png")
             plt.savefig(save_path)
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"特征重要性分布图已保存至 {save_path}")
-                
+
         except Exception as e:
             if self.logger:
                 self.logger.error(f"生成特征重要性可视化失败: {e}")
+
     
     def save_results(self, ranked_features, thresholds, output_dir=None, prefix='all'):
         """

@@ -333,9 +333,9 @@ class CorrelationAnalyzer:
             
             # 绘制热图
             sns.heatmap(corr_df_subset, mask=mask, cmap=cmap, annot=False,
-                       vmax=1.0, vmin=-1.0, center=0, square=True, linewidths=.5)
+                    vmax=1.0, vmin=-1.0, center=0, square=True, linewidths=.5)
             
-            plt.title(f'{prefix} 特征相关性矩阵', fontsize=16)
+            plt.title(f'{prefix} Feature Correlation Matrix', fontsize=16)
             
             # 保存图表
             heatmap_path = os.path.join(vis_dir, f"{prefix}_correlation_heatmap.png")
@@ -356,12 +356,12 @@ class CorrelationAnalyzer:
             plt.axvline(x=0, color='r', linestyle='--')
             
             # 添加垂直线表示高相关阈值
-            plt.axvline(x=0.8, color='g', linestyle='--', label='高正相关 (0.8)')
-            plt.axvline(x=-0.8, color='orange', linestyle='--', label='高负相关 (-0.8)')
+            plt.axvline(x=0.8, color='g', linestyle='--', label='High Positive Corr (0.8)')
+            plt.axvline(x=-0.8, color='orange', linestyle='--', label='High Negative Corr (-0.8)')
             
-            plt.title(f'{prefix} 特征相关系数分布', fontsize=16)
-            plt.xlabel('相关系数', fontsize=14)
-            plt.ylabel('频率', fontsize=14)
+            plt.title(f'{prefix} Feature Correlation Coefficient Distribution', fontsize=16)
+            plt.xlabel('Correlation Coefficient', fontsize=14)
+            plt.ylabel('Frequency', fontsize=14)
             plt.legend()
             plt.grid(True, alpha=0.3)
             
@@ -383,9 +383,9 @@ class CorrelationAnalyzer:
                 
                 # 绘制聚类热图
                 sns.clustermap(corr_df_subset, figsize=(20, 16), cmap=cmap,
-                              center=0, vmin=-1, vmax=1,
-                              row_linkage=row_linkage, col_linkage=col_linkage,
-                              linewidths=.5, annot=False)
+                            center=0, vmin=-1, vmax=1,
+                            row_linkage=row_linkage, col_linkage=col_linkage,
+                            linewidths=.5, annot=False)
                 
                 # 保存图表
                 cluster_path = os.path.join(vis_dir, f"{prefix}_correlation_clustermap.png")
@@ -398,93 +398,94 @@ class CorrelationAnalyzer:
         except Exception as e:
             if self.logger:
                 self.logger.error(f"可视化相关性矩阵失败: {e}")
-    
+
+            
 
     def visualize_inter_group_correlation(self, group_corr):
-            """
-            可视化特征组间相关性
+        """
+        可视化特征组间相关性
+
+        参数:
+            group_corr: 特征组间相关性字典
+        """
+        if not group_corr:
+            if self.logger:
+                self.logger.warning("没有特征组间相关性数据可视化")
+            return
             
-            参数:
-                group_corr: 特征组间相关性字典
-            """
-            if not group_corr:
-                if self.logger:
-                    self.logger.warning("没有特征组间相关性数据可视化")
-                return
-                
-            # 创建输出子目录
-            vis_dir = os.path.join(self.output_dir, 'visualizations')
-            os.makedirs(vis_dir, exist_ok=True)
+        # 创建输出子目录
+        vis_dir = os.path.join(self.output_dir, 'visualizations')
+        os.makedirs(vis_dir, exist_ok=True)
+        
+        # 计算每对特征组之间的平均绝对相关系数
+        group_pairs = []
+        for pair_key, corr_data in group_corr.items():
+            corr_df = corr_data['corr_df']
+            group1 = corr_data['group1']
+            group2 = corr_data['group2']
             
-            # 计算每对特征组之间的平均绝对相关系数
-            group_pairs = []
-            for pair_key, corr_data in group_corr.items():
-                corr_df = corr_data['corr_df']
-                group1 = corr_data['group1']
-                group2 = corr_data['group2']
-                
-                # 计算平均绝对相关系数
-                mean_abs_corr = abs(corr_df).mean().mean()
-                
-                group_pairs.append({
-                    'group1': group1,
-                    'group2': group2,
-                    'mean_abs_corr': mean_abs_corr
-                })
+            # 计算平均绝对相关系数
+            mean_abs_corr = abs(corr_df).mean().mean()
             
-            try:
-                # 绘制组间相关性条形图
-                plt.figure(figsize=(12, 8))
+            group_pairs.append({
+                'group1': group1,
+                'group2': group2,
+                'mean_abs_corr': mean_abs_corr
+            })
+        
+        try:
+            # 绘制组间相关性条形图
+            plt.figure(figsize=(12, 8))
+            
+            pairs = [f"{p['group1']} - {p['group2']}" for p in group_pairs]
+            mean_corrs = [p['mean_abs_corr'] for p in group_pairs]
+            
+            plt.barh(pairs, mean_corrs, color='skyblue')
+            plt.xlabel('Mean Absolute Correlation')
+            plt.title('Mean Absolute Correlation Between Feature Groups')
+            plt.grid(True, alpha=0.3)
+            
+            # 保存图表
+            bar_path = os.path.join(vis_dir, "inter_group_correlation_bar.png")
+            plt.savefig(bar_path)
+            plt.close()
+            
+            if self.logger:
+                self.logger.info(f"特征组间相关性条形图已保存至 {bar_path}")
+            
+            # 绘制组间相关性热图
+            if len(group_pairs) > 1:
+                # 创建组间相关性矩阵
+                groups = sorted(list(set([p['group1'] for p in group_pairs] + [p['group2'] for p in group_pairs])))
+                n_groups = len(groups)
                 
-                pairs = [f"{p['group1']} - {p['group2']}" for p in group_pairs]
-                mean_corrs = [p['mean_abs_corr'] for p in group_pairs]
+                group_corr_matrix = np.zeros((n_groups, n_groups))
                 
-                plt.barh(pairs, mean_corrs, color='skyblue')
-                plt.xlabel('平均绝对相关系数')
-                plt.title('特征组间平均绝对相关系数')
-                plt.grid(True, alpha=0.3)
+                # 填充相关性矩阵
+                for p in group_pairs:
+                    i = groups.index(p['group1'])
+                    j = groups.index(p['group2'])
+                    group_corr_matrix[i, j] = p['mean_abs_corr']
+                    group_corr_matrix[j, i] = p['mean_abs_corr']  # 对称矩阵
+                
+                # 对角线设为1
+                np.fill_diagonal(group_corr_matrix, 1.0)
+                
+                # 绘制热图
+                plt.figure(figsize=(10, 8))
+                sns.heatmap(group_corr_matrix, annot=True, cmap='YlGnBu',
+                            xticklabels=groups, yticklabels=groups, vmin=0, vmax=1)
+                
+                plt.title('Inter-Group Feature Correlation Heatmap')
                 
                 # 保存图表
-                bar_path = os.path.join(vis_dir, "inter_group_correlation_bar.png")
-                plt.savefig(bar_path)
+                heatmap_path = os.path.join(vis_dir, "inter_group_correlation_heatmap.png")
+                plt.savefig(heatmap_path)
                 plt.close()
                 
                 if self.logger:
-                    self.logger.info(f"特征组间相关性条形图已保存至 {bar_path}")
+                    self.logger.info(f"特征组间相关性热图已保存至 {heatmap_path}")
                 
-                # 绘制组间相关性热图
-                if len(group_pairs) > 1:
-                    # 创建组间相关性矩阵
-                    groups = sorted(list(set([p['group1'] for p in group_pairs] + [p['group2'] for p in group_pairs])))
-                    n_groups = len(groups)
-                    
-                    group_corr_matrix = np.zeros((n_groups, n_groups))
-                    
-                    # 填充相关性矩阵
-                    for p in group_pairs:
-                        i = groups.index(p['group1'])
-                        j = groups.index(p['group2'])
-                        group_corr_matrix[i, j] = p['mean_abs_corr']
-                        group_corr_matrix[j, i] = p['mean_abs_corr']  # 对称矩阵
-                    
-                    # 对角线设为1
-                    np.fill_diagonal(group_corr_matrix, 1.0)
-                    
-                    # 绘制热图
-                    plt.figure(figsize=(10, 8))
-                    sns.heatmap(group_corr_matrix, annot=True, cmap='YlGnBu',
-                            xticklabels=groups, yticklabels=groups, vmin=0, vmax=1)
-                    
-                    plt.title('特征组间相关性热图')
-                    
-                    # 保存图表
-                    heatmap_path = os.path.join(vis_dir, "inter_group_correlation_heatmap.png")
-                    plt.savefig(heatmap_path)
-                    plt.close()
-                    
-                    if self.logger:
-                        self.logger.info(f"特征组间相关性热图已保存至 {heatmap_path}")
-                    
-            except Exception as e:
-                if self.logger:
-                    self.logger.error(f"可视化特征组间相关性失败: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"可视化特征组间相关性失败: {e}")

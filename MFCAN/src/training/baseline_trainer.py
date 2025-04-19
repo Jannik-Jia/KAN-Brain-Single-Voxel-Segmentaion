@@ -436,7 +436,7 @@ class BaselineTrainer:
         """可视化训练历史"""
         plt.figure(figsize=(15, 10))
         
-        # 绘制损失曲线
+        # Plot loss curve
         plt.subplot(2, 2, 1)
         plt.plot(self.history['train_loss'], label='Train Loss')
         plt.plot(self.history['val_loss'], label='Val Loss')
@@ -446,7 +446,7 @@ class BaselineTrainer:
         plt.legend()
         plt.grid(True)
         
-        # 绘制准确率曲线
+        # Plot accuracy curve
         plt.subplot(2, 2, 2)
         plt.plot(self.history['train_acc'], label='Train Accuracy')
         plt.plot(self.history['val_acc'], label='Val Accuracy')
@@ -456,7 +456,7 @@ class BaselineTrainer:
         plt.legend()
         plt.grid(True)
         
-        # 绘制学习率曲线
+        # Plot learning rate curve
         plt.subplot(2, 2, 3)
         plt.plot(self.history['learning_rates'])
         plt.title('Learning Rate')
@@ -464,15 +464,15 @@ class BaselineTrainer:
         plt.ylabel('Learning Rate')
         plt.grid(True)
         
-        # 保存图像
+        # Save figure
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, 'training_history.png'))
         plt.close()
-    
+
     def _plot_confusion_matrix(self, conf_matrix, class_names, title):
         """
         可视化混淆矩阵
-        
+
         参数:
             conf_matrix: 混淆矩阵
             class_names: 类别名称
@@ -483,12 +483,12 @@ class BaselineTrainer:
         plt.title(title)
         plt.colorbar()
         
-        # 设置坐标轴
+        # Set axis ticks
         tick_marks = np.arange(len(class_names))
         plt.xticks(tick_marks, class_names, rotation=45)
         plt.yticks(tick_marks, class_names)
         
-        # 添加数值标签
+        # Add value labels
         thresh = conf_matrix.max() / 2
         for i in range(conf_matrix.shape[0]):
             for j in range(conf_matrix.shape[1]):
@@ -500,10 +500,10 @@ class BaselineTrainer:
         plt.xlabel('Predicted label')
         plt.tight_layout()
         
-        # 保存图像
+        # Save figure
         plt.savefig(os.path.join(self.save_dir, f"confusion_matrix_{title.replace(' ', '_')}.png"))
         plt.close()
-    
+
     def _save_evaluation_results(self, metrics):
         """
         保存评估结果

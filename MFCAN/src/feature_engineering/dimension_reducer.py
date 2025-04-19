@@ -244,16 +244,18 @@ class DimensionReducer:
             
             plt.subplot(2, 1, 1)
             plt.bar(range(1, len(explained_variance) + 1), explained_variance)
-            plt.xlabel('主成分')
-            plt.ylabel('解释方差比例')
-            plt.title(f'{feature_group} 组各主成分解释方差比例')
+            plt.xlabel('Principal Component')
+            plt.ylabel('Explained Variance Ratio')
+            plt.title(f'Explained Variance Ratio of {feature_group} Group')
+
             plt.grid(True, alpha=0.3)
             
             plt.subplot(2, 1, 2)
             plt.plot(range(1, len(cumulative_variance) + 1), cumulative_variance, 'ro-')
-            plt.xlabel('主成分数量')
-            plt.ylabel('累积解释方差比例')
-            plt.title(f'{feature_group} 组累积解释方差比例')
+            plt.xlabel('Number of Principal Components')
+            plt.ylabel('Cumulative Explained Variance')
+            plt.title(f'Cumulative Explained Variance of {feature_group} Group')
+
             plt.grid(True, alpha=0.3)
             
             # 添加参考线
@@ -263,8 +265,9 @@ class DimensionReducer:
                 n_components = idx + 1
                 plt.axhline(y=threshold, color='g', linestyle='--', alpha=0.5)
                 plt.axvline(x=n_components, color='g', linestyle='--', alpha=0.5)
-                plt.text(n_components, threshold, f'  {n_components} 个主成分\n  {threshold*100:.0f}% 方差', 
+                plt.text(n_components, threshold, f'  {n_components} components\n  {threshold*100:.0f}% variance', 
                        verticalalignment='center')
+
             
             plt.tight_layout()
             
@@ -312,14 +315,16 @@ class DimensionReducer:
                     plt.scatter(plot_embedding[mask, 0], plot_embedding[mask, 1], 
                               label=f'Class {label}', alpha=0.6, s=50)
                 
-                plt.legend(title="类别", bbox_to_anchor=(1.05, 1), loc='upper left')
+                plt.legend(title="Class", bbox_to_anchor=(1.05, 1), loc='upper left')
+
             else:
                 # 如果没有标签，使用单一颜色
                 plt.scatter(embedding[:, 0], embedding[:, 1], alpha=0.6, s=50)
             
-            plt.title(f'{feature_group} 组 {method} 二维嵌入')
-            plt.xlabel('维度 1')
-            plt.ylabel('维度 2')
+            plt.title(f'{feature_group} Group {method} 2D Embedding')
+            plt.xlabel('Dimension 1')
+            plt.ylabel('Dimension 2')
+
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             
@@ -374,11 +379,12 @@ class DimensionReducer:
             else:
                 # 如果没有标签，使用单一颜色
                 ax.scatter(embedding[:, 0], embedding[:, 1], embedding[:, 2], alpha=0.6, s=50)
-            
-            ax.set_title(f'{feature_group} 组 {method} 三维嵌入')
-            ax.set_xlabel('维度 1')
-            ax.set_ylabel('维度 2')
-            ax.set_zlabel('维度 3')
+
+            ax.set_title(f'{feature_group} Group {method} 3D Embedding')
+            ax.set_xlabel('Dimension 1')
+            ax.set_ylabel('Dimension 2')
+            ax.set_zlabel('Dimension 3')
+
             plt.tight_layout()
             
             # 保存图表

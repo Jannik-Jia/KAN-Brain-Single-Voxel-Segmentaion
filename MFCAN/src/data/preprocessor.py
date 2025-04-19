@@ -438,33 +438,33 @@ class Preprocessor:
                     # 均值分布
                     plt.subplot(2, 2, 1)
                     plt.hist(stats['mean'], bins=30, alpha=0.7)
-                    plt.title(f'{split} - {group_name} 均值分布')
-                    plt.xlabel('均值')
-                    plt.ylabel('频率')
+                    plt.title(f'{split} - {group_name} Mean Distribution')
+                    plt.xlabel('Mean')
+                    plt.ylabel('Frequency')
                     plt.grid(True, alpha=0.3)
                     
                     # 标准差分布
                     plt.subplot(2, 2, 2)
                     plt.hist(stats['std'], bins=30, alpha=0.7)
-                    plt.title(f'{split} - {group_name} 标准差分布')
-                    plt.xlabel('标准差')
-                    plt.ylabel('频率')
+                    plt.title(f'{split} - {group_name} Standard Deviation Distribution')
+                    plt.xlabel('Std')
+                    plt.ylabel('Frequency')
                     plt.grid(True, alpha=0.3)
                     
                     # 最小值分布
                     plt.subplot(2, 2, 3)
                     plt.hist(stats['min'], bins=30, alpha=0.7)
-                    plt.title(f'{split} - {group_name} 最小值分布')
-                    plt.xlabel('最小值')
-                    plt.ylabel('频率')
+                    plt.title(f'{split} - {group_name} Minimum Value Distribution')
+                    plt.xlabel('Min')
+                    plt.ylabel('Frequency')
                     plt.grid(True, alpha=0.3)
                     
                     # 最大值分布
                     plt.subplot(2, 2, 4)
                     plt.hist(stats['max'], bins=30, alpha=0.7)
-                    plt.title(f'{split} - {group_name} 最大值分布')
-                    plt.xlabel('最大值')
-                    plt.ylabel('频率')
+                    plt.title(f'{split} - {group_name} Maximum Value Distribution')
+                    plt.xlabel('Max')
+                    plt.ylabel('Frequency')
                     plt.grid(True, alpha=0.3)
                     
                     plt.tight_layout()
@@ -489,11 +489,11 @@ class Preprocessor:
                         for i in range(n_features):
                             plt.subplot(n_features, 1, i+1)
                             values = np.linspace(stats['min'][i], stats['max'][i], 1000)
-                            plt.axvline(stats['mean'][i], color='r', linestyle='-', label='均值')
-                            plt.axvline(stats['mean'][i] - stats['std'][i], color='g', linestyle='--', label='均值-标准差')
-                            plt.axvline(stats['mean'][i] + stats['std'][i], color='g', linestyle='--', label='均值+标准差')
-                            plt.title(f'特征 #{i} 统计信息')
-                            plt.xlabel('值')
+                            plt.axvline(stats['mean'][i], color='r', linestyle='-', label='Mean')
+                            plt.axvline(stats['mean'][i] - stats['std'][i], color='g', linestyle='--', label='Mean - Std')
+                            plt.axvline(stats['mean'][i] + stats['std'][i], color='g', linestyle='--', label='Mean + Std')
+                            plt.title(f'Feature #{i} Statistics')
+                            plt.xlabel('Value')
                             plt.grid(True, alpha=0.3)
                             if i == 0:
                                 plt.legend()

@@ -115,7 +115,8 @@ class ClassSeparabilityAnalyzer:
             raise
     
     def identify_discriminative_features(self, features, labels, significance_df=None, 
-                                       feature_group="all", top_n=10):
+                                    feature_group="all", top_n=10, max_classes=None,
+                                    max_samples=1000, use_gpu=False, batch_size=10):
         """
         识别每个类别的最佳区分特征
         
@@ -125,6 +126,10 @@ class ClassSeparabilityAnalyzer:
             significance_df: 特征显著性数据框，如果没有提供，将重新计算
             feature_group: 特征组名称
             top_n: 每个类别返回的顶级特征数量
+            max_classes: 最大处理类别数，None表示处理所有类别
+            max_samples: 每个类别最大样本数，通过抽样减少计算量
+            use_gpu: 是否使用GPU加速计算
+            batch_size: GPU批处理大小（类别批次大小）
             
         返回:
             discriminative_features: 类别区分特征字典
@@ -138,43 +143,164 @@ class ClassSeparabilityAnalyzer:
         
         feature_names = significance_df['Feature'].values
         
-        # 获取唯一类别
-        unique_labels = np.unique(labels)
+        # 获取唯一类别和每个类别的样本数
+        unique_labels, label_counts = np.unique(labels, return_counts=True)
+        
+        # 检查是否有样本数为0的类别
+        zero_sample_classes = unique_labels[label_counts == 0]
+        if len(zero_sample_classes) > 0:
+            self.logger.warning(f"以下类别没有样本: {zero_sample_classes}, 将跳过这些类别")
+            # 过滤掉样本数为0的类别
+            valid_idx = label_counts > 0
+            unique_labels = unique_labels[valid_idx]
+            label_counts = label_counts[valid_idx]
+        
+        # 记录样本数很少的类别
+        low_sample_classes = [(label, count) for label, count in zip(unique_labels, label_counts) if 0 < count < 10]
+        if low_sample_classes:
+            self.logger.warning(f"以下类别样本数少于10: {low_sample_classes}, 这可能导致统计不稳定")
+        
+        # 限制处理类别数
+        if max_classes is not None and max_classes > 0 and len(unique_labels) > max_classes:
+            self.logger.info(f"类别数量({len(unique_labels)})超过限制({max_classes})，只处理前{max_classes}个类别")
+            # 优先处理样本数较多的类别
+            class_indices = np.argsort(label_counts)[::-1][:max_classes]
+            unique_labels = unique_labels[class_indices]
+            label_counts = label_counts[class_indices]
         
         # 存储每个类别的区分特征
         discriminative_features = {}
         
-        for class_label in unique_labels:
-            # 创建二分类标签 (当前类别 vs 其他类别)
-            binary_labels = (labels == class_label).astype(int)
-            
-            # 计算每个特征的类别区分能力
+        # 转换为PyTorch张量，如果使用GPU
+        if use_gpu:
             try:
-                # 计算F值和互信息
-                f_values, _ = f_classif(features, binary_labels)
-                mi_values = mutual_info_classif(features, binary_labels, random_state=42)
+                import torch
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                if torch.cuda.is_available():
+                    self.logger.info(f"使用GPU加速计算: {torch.cuda.get_device_name(0)}")
+                else:
+                    self.logger.warning("GPU不可用，回退到CPU计算")
+                    use_gpu = False
+            except ImportError:
+                self.logger.warning("PyTorch未安装，回退到CPU计算")
+                use_gpu = False
+        
+        # 按批次处理类别
+        total_classes = len(unique_labels)
+        for batch_start in range(0, total_classes, batch_size):
+            batch_end = min(batch_start + batch_size, total_classes)
+            batch_labels = unique_labels[batch_start:batch_end]
+            batch_counts = label_counts[batch_start:batch_end]
+            
+            self.logger.info(f"处理类别批次 {batch_start+1}-{batch_end}/{total_classes}")
+            
+            # 每个类别单独处理
+            for i, (class_label, sample_count) in enumerate(zip(batch_labels, batch_counts)):
+                self.logger.info(f"处理类别 {batch_start+i+1}/{total_classes}: {class_label} (样本数: {sample_count})")
                 
-                # 创建类别特定的显著性数据框
-                class_significance = pd.DataFrame({
-                    'Feature': feature_names,
-                    'F_value': f_values,
-                    'Mutual_Info': mi_values,
-                    'Normalized_F': f_values / np.max(f_values) if np.max(f_values) > 0 else f_values,
-                    'Normalized_MI': mi_values / np.max(mi_values) if np.max(mi_values) > 0 else mi_values,
-                })
+                # 如果样本数为0，跳过此类别
+                if sample_count == 0:
+                    self.logger.warning(f"类别 {class_label} 没有样本，跳过")
+                    discriminative_features[int(class_label)] = []
+                    continue
                 
-                # 计算综合得分
-                class_significance['Combined_Score'] = 0.6 * class_significance['Normalized_F'] + 0.4 * class_significance['Normalized_MI']
+                # 创建二分类标签 (当前类别 vs 其他类别)
+                binary_labels = (labels == class_label).astype(int)
+                pos_count = np.sum(binary_labels)
                 
-                # 按综合得分排序并选择前N个特征
-                top_features = class_significance.sort_values('Combined_Score', ascending=False).head(top_n)
+                # 确保有正样本
+                if pos_count == 0:
+                    self.logger.warning(f"类别 {class_label} 没有正样本，跳过")
+                    discriminative_features[int(class_label)] = []
+                    continue
                 
-                discriminative_features[int(class_label)] = top_features.to_dict('records')
+                # 抽样减少处理量
+                if max_samples > 0 and len(binary_labels) > max_samples:
+                    # 确保正样本和负样本都有足够的代表
+                    pos_indices = np.where(binary_labels == 1)[0]
+                    neg_indices = np.where(binary_labels == 0)[0]
+                    
+                    # 设置最小正样本数，确保统计稳定性
+                    min_pos_samples = min(len(pos_indices), max(10, max_samples // 10))
+                    
+                    # 各取一部分样本，保证正样本有足够代表性
+                    pos_sample_size = min(len(pos_indices), max(min_pos_samples, max_samples // 2))
+                    neg_sample_size = min(len(neg_indices), max_samples - pos_sample_size)
+                    
+                    # 如果样本总数不足max_samples，使用所有样本
+                    if pos_sample_size + neg_sample_size < max_samples:
+                        pos_sample_size = len(pos_indices)
+                        neg_sample_size = len(neg_indices)
+                    
+                    # 进行抽样
+                    pos_sampled = np.random.choice(pos_indices, pos_sample_size, replace=False) if pos_sample_size > 0 else []
+                    neg_sampled = np.random.choice(neg_indices, neg_sample_size, replace=False) if neg_sample_size > 0 else []
+                    
+                    # 合并索引
+                    sampled_indices = np.concatenate([pos_sampled, neg_sampled])
+                    
+                    # 抽样后的特征和标签
+                    sampled_features = features[sampled_indices]
+                    sampled_binary_labels = binary_labels[sampled_indices]
+                    
+                    self.logger.debug(f"对类别 {class_label} 进行抽样: 从 {len(binary_labels)} 减少到 {len(sampled_indices)} 样本 (正样本: {pos_sample_size}, 负样本: {neg_sample_size})")
+                else:
+                    sampled_features = features
+                    sampled_binary_labels = binary_labels
                 
-            except Exception as e:
-                if self.logger:
-                    self.logger.warning(f"计算类别 {class_label} 的区分特征失败: {e}")
-                discriminative_features[int(class_label)] = []
+                # 计算每个特征的类别区分能力
+                try:
+                    # 检查抽样后的数据是否满足最低要求
+                    sampled_pos_count = np.sum(sampled_binary_labels)
+                    sampled_neg_count = len(sampled_binary_labels) - sampled_pos_count
+                    
+                    if sampled_pos_count < 2 or sampled_neg_count < 2:
+                        self.logger.warning(f"类别 {class_label} 抽样后样本不足: 正样本={sampled_pos_count}, 负样本={sampled_neg_count}, 跳过F值计算")
+                        # 使用简化方法，仅基于均值差异
+                        pos_features = sampled_features[sampled_binary_labels == 1]
+                        neg_features = sampled_features[sampled_binary_labels == 0]
+                        
+                        pos_mean = np.mean(pos_features, axis=0) if sampled_pos_count > 0 else np.zeros(features.shape[1])
+                        neg_mean = np.mean(neg_features, axis=0) if sampled_neg_count > 0 else np.zeros(features.shape[1])
+                        
+                        # 使用均值差异的绝对值作为特征重要性指标
+                        f_values = np.abs(pos_mean - neg_mean)
+                        mi_values = f_values  # 简化处理，使用相同值
+                    else:
+                        if use_gpu and torch.cuda.is_available():
+                            # 使用GPU计算F值和互信息
+                            f_values, mi_values = self._gpu_compute_feature_importance(
+                                sampled_features, sampled_binary_labels, device)
+                        else:
+                            # 使用CPU计算F值和互信息
+                            f_values, _ = f_classif(sampled_features, sampled_binary_labels)
+                            mi_values = mutual_info_classif(sampled_features, sampled_binary_labels, random_state=42)
+                    
+                    # 处理可能出现的NaN值
+                    f_values = np.nan_to_num(f_values)
+                    mi_values = np.nan_to_num(mi_values)
+                    
+                    # 创建类别特定的显著性数据框
+                    class_significance = pd.DataFrame({
+                        'Feature': feature_names,
+                        'F_value': f_values,
+                        'Mutual_Info': mi_values,
+                        'Normalized_F': f_values / np.max(f_values) if np.max(f_values) > 0 else f_values,
+                        'Normalized_MI': mi_values / np.max(mi_values) if np.max(mi_values) > 0 else mi_values,
+                    })
+                    
+                    # 计算综合得分
+                    class_significance['Combined_Score'] = 0.6 * class_significance['Normalized_F'] + 0.4 * class_significance['Normalized_MI']
+                    
+                    # 按综合得分排序并选择前N个特征
+                    top_features = class_significance.sort_values('Combined_Score', ascending=False).head(top_n)
+                    
+                    discriminative_features[int(class_label)] = top_features.to_dict('records')
+                    
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"计算类别 {class_label} 的区分特征失败: {e}")
+                    discriminative_features[int(class_label)] = []
         
         # 存储结果
         self.separability_results[f"{feature_group}_discriminative"] = {
@@ -185,9 +311,103 @@ class ClassSeparabilityAnalyzer:
         }
         
         if self.logger:
-            self.logger.info(f"完成 {len(unique_labels)} 个类别的区分特征识别")
+            self.logger.info(f"完成 {len(discriminative_features)}/{len(np.unique(labels))} 个类别的区分特征识别")
             
         return discriminative_features
+
+    def _gpu_compute_feature_importance(self, features, binary_labels, device):
+        """使用GPU计算F值和互信息"""
+        import torch
+        import torch.nn.functional as F
+        
+        # 转换为PyTorch张量
+        X = torch.tensor(features, dtype=torch.float32).to(device)
+        y = torch.tensor(binary_labels, dtype=torch.float32).to(device)
+        
+        # 计算F值
+        n_samples = X.shape[0]
+        n_features = X.shape[1]
+        
+        # 计算每个类的样本数和平均值
+        n_class1 = y.sum()
+        n_class0 = n_samples - n_class1
+        
+        if n_class1 == 0 or n_class0 == 0:
+            # 如果某个类别没有样本，返回全0
+            return np.zeros(n_features), np.zeros(n_features)
+        
+        # 计算类别均值
+        mean_class1 = (X * y.unsqueeze(1)).sum(dim=0) / n_class1
+        mean_class0 = (X * (1 - y).unsqueeze(1)).sum(dim=0) / n_class0
+        mean_total = X.mean(dim=0)
+        
+        # 计算组间平方和
+        between_ss = (n_class0 * (mean_class0 - mean_total) ** 2 + 
+                    n_class1 * (mean_class1 - mean_total) ** 2)
+        
+        # 计算组内平方和
+        class0_ss = ((X[y == 0] - mean_class0) ** 2).sum(dim=0) if n_class0 > 0 else torch.zeros_like(mean_total)
+        class1_ss = ((X[y == 1] - mean_class1) ** 2).sum(dim=0) if n_class1 > 0 else torch.zeros_like(mean_total)
+        within_ss = class0_ss + class1_ss
+        
+        # 计算F值
+        df_between = 1  # 两个类别，自由度为1
+        df_within = n_samples - 2  # 总样本数减去类别数
+        
+        # 避免除以0
+        within_ss = torch.where(within_ss == 0, torch.ones_like(within_ss) * 1e-10, within_ss)
+        
+        # 计算F值
+        f_values = (between_ss / df_between) / (within_ss / df_within)
+        
+        # 简化版互信息计算（基于决策树）
+        # 对于每个特征分别计算
+        mi_values = torch.zeros(n_features, device=device)
+        for i in range(n_features):
+            # 对特征值排序
+            sorted_vals, indices = torch.sort(X[:, i])
+            sorted_labels = y[indices]
+            
+            # 简化计算：使用10个等频分箱
+            n_bins = min(10, n_samples // 5)
+            bin_edges = torch.linspace(0, n_samples - 1, n_bins + 1, dtype=torch.long, device=device)
+            
+            # 计算每个分箱中的标签分布
+            bin_mi = 0.0
+            for b in range(n_bins):
+                start, end = bin_edges[b], bin_edges[b + 1]
+                bin_labels = sorted_labels[start:end]
+                bin_size = end - start
+                
+                # 计算分箱中的类别分布
+                bin_pos = bin_labels.sum()
+                bin_neg = bin_size - bin_pos
+                
+                # 跳过空分箱
+                if bin_size == 0:
+                    continue
+                    
+                # 计算二元熵
+                p_pos = bin_pos / bin_size
+                p_neg = bin_neg / bin_size
+                
+                # 避免log(0)
+                if p_pos > 0 and p_neg > 0:
+                    bin_entropy = -(p_pos * torch.log(p_pos) + p_neg * torch.log(p_neg))
+                    p_bin = bin_size / n_samples
+                    bin_mi += p_bin * bin_entropy
+            
+            # 计算总熵
+            p_class1 = n_class1 / n_samples
+            p_class0 = n_class0 / n_samples
+            total_entropy = -(p_class1 * torch.log(p_class1) + p_class0 * torch.log(p_class0))
+            
+            # 互信息 = 总熵 - 条件熵
+            mi_values[i] = total_entropy - bin_mi
+        
+        return f_values.cpu().numpy(), mi_values.cpu().numpy()
+
+
     
     def analyze_class_similarity(self, features, labels, feature_group="all", n_components=50, metric='euclidean'):
         """
@@ -655,98 +875,98 @@ class ClassSeparabilityAnalyzer:
     def visualize_class_separability(self, significance_df, prefix='all'):
         """
         可视化类别可分性（基于特征显著性）
-        
+
         参数:
             significance_df: 特征显著性数据框
             prefix: 文件前缀
         """
         if self.logger:
             self.logger.info(f"可视化 {prefix} 组的类别可分性")
-        
+
         # 创建输出子目录
         vis_dir = os.path.join(self.output_dir, 'visualizations')
         os.makedirs(vis_dir, exist_ok=True)
-        
+
         try:
             # 显示前20个最具区分性的特征
             top_n = min(20, len(significance_df))
             top_features = significance_df.head(top_n)
-            
+
             plt.figure(figsize=(12, 8))
-            
+
             # F值柱状图
             plt.subplot(2, 1, 1)
             bars = plt.barh(top_features['Feature'][::-1], top_features['F_value'][::-1])
-            
+
             # 为显著性特征添加不同颜色
             for i, significant in enumerate(top_features['Significant'][::-1]):
                 if significant:
                     bars[i].set_color('green')
                 else:
                     bars[i].set_color('red')
-                    
-            plt.title(f'{prefix} 组前{top_n}个特征的F值 (绿色=显著)')
-            plt.xlabel('F值')
+
+            plt.title(f'Top {top_n} Features by F-value ({prefix}) (Green = Significant)')
+            plt.xlabel('F-value')
             plt.tight_layout()
-            
+
             # 互信息柱状图
             plt.subplot(2, 1, 2)
             plt.barh(top_features['Feature'][::-1], top_features['Mutual_Info'][::-1])
-            plt.title(f'{prefix} 组前{top_n}个特征的互信息值')
-            plt.xlabel('互信息')
+            plt.title(f'Top {top_n} Features by Mutual Information ({prefix})')
+            plt.xlabel('Mutual Information')
             plt.tight_layout()
-            
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_top_features.png")
             plt.savefig(save_path, bbox_inches='tight')
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"类别可分性可视化已保存至 {save_path}")
-            
+
             # 绘制P值直方图
             plt.figure(figsize=(10, 6))
             plt.hist(significance_df['P_value'], bins=50, alpha=0.7)
-            plt.axvline(x=0.05, color='r', linestyle='--', label='p=0.05显著性阈值')
-            plt.title(f'{prefix} 组P值分布')
-            plt.xlabel('P值')
-            plt.ylabel('频率')
+            plt.axvline(x=0.05, color='r', linestyle='--', label='p=0.05 Significance Threshold')
+            plt.title(f'P-value Distribution ({prefix})')
+            plt.xlabel('P-value')
+            plt.ylabel('Frequency')
             plt.legend()
             plt.grid(True, alpha=0.3)
-            
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_pvalue_distribution.png")
             plt.savefig(save_path)
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"P值分布图已保存至 {save_path}")
-                
+
             # 绘制互信息与F值关系散点图
             plt.figure(figsize=(10, 8))
             plt.scatter(significance_df['Normalized_F'], significance_df['Normalized_MI'], 
-                    alpha=0.7, c=significance_df['Combined_Score'], cmap='viridis')
-            
+                        alpha=0.7, c=significance_df['Combined_Score'], cmap='viridis')
+
             # 添加前10个特征的标签
             for i, row in significance_df.head(10).iterrows():
                 plt.annotate(row['Feature'], 
-                        (row['Normalized_F'], row['Normalized_MI']),
-                        fontsize=9)
-            
-            plt.colorbar(label='综合得分')
-            plt.title(f'{prefix} 组特征的F值与互信息关系')
-            plt.xlabel('归一化F值')
-            plt.ylabel('归一化互信息')
+                            (row['Normalized_F'], row['Normalized_MI']),
+                            fontsize=9)
+
+            plt.colorbar(label='Combined Score')
+            plt.title(f'Relationship Between F-value and Mutual Information ({prefix})')
+            plt.xlabel('Normalized F-value')
+            plt.ylabel('Normalized Mutual Information')
             plt.grid(True, alpha=0.3)
-            
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_f_vs_mi.png")
             plt.savefig(save_path)
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"F值与互信息关系图已保存至 {save_path}")
-                
+
         except Exception as e:
             if self.logger:
                 self.logger.error(f"生成类别可分性可视化失败: {e}")
@@ -754,36 +974,36 @@ class ClassSeparabilityAnalyzer:
     def visualize_class_similarity(self, similarity_df, prefix='all'):
         """
         可视化类别相似性
-        
+
         参数:
             similarity_df: 类别相似度数据框
             prefix: 文件前缀
         """
         if self.logger:
             self.logger.info(f"可视化 {prefix} 组的类别相似性")
-        
+
         # 创建输出子目录
         vis_dir = os.path.join(self.output_dir, 'visualizations')
         os.makedirs(vis_dir, exist_ok=True)
-        
+
         try:
             # 绘制类别相似度热图
             plt.figure(figsize=(12, 10))
             sns.heatmap(similarity_df, annot=True, cmap='YlGnBu', vmin=0, vmax=1, fmt='.2f')
-            plt.title(f'{prefix} 组类别相似度矩阵')
-            
+            plt.title(f'Class Similarity Matrix ({prefix})')
+
             # 保存图表
             save_path = os.path.join(vis_dir, f"{prefix}_class_similarity.png")
             plt.savefig(save_path, bbox_inches='tight')
             plt.close()
-            
+
             if self.logger:
                 self.logger.info(f"类别相似度热图已保存至 {save_path}")
-                
+
             # 如果类别数量小于等于20，绘制类别相似度网络图
             if len(similarity_df) <= 20:
                 plt.figure(figsize=(14, 12))
-                
+
                 # 使用多维缩放将相似度嵌入到二维空间
                 from sklearn.manifold import MDS
                 similarity_array = similarity_df.values
@@ -791,33 +1011,33 @@ class ClassSeparabilityAnalyzer:
                 # 转换为距离矩阵
                 distances = 1 - similarity_array
                 pos = mds.fit_transform(distances)
-                
+
                 # 绘制节点
                 plt.scatter(pos[:, 0], pos[:, 1], s=200, c='skyblue', edgecolors='black')
-                
+
                 # 添加类别标签
                 for i, label in enumerate(similarity_df.index):
                     plt.annotate(label, (pos[i, 0], pos[i, 1]), fontsize=12, ha='center', va='center')
-                
+
                 # 绘制连接线，只有相似度高于0.5的类别对之间绘制连线
                 threshold = 0.5
                 for i in range(len(similarity_df)):
-                    for j in range(i+1, len(similarity_df)):
+                    for j in range(i + 1, len(similarity_df)):
                         if similarity_array[i, j] > threshold:
-                            plt.plot([pos[i, 0], pos[j, 0]], [pos[i, 1], pos[j, 1]], 
-                                'gray', alpha=similarity_array[i, j], linewidth=similarity_array[i, j]*3)
-                
-                plt.title(f'{prefix} 组类别相似度网络图 (相似度 > {threshold})')
+                            plt.plot([pos[i, 0], pos[j, 0]], [pos[i, 1], pos[j, 1]],
+                                    'gray', alpha=similarity_array[i, j], linewidth=similarity_array[i, j] * 3)
+
+                plt.title(f'Class Similarity Network (Similarity > {threshold}) ({prefix})')
                 plt.axis('off')
-                
+
                 # 保存图表
                 save_path = os.path.join(vis_dir, f"{prefix}_class_similarity_network.png")
                 plt.savefig(save_path, bbox_inches='tight')
                 plt.close()
-                
+
                 if self.logger:
                     self.logger.info(f"类别相似度网络图已保存至 {save_path}")
-                    
+
         except Exception as e:
             if self.logger:
                 self.logger.error(f"生成类别相似性可视化失败: {e}")
