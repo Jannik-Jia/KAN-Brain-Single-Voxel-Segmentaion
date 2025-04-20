@@ -240,7 +240,8 @@ def main():
             
             # 根据重要性选择
             group_selected = feature_selector.select_by_importance(
-            
+                group_features_train, group_ranked, coverage=0.95)
+
             # 移除冗余
             group_selected_nonredundant = feature_selector.remove_redundancy(
                 group_features_train, group_selected, correlation_threshold=0.9)
