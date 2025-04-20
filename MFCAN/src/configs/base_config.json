@@ -53,18 +53,33 @@
         "min_feature_count": 10,
         "coverage_levels": [0.8, 0.9, 0.95, 0.98, 0.99]
     },
-    
+
     "dimensionality_reduction": {
         "apply_pca": true,
-        "pca_variance": 0.95,
+        "pca": {
+            "all_min_variance": 0.98,
+            "all_min_components": 5,
+            "diffusion_min_variance": 0.98,
+            "diffusion_min_components": 5,
+            "qti_min_variance": 0.98,
+            "qti_min_components": 10,
+            "cest_min_variance": 0.98,
+            "cest_min_components": 5,
+            "use_elbow": true,
+            "auto_evaluate": true,
+            "elbow_sensitivity": 1.0
+        },
         "apply_umap": true,
         "umap_params": {
             "n_components": 2,
             "n_neighbors": 15,
             "min_dist": 0.1,
             "random_state": 42
-        }
-    },
+        },
+        "cpu_fallback": true,
+        "gpu_acceleration": true
+    }
+
     
     "model_training": {
         "random_seed": 42,

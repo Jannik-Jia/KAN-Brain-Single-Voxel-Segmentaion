@@ -44,3 +44,73 @@ brain-mri-classification/
 │   ├── final/                # 最终模型
 │   └── transformers/         # 特征变换器
 └── notebooks/                # 分析笔记本
+
+
+
+
+
+第一阶段：特征预处理与简单基线模型
+数据准备阶段:
+
+data_loader.py - 数据加载
+preprocessor.py - 数据预处理(标准化等)
+basic_analyzer.py - 基础统计分析
+correlation_analyzer.py - 特征相关性分析
+
+特征选择阶段:
+
+feature_importance.py - 特征重要性分析
+separability_analyzer.py - 类别可分性分析
+feature_selector.py - 特征选择工具
+stage2_feature_engineering.py - 特征工程脚本
+run_stage2_feature_engineering.sh - 特征工程Shell脚本
+
+基线模型训练:
+
+baseline.py - 基线模型定义
+baseline_trainer.py - 基线模型训练器
+stage2_baseline_training.py - 基线训练脚本
+run_stage2_baseline_training.sh - 基线训练Shell脚本
+dimension_reducer.py - 降维工具
+
+第二阶段：编码器预训练
+
+diffusion_encoder.py - 扩散特征编码器
+qti_encoder.py - QTI特征编码器
+cest_encoder.py - CEST特征编码器
+encoder_trainer.py - 编码器预训练器
+stage3_encoder_pretraining.py - 编码器预训练脚本
+
+第三阶段：融合机制训练
+这部分的文件尚未提供，但根据设计方案应包含:
+
+类别条件注意力机制实现
+交叉模态融合实现
+完整MFCAN模型架构
+融合机制训练器
+
+第四阶段：端到端微调
+这部分的文件尚未提供，但根据设计方案应包含:
+
+端到端微调器
+加权损失函数
+多阶段学习率调度器
+
+第五阶段：知识循环优化
+这部分的文件尚未提供，但根据设计方案应包含:
+
+模型解释工具
+知识循环优化器
+专门组件实现
+
+辅助工具类文件
+
+input_validator.py - 输入验证工具
+logging_utils.py - 日志记录工具
+group_evaluator.py - 特征组评估工具
+
+配置文件
+
+base_config.json - 基础配置
+baseline_config.json - 基线模型配置
+data_config.json - 数据配置

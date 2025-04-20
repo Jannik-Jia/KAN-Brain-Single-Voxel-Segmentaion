@@ -178,22 +178,35 @@ class FeatureImportanceAnalyzer:
                 self.logger.error(f"计算综合重要性失败: {e}")
             return pd.DataFrame({'Feature': feature_names, 'Importance': np.zeros(len(feature_names))})
     
+    
     def _compute_rf_importance(self, features, labels):
         """使用随机森林计算特征重要性"""
-        # 创建和训练随机森林
-        rf = RandomForestClassifier(**self.rf_params)
-        rf.fit(features, labels)
-        
-        # 获取特征重要性
-        importance = rf.feature_importances_
-        
-        # 保存模型
-        model_dir = os.path.join(self.output_dir, 'models')
-        os.makedirs(model_dir, exist_ok=True)
-        joblib.dump(rf, os.path.join(model_dir, f'rf_importance_{self.timestamp}.joblib'))
-        
-        return importance
-    
+        # 使用GPU加速
+        try:
+            # 尝试使用cuML的随机森林实现
+            from cuml.ensemble import RandomForestClassifier
+            import cupy as cp
+            
+            # 转换为GPU张量
+            features_gpu = cp.array(features)
+            labels_gpu = cp.array(labels)
+            
+            # 创建和训练GPU随机森林
+            rf = RandomForestClassifier(**self.rf_params, output_type='numpy')
+            rf.fit(features_gpu, labels_gpu)
+            
+            self.logger.info("成功使用GPU进行RandomForest训练")
+            return rf.feature_importances_
+        except:
+            # 回退到CPU实现
+            if self.logger:
+                self.logger.info("无法使用GPU，回退到CPU随机森林实现")
+            
+            # 创建和训练CPU随机森林
+            rf = RandomForestClassifier(**self.rf_params)
+            rf.fit(features, labels)
+            return rf.feature_importances_
+            
     def _compute_mi_importance(self, features, labels):
         """使用互信息计算特征重要性"""
         # 计算每个特征与类别之间的互信息

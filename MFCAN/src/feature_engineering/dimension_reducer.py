@@ -48,83 +48,184 @@ class DimensionReducer:
         self.reduction_results = {}
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
+
     def apply_pca(self, train_features, val_features=None, test_features=None, 
-                feature_group="all", variance=0.95):
+              feature_group="all", min_variance=0.98, min_components=5,
+              use_elbow=True, auto_evaluate=True):
         """
-        应用PCA降维
+        应用PCA降维，结合最小维度保证和自动肘点检测
         
         参数:
             train_features: 训练集特征
             val_features: 验证集特征
             test_features: 测试集特征
             feature_group: 特征组名称
-            variance: 要保留的方差比例
-            
-        返回:
-            transformed_data: 降维后的数据字典
+            min_variance: 要保留的最小方差比例，默认98%
+            min_components: 最小保留的维度数，防止过度降维
+            use_elbow: 是否使用肘点法自动选择维度
+            auto_evaluate: 是否自动评估降维对性能的影响
         """
         if self.logger:
-            self.logger.info(f"对 {feature_group} 组应用PCA (保留方差: {variance})")
+            self.logger.info(f"对 {feature_group} 组应用PCA (最小方差: {min_variance}, 最小维度: {min_components})")
         
-        # 确定需要保留的主成分数量
+        # 获取配置参数（如果在配置文件中定义）
+        config_min_variance = self.config.get('pca', {}).get(f'{feature_group}_min_variance', min_variance)
+        config_min_components = self.config.get('pca', {}).get(f'{feature_group}_min_components', min_components)
+        config_use_elbow = self.config.get('pca', {}).get('use_elbow', use_elbow)
+        
+        # 使用配置文件中的参数覆盖默认值
+        min_variance = config_min_variance
+        min_components = config_min_components
+        use_elbow = config_use_elbow
+        
+        # 确定最大主成分数量
         n_components = min(train_features.shape[0], train_features.shape[1])
         
         try:
-            # 创建PCA模型
-            pca = PCA(n_components=n_components)
-            
-            # 拟合模型
-            pca.fit(train_features)
+            # 尝试使用GPU加速PCA
+            try:
+                from cuml import PCA as cuPCA
+                import cupy as cp
+                
+                # 转换为GPU张量
+                train_gpu = cp.array(train_features)
+                
+                # 创建PCA模型
+                pca = cuPCA(n_components=n_components)
+                
+                # 拟合模型
+                pca.fit(train_gpu)
+                
+                # 获取解释方差比
+                explained_variance_ratio = pca.explained_variance_ratio_
+                
+                # 转换回CPU
+                explained_variance_ratio = explained_variance_ratio.get() if hasattr(explained_variance_ratio, 'get') else explained_variance_ratio
+                
+                self.logger.info("成功使用GPU进行PCA计算")
+                using_gpu = True
+            except Exception as e:
+                self.logger.warning(f"GPU-PCA计算失败：{e}，回退到CPU实现")
+                # CPU实现
+                pca = PCA(n_components=n_components)
+                pca.fit(train_features)
+                explained_variance_ratio = pca.explained_variance_ratio_
+                using_gpu = False
             
             # 计算累积方差
-            cumulative_variance = np.cumsum(pca.explained_variance_ratio_)
+            cumulative_variance = np.cumsum(explained_variance_ratio)
             
-            # 找到满足方差阈值的最小主成分数
-            n_components_threshold = np.argmax(cumulative_variance >= variance) + 1
+            # 确定组件数量的方法:
             
-            # 确保至少保留一个主成分
-            n_components_threshold = max(1, n_components_threshold)
+            # 1. 基于方差阈值选择维度
+            variance_n_components = np.argmax(cumulative_variance >= min_variance) + 1
+            
+            # 2. 通过肘点法选择
+            elbow_n_components = None
+            if use_elbow:
+                try:
+                    # 使用肘点法找到最佳维度
+                    from kneed import KneeLocator
+                    
+                    # 创建x轴（组件数量）
+                    x = np.arange(1, len(cumulative_variance) + 1)
+                    
+                    # 找到方差曲线的"拐点"
+                    kneedle = KneeLocator(
+                        x, cumulative_variance, 
+                        curve="concave", 
+                        direction="increasing", 
+                        S=1.0
+                    )
+                    
+                    if kneedle.knee is not None:
+                        elbow_n_components = int(kneedle.knee)
+                        self.logger.info(f"使用肘点法识别到最佳维度: {elbow_n_components}")
+                    else:
+                        self.logger.warning("肘点法未能找到明确的拐点")
+                except Exception as e:
+                    self.logger.warning(f"肘点法计算失败: {e}")
+            
+            # 3. 综合不同方法确定最终维度
+            # 首先考虑方差阈值维度
+            final_n_components = variance_n_components
+            
+            # 如果有肘点结果，并且肘点结果能保留足够的方差，则使用肘点结果
+            if elbow_n_components is not None:
+                if cumulative_variance[elbow_n_components-1] >= min_variance * 0.95:  # 允许略微低于目标方差
+                    final_n_components = elbow_n_components
+                    self.logger.info(f"采用肘点法结果: {elbow_n_components} 维度")
+                else:
+                    self.logger.info(f"肘点法结果 ({elbow_n_components} 维度) 方差不足，使用方差阈值结果")
+            
+            # 确保至少保留最小维度
+            final_n_components = max(min_components, final_n_components)
             
             if self.logger:
-                variance_percent = cumulative_variance[n_components_threshold-1] * 100
-                self.logger.info(f"选择 {n_components_threshold} 个主成分，保留 {variance_percent:.2f}% 的方差")
-            
-            # 存储PCA方差保留信息
-            self.pca_variance[feature_group] = cumulative_variance[n_components_threshold-1] * 100
+                variance_percent = cumulative_variance[final_n_components-1] * 100
+                self.logger.info(f"选择 {final_n_components} 个主成分，保留 {variance_percent:.2f}% 的方差")
+                if final_n_components == min_components:
+                    self.logger.info(f"使用最小维度限制 ({min_components}) 确保降维质量")
             
             # 创建新的PCA模型，只使用选定数量的主成分
-            pca_final = PCA(n_components=n_components_threshold)
+            if using_gpu:
+                final_pca = cuPCA(n_components=final_n_components)
+                # 变换数据
+                train_transformed = final_pca.fit_transform(train_gpu).get()
+            else:
+                final_pca = PCA(n_components=final_n_components)
+                # 变换数据
+                train_transformed = final_pca.fit_transform(train_features)
             
-            # 变换数据
-            train_transformed = pca_final.fit_transform(train_features)
+            # 存储PCA方差保留信息
+            self.pca_variance[feature_group] = cumulative_variance[final_n_components-1] * 100
             
             # 存储变换器
-            self.transformers[f"pca_{feature_group}"] = pca_final
+            self.transformers[f"pca_{feature_group}"] = final_pca
             
             # 创建返回字典
             transformed_data = {'train': train_transformed}
             
             # 变换验证集
             if val_features is not None:
-                val_transformed = pca_final.transform(val_features)
+                if using_gpu:
+                    val_gpu = cp.array(val_features)
+                    val_transformed = final_pca.transform(val_gpu).get()
+                else:
+                    val_transformed = final_pca.transform(val_features)
                 transformed_data['val'] = val_transformed
             
             # 变换测试集
             if test_features is not None:
-                test_transformed = pca_final.transform(test_features)
+                if using_gpu:
+                    test_gpu = cp.array(test_features)
+                    test_transformed = final_pca.transform(test_gpu).get()
+                else:
+                    test_transformed = final_pca.transform(test_features)
                 transformed_data['test'] = test_transformed
+            
+            # 自动评估降维对性能的影响
+            if auto_evaluate and val_features is not None and 'val_labels' in self.__dict__:
+                self._evaluate_dimensionality_impact(val_features, val_transformed, 
+                                                self.val_labels, feature_group)
             
             # 保存降维结果
             self.reduction_results[f"pca_{feature_group}"] = {
                 'method': 'pca',
                 'original_dims': train_features.shape[1],
-                'reduced_dims': n_components_threshold,
-                'variance_explained': cumulative_variance[n_components_threshold-1],
+                'reduced_dims': final_n_components,
+                'variance_explained': cumulative_variance[final_n_components-1],
+                'variance_threshold': min_variance,
+                'min_components_used': final_n_components == min_components,
+                'elbow_dims': elbow_n_components,
+                'final_dims_source': 'elbow' if elbow_n_components == final_n_components else 
+                                ('min_components' if final_n_components == min_components else 'variance'),
                 'timestamp': self.timestamp
             }
             
             # 可视化降维结果
-            self._visualize_pca_results(pca_final, feature_group)
+            self._visualize_pca_results(final_pca, explained_variance_ratio, cumulative_variance, 
+                                    elbow_n_components, final_n_components, feature_group)
             
             return transformed_data
             
@@ -138,6 +239,58 @@ class DimensionReducer:
             if test_features is not None:
                 transformed_data['test'] = test_features
             return transformed_data
+            
+
+    def _evaluate_dimensionality_impact(self, original_features, reduced_features, labels, feature_group):
+        """评估降维对分类性能的影响"""
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import accuracy_score
+        
+        if self.logger:
+            self.logger.info(f"评估降维对 {feature_group} 组分类性能的影响")
+        
+        try:
+            # 使用简单的随机森林分类器评估
+            rf_params = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
+            
+            # 在原始特征上训练和评估
+            rf_original = RandomForestClassifier(**rf_params)
+            rf_original.fit(original_features, labels)
+            original_preds = rf_original.predict(original_features)
+            original_acc = accuracy_score(labels, original_preds)
+            
+            # 在降维特征上训练和评估
+            rf_reduced = RandomForestClassifier(**rf_params)
+            rf_reduced.fit(reduced_features, labels)
+            reduced_preds = rf_reduced.predict(reduced_features)
+            reduced_acc = accuracy_score(labels, reduced_preds)
+            
+            # 计算性能变化
+            performance_change = (reduced_acc - original_acc) * 100
+            
+            # 记录结果
+            self.logger.info(f"原始特征分类准确率: {original_acc:.4f}")
+            self.logger.info(f"降维特征分类准确率: {reduced_acc:.4f}")
+            self.logger.info(f"性能变化: {performance_change:+.2f}%")
+            
+            # 判断降维是否合理
+            if performance_change < -5:  # 准确率下降超过5%
+                self.logger.warning(f"降维可能导致显著性能下降，建议增加保留维度")
+            elif performance_change < -2:  # 准确率下降2%-5%
+                self.logger.warning(f"降维导致轻微性能下降，可能需要调整参数")
+            else:
+                self.logger.info(f"降维保留了关键信息，对性能影响很小或有积极影响")
+            
+            # 存储评估结果
+            self.reduction_results[f"pca_{feature_group}_evaluation"] = {
+                'original_accuracy': original_acc,
+                'reduced_accuracy': reduced_acc,
+                'performance_change': performance_change
+            }
+            
+        except Exception as e:
+            self.logger.error(f"降维性能评估失败: {e}")
+
     
     def apply_umap(self, features, labels=None, feature_group="all", n_components=2, 
                  n_neighbors=15, min_dist=0.1):
@@ -226,8 +379,9 @@ class DimensionReducer:
             self.logger.warning(f"自定义变换 '{transform_type}' 尚未实现")
         return {'transformed': features}
     
-    def _visualize_pca_results(self, pca_model, feature_group):
-        """可视化PCA降维结果"""
+    def _visualize_pca_results(self, pca_model, explained_variance_ratio, cumulative_variance, 
+                            elbow_point, final_dims, feature_group):
+        """可视化PCA降维结果，包括肘点和选择的维度标记"""
         if self.logger:
             self.logger.info(f"可视化 {feature_group} 组的PCA结果")
         
@@ -237,43 +391,61 @@ class DimensionReducer:
         
         try:
             # 绘制解释方差比例
-            plt.figure(figsize=(12, 8))
+            plt.figure(figsize=(14, 10))
             
-            explained_variance = pca_model.explained_variance_ratio_
-            cumulative_variance = np.cumsum(explained_variance)
-            
+            # 单个方差比例
             plt.subplot(2, 1, 1)
-            plt.bar(range(1, len(explained_variance) + 1), explained_variance)
+            bars = plt.bar(range(1, len(explained_variance_ratio) + 1), explained_variance_ratio)
             plt.xlabel('Principal Component')
             plt.ylabel('Explained Variance Ratio')
             plt.title(f'Explained Variance Ratio of {feature_group} Group')
-
+            
+            # 标记最终选择的维度
+            if final_dims <= len(explained_variance_ratio):
+                bars[final_dims-1].set_color('red')
+                plt.axvline(x=final_dims, color='r', linestyle='--')
+                plt.text(final_dims, max(explained_variance_ratio)*0.8, 
+                    f'Selected: {final_dims}', 
+                    color='red', fontweight='bold')
+            
             plt.grid(True, alpha=0.3)
             
+            # 累积方差
             plt.subplot(2, 1, 2)
-            plt.plot(range(1, len(cumulative_variance) + 1), cumulative_variance, 'ro-')
+            plt.plot(range(1, len(cumulative_variance) + 1), cumulative_variance, 'bo-')
             plt.xlabel('Number of Principal Components')
             plt.ylabel('Cumulative Explained Variance')
             plt.title(f'Cumulative Explained Variance of {feature_group} Group')
-
-            plt.grid(True, alpha=0.3)
+            
+            # 标记肘点
+            if elbow_point is not None and elbow_point <= len(cumulative_variance):
+                plt.plot(elbow_point, cumulative_variance[elbow_point-1], 'ro', ms=10)
+                plt.text(elbow_point+0.5, cumulative_variance[elbow_point-1]-0.05, 
+                    f'Elbow: {elbow_point}', color='red')
+            
+            # 标记最终选择的维度
+            if final_dims <= len(cumulative_variance):
+                plt.axvline(x=final_dims, color='r', linestyle='--')
+                plt.text(final_dims+0.5, cumulative_variance[final_dims-1]+0.02, 
+                    f'Selected: {final_dims}\nVariance: {cumulative_variance[final_dims-1]:.4f}', 
+                    color='red', fontweight='bold')
             
             # 添加参考线
-            for threshold in [0.8, 0.9, 0.95]:
+            for threshold in [0.8, 0.9, 0.95, 0.98, 0.99]:
                 # 找到第一个超过阈值的索引
                 idx = np.argmax(cumulative_variance >= threshold)
-                n_components = idx + 1
-                plt.axhline(y=threshold, color='g', linestyle='--', alpha=0.5)
-                plt.axvline(x=n_components, color='g', linestyle='--', alpha=0.5)
-                plt.text(n_components, threshold, f'  {n_components} components\n  {threshold*100:.0f}% variance', 
-                       verticalalignment='center')
-
+                if idx < len(cumulative_variance):  # 确保索引有效
+                    n_components = idx + 1
+                    plt.axhline(y=threshold, color='g', linestyle='--', alpha=0.5)
+                    plt.text(len(cumulative_variance)*0.7, threshold+0.01, 
+                        f'{threshold*100:.0f}% variance', color='green')
             
+            plt.grid(True, alpha=0.3)
             plt.tight_layout()
             
             # 保存图表
             save_path = os.path.join(vis_dir, f"{feature_group}_pca_variance.png")
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=300)
             plt.close()
             
             if self.logger:
@@ -282,7 +454,7 @@ class DimensionReducer:
         except Exception as e:
             if self.logger:
                 self.logger.error(f"生成PCA可视化失败: {e}")
-    
+        
     def _visualize_2d_embedding(self, embedding, labels, method, feature_group):
         """可视化二维降维结果"""
         if self.logger:
