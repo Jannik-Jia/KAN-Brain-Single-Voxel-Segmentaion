@@ -273,7 +273,7 @@ class FeatureSelector:
         
         try:
             # 基于重要性覆盖率的子集
-            for coverage in [0.8, 0.9, 0.95, 0.99]:
+            for coverage in [0.8, 0.9, 0.95, 0.98, 0.99]:
                 coverage_str = f"{int(coverage*100)}pct"
                 indices = self.select_by_importance(features, ranked_features, coverage, 
                                                  feature_group=f"{prefix}_{coverage_str}")

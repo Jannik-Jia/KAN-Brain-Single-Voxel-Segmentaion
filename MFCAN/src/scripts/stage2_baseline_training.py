@@ -239,8 +239,8 @@ def main():
         
         if args.model_type == 'mlp':
             # 基础MLP模型
-            hidden_dims = model_config.get('hidden_dims', [1024, 512, 256])
-            dropout_rate = model_config.get('dropout_rate', 0.3)
+            hidden_dims = model_config.get('hidden_dims', [2048, 1536, 1024, 512, 256, 128])
+            dropout_rate = model_config.get('dropout_rate', 0.4)
             
             input_dim = train_features.shape[1]
             num_classes = len(np.unique(train_labels))
@@ -291,7 +291,7 @@ def main():
             use_residual = model_config.get('use_residual', True)
             use_self_attention = model_config.get('use_self_attention', True)
             use_feature_interaction = model_config.get('use_feature_interaction', True)
-            num_attn_heads = model_config.get('num_attn_heads', 8)
+            num_attn_heads = model_config.get('num_attn_heads', 12)
             attn_layers = model_config.get('attn_layers', [1, 3])
             
             input_dim = train_features.shape[1]

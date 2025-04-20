@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import squareform
+from scipy.spatial import distance
+
 import json
 from datetime import datetime
 

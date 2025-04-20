@@ -218,7 +218,7 @@ def main():
         # 根据重要性选择全部特征子集
         logger.info("根据重要性选择全部特征子集...")
         selected_all = feature_selector.select_by_importance(
-            train_features, ranked_features, coverage=0.95)
+            train_features, ranked_features, coverage=0.98)
         
         # 移除冗余特征
         logger.info("移除冗余特征...")
@@ -240,7 +240,6 @@ def main():
             
             # 根据重要性选择
             group_selected = feature_selector.select_by_importance(
-                group_features_train, group_ranked, coverage=0.95)
             
             # 移除冗余
             group_selected_nonredundant = feature_selector.remove_redundancy(
