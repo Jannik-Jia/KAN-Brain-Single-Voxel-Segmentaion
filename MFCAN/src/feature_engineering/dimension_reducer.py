@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE, UMAP
+from sklearn.manifold import TSNE
 import h5py
 import json
 import joblib
