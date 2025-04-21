@@ -238,9 +238,11 @@ class DeepMLP(nn.Module):
                 if hidden_dims[i-1] == dim:
                     # 直接添加残差连接
                     self.layers.append(ResidualConnection(dim))
+                    
                 else:
                     # 使用1x1投影进行维度匹配
                     self.layers.append(ResidualConnection(dim, hidden_dims[i-1]))
+                    
 
             
             # 如果当前层需要添加注意力
@@ -272,8 +274,15 @@ class DeepMLP(nn.Module):
     
     def forward(self, x):
         """前向传播"""
-        for layer in self.layers:
-            x = layer(x)
+        previous_output = None
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, ResidualConnection):
+                # 检查是否提供了前一层的输出作为残差
+                x = layer(x, previous_output)
+            else:
+                # 存储非残差层的输出
+                previous_output = x
+                x = layer(x)
         
         logits = self.classifier(x)
         return logits
