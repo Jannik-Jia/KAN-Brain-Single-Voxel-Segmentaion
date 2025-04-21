@@ -4,10 +4,14 @@
 mkdir -p logs/shell
 
 # 设置默认参数
-MODEL_TYPE="deep_mlp"  # 可选: mlp, group_mlp, deep_mlp
-FEATURE_TYPE="selected"  # 可选: original, selected, pca, combined
-FEATURE_SELECTION="rf"  # 可选: importance, nonredundant, rf
-NUM_RUNS=3  # 默认运行次数，用于获取更稳定的结果
+MODEL_TYPE="deep_mlp"
+FEATURE_TYPE="selected"
+FEATURE_SELECTION="rf"  # 新增: 默认使用随机森林特征选择
+FEATURE_SUBSET=""  # 新增: 可选的特征子集
+CONFIG_PATH="configs/base_config.json"
+SELECTED_FEATURES=""
+TRANSFORMED_FEATURES=""
+OUTPUT_DIR=""
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -20,12 +24,28 @@ while [[ $# -gt 0 ]]; do
       FEATURE_TYPE="$2"
       shift 2
       ;;
-    --feature_selection)
+    --feature_selection)  # 新增
       FEATURE_SELECTION="$2"
       shift 2
       ;;
-    --num_runs)
-      NUM_RUNS="$2"
+    --feature_subset)  # 新增
+      FEATURE_SUBSET="$2"
+      shift 2
+      ;;
+    --config)
+      CONFIG_PATH="$2"
+      shift 2
+      ;;
+    --selected_features)
+      SELECTED_FEATURES="$2"
+      shift 2
+      ;;
+    --transformed_features)
+      TRANSFORMED_FEATURES="$2"
+      shift 2
+      ;;
+    --output_dir)
+      OUTPUT_DIR="$2"
       shift 2
       ;;
     *)
@@ -35,134 +55,88 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 设置最新特征工程结果目录
-FEATURE_ENG_DIR=$(ls -td results/feature_engineering/20* | head -1)
-echo "Using feature engineering results from: $FEATURE_ENG_DIR"
+# 设置日志文件路径
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="logs/shell/stage2_baseline_${MODEL_TYPE}_${FEATURE_TYPE}_${FEATURE_SELECTION}_${TIMESTAMP}.log"
 
-# 检查选定的特征选择方法是否有效
-IMPORTANCE_FILE="$FEATURE_ENG_DIR/importance/all_feature_ranking.csv"
-if [ ! -f "$IMPORTANCE_FILE" ]; then
-  echo "Warning: Feature importance file not found at $IMPORTANCE_FILE"
-  echo "Will use default feature selection from the H5 file"
+echo "Starting Stage 2 Baseline Training..."
+echo "Model type: $MODEL_TYPE"
+echo "Feature type: $FEATURE_TYPE"
+echo "Feature selection method: $FEATURE_SELECTION"
+if [ ! -z "$FEATURE_SUBSET" ]; then
+  echo "Feature subset: $FEATURE_SUBSET"
+fi
+echo "Config file: $CONFIG_PATH"
+echo "Log file: $LOG_FILE"
+
+# 如果未指定特征文件路径，尝试自动查找最新的特征工程结果
+if [ -z "$SELECTED_FEATURES" ]; then
+  # 根据特征选择方法设置子目录
+  FEATURE_PATH_PATTERN="results/feature_engineering/*/${FEATURE_SELECTION}*feature_selection*.h5"
+  SELECTED_FEATURES=$(ls -td ${FEATURE_PATH_PATTERN} 2>/dev/null | head -1)
+  
+  if [ ! -z "$SELECTED_FEATURES" ]; then
+    echo "Automatically selected feature file: $SELECTED_FEATURES"
+  else
+    echo "Warning: Could not find feature selection result for method ${FEATURE_SELECTION}"
+    # 尝试找到任意特征选择结果
+    SELECTED_FEATURES=$(ls -td results/feature_engineering/*/feature_selection*.h5 2>/dev/null | head -1)
+    
+    if [ ! -z "$SELECTED_FEATURES" ]; then
+      echo "Using alternative feature selection result: $SELECTED_FEATURES"
+    else
+      echo "Error: No feature selection files found"
+      exit 1
+    fi
+  fi
 fi
 
-# 设置模型参数组合 (针对DeepMLP的超参数调优)
-if [ "$MODEL_TYPE" = "deep_mlp" ]; then
-  # 创建参数组合数组
-  declare -a PARAM_COMBINATIONS=(
-    # 参数格式: "hidden_dims dropout_rate num_attn_heads"
-    "1024,512,256,128 0.3 12"     # 默认配置
-    "2048,1024,512,256 0.4 16"    # 更深更宽的网络
-    "1024,1024,512,512,256 0.5 8" # 更多层，更强正则化
-  )
-else
-  # 对于其他模型，只使用一组默认参数
-  declare -a PARAM_COMBINATIONS=(
-    "default"
-  )
+# 对于combined特征类型，确保也有transformed_features文件
+if [ "$FEATURE_TYPE" == "combined" ] && [ -z "$TRANSFORMED_FEATURES" ]; then
+  TRANSFORMED_FEATURES=$(ls -td results/feature_engineering/*/transformed_features*.h5 2>/dev/null | head -1)
+  
+  if [ ! -z "$TRANSFORMED_FEATURES" ]; then
+    echo "Automatically selected transformed feature file: $TRANSFORMED_FEATURES"
+  else
+    echo "Error: No transformed feature files found for combined mode"
+    exit 1
+  fi
 fi
 
-# 创建实验结果摘要文件
-RESULTS_SUMMARY="$FEATURE_ENG_DIR/baseline_experiments_summary.csv"
-echo "model_type,feature_type,feature_selection,params,run,accuracy,f1_score,timestamp" > "$RESULTS_SUMMARY"
+# 构建命令
+CMD="python scripts/stage2_baseline_training.py --model_type ${MODEL_TYPE} --feature_type ${FEATURE_TYPE} --config ${CONFIG_PATH}"
 
-# 运行每种参数组合
-for PARAMS in "${PARAM_COMBINATIONS[@]}"; do
-  # 对每种参数组合运行多次以获得稳定结果
-  for RUN in $(seq 1 $NUM_RUNS); do
-    # 设置日志文件路径
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    if [ "$PARAMS" = "default" ]; then
-      PARAM_STR="default"
-      CONFIG_PATH="configs/base_config.json"
-    else
-      # 解析参数
-      IFS=' ' read -r HIDDEN_DIMS DROPOUT NUM_HEADS <<< "$PARAMS"
-      PARAM_STR="${HIDDEN_DIMS//,/_}_d${DROPOUT}_h${NUM_HEADS}"
-      
-      # 创建临时配置文件
-      CONFIG_PATH="configs/temp_${MODEL_TYPE}_${PARAM_STR}.json"
-      
-      # 基于基础配置创建临时配置
-      cp configs/base_config.json "$CONFIG_PATH"
-      
-      # 修改配置文件中的参数 (基于jq或sed，这里用sed简化处理)
-      if [[ "$HIDDEN_DIMS" =~ ^[0-9,]+$ ]]; then
-        HIDDEN_DIMS_JSON="[$(echo $HIDDEN_DIMS | sed 's/,/,/g')]"
-        sed -i "s/\"hidden_dims\": \[[0-9, ]*\]/\"hidden_dims\": $HIDDEN_DIMS_JSON/g" "$CONFIG_PATH"
-      fi
-      sed -i "s/\"dropout_rate\": [0-9.]\+/\"dropout_rate\": $DROPOUT/g" "$CONFIG_PATH"
-      sed -i "s/\"num_attn_heads\": [0-9]\+/\"num_attn_heads\": $NUM_HEADS/g" "$CONFIG_PATH"
-    fi
-    
-    LOG_FILE="logs/shell/stage2_baseline_${MODEL_TYPE}_${FEATURE_TYPE}_${FEATURE_SELECTION}_${PARAM_STR}_run${RUN}_${TIMESTAMP}.log"
-    
-    echo "Starting run $RUN/$NUM_RUNS with parameters: $PARAM_STR"
-    echo "Model Type: $MODEL_TYPE"
-    echo "Feature Type: $FEATURE_TYPE"
-    echo "Feature Selection: $FEATURE_SELECTION"
-    echo "Log file: $LOG_FILE"
-    
-    # 设置特征文件路径参数
-    if [ "$FEATURE_TYPE" = "selected" ]; then
-      FEATURE_PARAMS="--selected_features $FEATURE_ENG_DIR/selected_features.h5 --feature_selection $FEATURE_SELECTION"
-    elif [ "$FEATURE_TYPE" = "pca" ]; then
-      FEATURE_PARAMS="--transformed_features $FEATURE_ENG_DIR/transformed_features.h5"
-    elif [ "$FEATURE_TYPE" = "combined" ]; then
-      FEATURE_PARAMS="--selected_features $FEATURE_ENG_DIR/selected_features.h5 --transformed_features $FEATURE_ENG_DIR/transformed_features.h5 --feature_selection $FEATURE_SELECTION"
-    else
-      FEATURE_PARAMS=""
-    fi
-    
-    # 运行阶段二基线训练脚本
-    python scripts/stage2_baseline_training.py \
-        --config "$CONFIG_PATH" \
-        --model_type $MODEL_TYPE \
-        --feature_type $FEATURE_TYPE \
-        $FEATURE_PARAMS \
-        --output_dir "results/baseline/${MODEL_TYPE}_${FEATURE_TYPE}_${FEATURE_SELECTION}_${PARAM_STR}_${TIMESTAMP}" \
-        > "$LOG_FILE" 2>&1 &
-    
-    # 获取进程ID
-    PID=$!
-    echo "Process started with PID: $PID"
-    
-    # 等待进程完成
-    wait $PID
-    EXIT_CODE=$?
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-      echo "Run completed successfully"
-      
-      # 提取结果并添加到摘要文件
-      ACCURACY=$(grep -o "准确率: [0-9.]\+" "$LOG_FILE" | tail -1 | awk '{print $2}')
-      F1_SCORE=$(grep -o "F1分数: [0-9.]\+" "$LOG_FILE" | tail -1 | awk '{print $2}')
-      
-      if [ -n "$ACCURACY" ] && [ -n "$F1_SCORE" ]; then
-        echo "$MODEL_TYPE,$FEATURE_TYPE,$FEATURE_SELECTION,$PARAM_STR,$RUN,$ACCURACY,$F1_SCORE,$TIMESTAMP" >> "$RESULTS_SUMMARY"
-        echo "Results recorded: Accuracy=$ACCURACY, F1=$F1_SCORE"
-      else
-        echo "Could not extract results from log file"
-      fi
-    else
-      echo "Run failed with exit code $EXIT_CODE"
-    fi
-    
-    # 如果不是默认配置，删除临时配置文件
-    if [ "$PARAMS" != "default" ]; then
-      rm -f "$CONFIG_PATH"
-    fi
-    
-    echo "-----------------------------------"
-  done
-done
+# 添加特征选择方法（如果不是"original"特征类型）
+if [ "$FEATURE_TYPE" != "original" ]; then
+  CMD="${CMD} --feature_selection ${FEATURE_SELECTION}"
+fi
 
-echo "All experiments completed."
-echo "Results summary saved to: $RESULTS_SUMMARY"
+# 添加特征子集（如果指定了）
+if [ ! -z "$FEATURE_SUBSET" ]; then
+  CMD="${CMD} --feature_subset ${FEATURE_SUBSET}"
+fi
 
-# 分析最佳模型
-echo "Analyzing best models..."
-echo "Top 3 models by accuracy:"
-sort -t, -k6,6nr "$RESULTS_SUMMARY" | head -4 | column -t -s,
+# 添加特征文件路径
+if [ ! -z "$SELECTED_FEATURES" ]; then
+  CMD="${CMD} --selected_features ${SELECTED_FEATURES}"
+fi
 
-echo "Complete!"
+if [ ! -z "$TRANSFORMED_FEATURES" ]; then
+  CMD="${CMD} --transformed_features ${TRANSFORMED_FEATURES}"
+fi
+
+# 添加输出目录（如果指定了）
+if [ ! -z "$OUTPUT_DIR" ]; then
+  CMD="${CMD} --output_dir ${OUTPUT_DIR}"
+fi
+
+echo "Running command: ${CMD}"
+
+# 运行命令并重定向输出到日志文件
+nohup ${CMD} > "${LOG_FILE}" 2>&1 &
+
+# 获取进程ID
+PID=$!
+echo "Process started with PID: $PID"
+echo "To check progress, use: tail -f $LOG_FILE"
+echo "To check if process is running, use: ps -p $PID"

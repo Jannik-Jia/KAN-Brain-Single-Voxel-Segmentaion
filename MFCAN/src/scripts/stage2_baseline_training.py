@@ -56,6 +56,10 @@ def main():
                        choices=['mlp', 'group_mlp', 'deep_mlp'], help='模型类型')
     parser.add_argument('--feature_type', type=str, default='selected', 
                        choices=['original', 'selected', 'pca', 'combined'], help='使用的特征类型')
+    parser.add_argument('--feature_selection', type=str, default=None,
+                       choices=['rf', 'mi', 'permutation', 'combined'], help='使用的特征选择方法')
+    parser.add_argument('--feature_subset', type=str, default=None,
+                       help='特征子集名称，如 "importance_90pct", "top_50" 等')
     args = parser.parse_args()
     
     # 设置时间戳
@@ -70,6 +74,10 @@ def main():
     logger.info(f"配置文件: {args.config}")
     logger.info(f"模型类型: {args.model_type}")
     logger.info(f"特征类型: {args.feature_type}")
+    if args.feature_selection:
+        logger.info(f"特征选择方法: {args.feature_selection}")
+    if args.feature_subset:
+        logger.info(f"特征子集: {args.feature_subset}")
     
     # 加载配置
     try:
@@ -83,11 +91,15 @@ def main():
     # 设置输出目录
     base_output_dir = args.output_dir or config.get('paths', {}).get('results_dir', 'results')
     output_dir = os.path.join(base_output_dir, 'baseline', f"{args.model_type}_{args.feature_type}_{timestamp}")
+    if args.feature_selection:
+        output_dir = output_dir.replace(args.feature_type, f"{args.feature_type}_{args.feature_selection}")
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"输出目录: {output_dir}")
     
     # 记录实验开始
     experiment_name = f"阶段二：{args.model_type}基线模型训练({args.feature_type}特征)"
+    if args.feature_selection:
+        experiment_name += f" 使用{args.feature_selection}特征选择"
     logger_manager.log_experiment_start(experiment_name, f"时间戳: {timestamp}")
     
     start_time = time.time()
@@ -149,36 +161,95 @@ def main():
             
         elif args.feature_type == 'selected':
             # 从特征选择结果中提取特征
-            # 默认使用移除冗余后的'all'组特征
-            if 'all' in data_dict:
-                train_features = data_dict['all']['train']
-                train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
-                val_features = data_dict['all']['val']
-                val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
-                test_features = data_dict['all']['test']
-                test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
-                
-                # 提取特征组数据 (用于group_mlp模型)
-                group_features = {}
+            
+            # 特征选择方法处理
+            if args.feature_selection:
+                # 查找基于特定方法的特征选择结果
+                feature_selection_key = None
                 for key in data_dict.keys():
-                    if key != 'all':
+                    # 找到包含选定特征选择方法的键
+                    if args.feature_selection in key.lower():
+                        feature_selection_key = key
+                        break
+                
+                if not feature_selection_key:
+                    logger.warning(f"无法找到使用 {args.feature_selection} 特征选择方法的结果，尝试使用默认结果")
+                    feature_selection_key = 'all'
+                
+                logger.info(f"使用 {feature_selection_key} 特征选择结果")
+                
+                # 特征子集处理
+                if args.feature_subset and feature_selection_key in data_dict:
+                    subset_found = False
+                    # 查找特定子集
+                    for subset_key in data_dict[feature_selection_key].keys():
+                        if args.feature_subset in subset_key:
+                            if 'train' in data_dict[feature_selection_key][subset_key]:
+                                train_features = data_dict[feature_selection_key][subset_key]['train']
+                                train_labels = data_dict[feature_selection_key][subset_key].get('train_labels')
+                                val_features = data_dict[feature_selection_key][subset_key].get('val')
+                                val_labels = data_dict[feature_selection_key][subset_key].get('val_labels')
+                                test_features = data_dict[feature_selection_key][subset_key].get('test')
+                                test_labels = data_dict[feature_selection_key][subset_key].get('test_labels')
+                                subset_found = True
+                                logger.info(f"使用 {subset_key} 特征子集")
+                                break
+                    
+                    if not subset_found:
+                        logger.warning(f"在 {feature_selection_key} 中找不到 {args.feature_subset} 特征子集，尝试使用默认数据")
+                        # 使用默认路径
+                        if 'train' in data_dict[feature_selection_key]:
+                            train_features = data_dict[feature_selection_key]['train']
+                            train_labels = data_dict[feature_selection_key].get('train_labels')
+                            val_features = data_dict[feature_selection_key].get('val')
+                            val_labels = data_dict[feature_selection_key].get('val_labels')
+                            test_features = data_dict[feature_selection_key].get('test')
+                            test_labels = data_dict[feature_selection_key].get('test_labels')
+                else:
+                    # 使用默认路径
+                    if feature_selection_key in data_dict and 'train' in data_dict[feature_selection_key]:
+                        train_features = data_dict[feature_selection_key]['train']
+                        train_labels = data_dict[feature_selection_key].get('train_labels')
+                        val_features = data_dict[feature_selection_key].get('val')
+                        val_labels = data_dict[feature_selection_key].get('val_labels')
+                        test_features = data_dict[feature_selection_key].get('test')
+                        test_labels = data_dict[feature_selection_key].get('test_labels')
+                    else:
+                        logger.error(f"在 {feature_selection_key} 中找不到训练数据")
+                        return
+            else:
+                # 默认使用移除冗余后的'all'组特征
+                if 'all' in data_dict:
+                    train_features = data_dict['all']['train']
+                    train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
+                    val_features = data_dict['all']['val'] if 'val' in data_dict['all'] else None
+                    val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
+                    test_features = data_dict['all']['test'] if 'test' in data_dict['all'] else None
+                    test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
+                else:
+                    logger.error("在特征选择结果中找不到'all'组特征")
+                    return
+                
+            # 提取特征组数据 (用于group_mlp模型)
+            group_features = {}
+            for key in data_dict.keys():
+                if key != 'all' and key != feature_selection_key:
+                    # 检查是否包含训练数据
+                    if 'train' in data_dict[key]:
                         group_features[key] = {
                             'train': data_dict[key]['train'],
-                            'val': data_dict[key]['val'],
-                            'test': data_dict[key]['test']
+                            'val': data_dict[key]['val'] if 'val' in data_dict[key] else None,
+                            'test': data_dict[key]['test'] if 'test' in data_dict[key] else None
                         }
-            else:
-                logger.error("在特征选择结果中找不到'all'组特征")
-                return
                 
         elif args.feature_type == 'pca':
             # 从特征变换结果中提取PCA特征
             if 'pca' in data_dict:
                 train_features = data_dict['pca']['train']
                 train_labels = data_dict['pca']['train_labels'] if 'train_labels' in data_dict['pca'] else None
-                val_features = data_dict['pca']['val']
+                val_features = data_dict['pca']['val'] if 'val' in data_dict['pca'] else None
                 val_labels = data_dict['pca']['val_labels'] if 'val_labels' in data_dict['pca'] else None
-                test_features = data_dict['pca']['test']
+                test_features = data_dict['pca']['test'] if 'test' in data_dict['pca'] else None
                 test_labels = data_dict['pca']['test_labels'] if 'test_labels' in data_dict['pca'] else None
                 
                 # 提取特征组PCA数据 (用于group_mlp模型)
@@ -187,8 +258,8 @@ def main():
                     if key != 'pca' and 'pca' in data_dict[key]:
                         group_features[key] = {
                             'train': data_dict[key]['pca']['train'],
-                            'val': data_dict[key]['pca']['val'],
-                            'test': data_dict[key]['pca']['test']
+                            'val': data_dict[key]['pca']['val'] if 'val' in data_dict[key]['pca'] else None,
+                            'test': data_dict[key]['pca']['test'] if 'test' in data_dict[key]['pca'] else None
                         }
             else:
                 logger.error("在特征变换结果中找不到PCA特征")
@@ -196,19 +267,69 @@ def main():
                 
         elif args.feature_type == 'combined':
             # 组合特征选择和PCA特征
-            # 例如：使用特征选择结果中的'all'组特征和各特征组的PCA特征
             
-            # 首先加载特征选择结果中的'all'组特征
-            if 'all' in selected_data:
-                train_features = selected_data['all']['train']
-                train_labels = selected_data['all']['train_labels'] if 'train_labels' in selected_data['all'] else None
-                val_features = selected_data['all']['val']
-                val_labels = selected_data['all']['val_labels'] if 'val_labels' in selected_data['all'] else None
-                test_features = selected_data['all']['test']
-                test_labels = selected_data['all']['test_labels'] if 'test_labels' in selected_data['all'] else None
+            # 特征选择方法处理
+            if args.feature_selection:
+                feature_selection_key = None
+                for key in selected_data.keys():
+                    if args.feature_selection in key.lower():
+                        feature_selection_key = key
+                        break
+                
+                if not feature_selection_key:
+                    feature_selection_key = 'all'
+                
+                logger.info(f"使用 {feature_selection_key} 特征选择结果进行组合")
+                
+                # 提取特征选择结果
+                if feature_selection_key in selected_data:
+                    if args.feature_subset:
+                        subset_found = False
+                        for subset_key in selected_data[feature_selection_key].keys():
+                            if args.feature_subset in subset_key and 'train' in selected_data[feature_selection_key][subset_key]:
+                                train_features = selected_data[feature_selection_key][subset_key]['train']
+                                train_labels = selected_data[feature_selection_key][subset_key].get('train_labels')
+                                val_features = selected_data[feature_selection_key][subset_key].get('val')
+                                val_labels = selected_data[feature_selection_key][subset_key].get('val_labels')
+                                test_features = selected_data[feature_selection_key][subset_key].get('test')
+                                test_labels = selected_data[feature_selection_key][subset_key].get('test_labels')
+                                subset_found = True
+                                logger.info(f"使用 {subset_key} 特征子集进行组合")
+                                break
+                        
+                        if not subset_found:
+                            logger.warning(f"在 {feature_selection_key} 中找不到 {args.feature_subset} 特征子集，使用默认数据")
+                            if 'train' in selected_data[feature_selection_key]:
+                                train_features = selected_data[feature_selection_key]['train']
+                                train_labels = selected_data[feature_selection_key].get('train_labels')
+                                val_features = selected_data[feature_selection_key].get('val')
+                                val_labels = selected_data[feature_selection_key].get('val_labels')
+                                test_features = selected_data[feature_selection_key].get('test')
+                                test_labels = selected_data[feature_selection_key].get('test_labels')
+                    else:
+                        # 使用默认路径
+                        if 'train' in selected_data[feature_selection_key]:
+                            train_features = selected_data[feature_selection_key]['train']
+                            train_labels = selected_data[feature_selection_key].get('train_labels')
+                            val_features = selected_data[feature_selection_key].get('val')
+                            val_labels = selected_data[feature_selection_key].get('val_labels')
+                            test_features = selected_data[feature_selection_key].get('test')
+                            test_labels = selected_data[feature_selection_key].get('test_labels')
+                else:
+                    logger.error(f"在特征选择结果中找不到 {feature_selection_key} 组特征")
+                    return
             else:
-                logger.error("在特征选择结果中找不到'all'组特征")
-                return
+                # 使用默认'all'组特征
+                if 'all' in selected_data:
+                    train_features = selected_data['all']['train']
+                    train_labels = selected_data['all']['train_labels'] if 'train_labels' in selected_data['all'] else None
+                    val_features = selected_data['all']['val'] if 'val' in selected_data['all'] else None
+                    val_labels = selected_data['all']['val_labels'] if 'val_labels' in selected_data['all'] else None
+                    test_features = selected_data['all']['test'] if 'test' in selected_data['all'] else None
+                    test_labels = selected_data['all']['test_labels'] if 'test_labels' in selected_data['all'] else None
+                else:
+                    logger.error("在特征选择结果中找不到'all'组特征")
+                    return
                 
             # 提取特征组PCA数据 (用于group_mlp模型)
             group_features = {}
@@ -216,20 +337,43 @@ def main():
                 if key != 'pca' and 'pca' in transformed_data[key]:
                     group_features[key] = {
                         'train': transformed_data[key]['pca']['train'],
-                        'val': transformed_data[key]['pca']['val'],
-                        'test': transformed_data[key]['pca']['test']
+                        'val': transformed_data[key]['pca']['val'] if 'val' in transformed_data[key]['pca'] else None,
+                        'test': transformed_data[key]['pca']['test'] if 'test' in transformed_data[key]['pca'] else None
                     }
         
         # 检查是否成功提取特征和标签
-        if train_features is None or train_labels is None:
-            logger.error("无法从数据中提取特征和标签")
+        if train_features is None:
+            logger.error("无法从数据中提取特征")
             return
             
+        if train_labels is None:
+            logger.error("无法从数据中提取标签")
+            return
+            
+        if val_features is None or val_labels is None:
+            logger.warning("无法从数据中提取验证集，尝试使用训练集的一部分作为验证集")
+            # 分割训练集的20%作为验证集
+            from sklearn.model_selection import train_test_split
+            train_features, val_features, train_labels, val_labels = train_test_split(
+                train_features, train_labels, test_size=0.2, random_state=42, stratify=train_labels
+            )
+            
+        if test_features is None or test_labels is None:
+            logger.warning("无法从数据中提取测试集，尝试使用训练集的一部分作为测试集")
+            # 分割训练集的10%作为测试集
+            from sklearn.model_selection import train_test_split
+            train_features, test_features, train_labels, test_labels = train_test_split(
+                train_features, train_labels, test_size=0.1, random_state=42, stratify=train_labels
+            )
+            
         logger.info(f"成功提取特征 - 训练集: {train_features.shape}, 验证集: {val_features.shape}, 测试集: {test_features.shape}")
-        logger.info(f"提取了 {len(group_features)} 个特征组用于group_mlp模型")
+        if group_features:
+            logger.info(f"提取了 {len(group_features)} 个特征组用于group_mlp模型")
             
     except Exception as e:
         logger.error(f"处理特征数据失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return
     
     # 步骤2：创建模型
@@ -259,7 +403,8 @@ def main():
             # 提取每个特征组的维度
             group_dims = {}
             for group_name, group_data in group_features.items():
-                group_dims[group_name] = group_data['train'].shape[1]
+                if group_data['train'] is not None and len(group_data['train'].shape) > 0:
+                    group_dims[group_name] = group_data['train'].shape[1]
             
             # 使用配置文件中的隐藏层维度或设置默认值
             group_hidden_dims = {}
@@ -317,6 +462,8 @@ def main():
         
     except Exception as e:
         logger.error(f"创建模型失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return
     
     # 步骤3：训练模型
@@ -378,7 +525,8 @@ def main():
             # 添加训练集
             train_group = {}
             for group_name, group_data in group_features.items():
-                train_group[group_name] = torch.tensor(group_data['train'], dtype=torch.float32)
+                if group_data['train'] is not None:
+                    train_group[group_name] = torch.tensor(group_data['train'], dtype=torch.float32)
             group_data_dict['train'] = {
                 'features': train_group,
                 'labels': torch.tensor(train_labels, dtype=torch.long)
@@ -387,7 +535,8 @@ def main():
             # 添加验证集
             val_group = {}
             for group_name, group_data in group_features.items():
-                val_group[group_name] = torch.tensor(group_data['val'], dtype=torch.float32)
+                if group_data['val'] is not None:
+                    val_group[group_name] = torch.tensor(group_data['val'], dtype=torch.float32)
             group_data_dict['val'] = {
                 'features': val_group,
                 'labels': torch.tensor(val_labels, dtype=torch.long)
@@ -396,7 +545,8 @@ def main():
             # 添加测试集
             test_group = {}
             for group_name, group_data in group_features.items():
-                test_group[group_name] = torch.tensor(group_data['test'], dtype=torch.float32)
+                if group_data['test'] is not None:
+                    test_group[group_name] = torch.tensor(group_data['test'], dtype=torch.float32)
             group_data_dict['test'] = {
                 'features': test_group,
                 'labels': torch.tensor(test_labels, dtype=torch.long)
@@ -421,6 +571,8 @@ def main():
         
     except Exception as e:
         logger.error(f"训练模型失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         logger_manager.log_experiment_end(experiment_name, {"状态": "失败", "阶段": "模型训练", "错误": str(e)})
         return
     
@@ -432,6 +584,8 @@ def main():
             evaluation_summary = {
                 "model_type": args.model_type,
                 "feature_type": args.feature_type,
+                "feature_selection": args.feature_selection,
+                "feature_subset": args.feature_subset,
                 "accuracy": float(metrics['accuracy']),
                 "f1_weighted": float(metrics['f1_weighted']),
                 "f1_macro": float(metrics.get('f1_macro', 0)),
@@ -451,6 +605,10 @@ def main():
             with open(report_path, 'w') as f:
                 f.write(f"# {args.model_type.upper()} 模型特征有效性评估\n\n")
                 f.write(f"## 特征类型: {args.feature_type}\n\n")
+                if args.feature_selection:
+                    f.write(f"## 特征选择方法: {args.feature_selection}\n\n")
+                if args.feature_subset:
+                    f.write(f"## 特征子集: {args.feature_subset}\n\n")
                 f.write(f"分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 
                 f.write("## 模型性能\n\n")
@@ -477,6 +635,11 @@ def main():
                     f.write(f"- 原始特征维度: {original_dims}\n")
                     f.write(f"- 选择后特征维度: {train_features.shape[1]}\n")
                     f.write(f"- 维度减少比例: {reduction_ratio:.1f}%\n\n")
+                    
+                    if args.feature_selection:
+                        f.write(f"- 特征选择方法: {args.feature_selection}\n")
+                    if args.feature_subset:
+                        f.write(f"- 使用的特征子集: {args.feature_subset}\n\n")
                     
                     if reduction_ratio > 70:
                         f.write("特征选择效果**显著**，保留了最重要的特征同时大幅减少了维度。\n\n")
@@ -510,6 +673,12 @@ def main():
                 elif args.feature_type == 'combined':
                     # 组合特征有效性分析
                     f.write(f"### 组合特征效果\n\n")
+                    
+                    if args.feature_selection:
+                        f.write(f"- 使用的特征选择方法: {args.feature_selection}\n")
+                    if args.feature_subset:
+                        f.write(f"- 使用的特征子集: {args.feature_subset}\n")
+                        
                     f.write(f"- 特征选择和PCA降维的组合提供了一种平衡的特征表示。\n")
                     f.write(f"- 最终特征维度: {train_features.shape[1]}\n\n")
                     
@@ -530,12 +699,17 @@ def main():
                 else:
                     f.write("2. **特征表示**：可以尝试不同的特征表示方法，比如结合特征选择和降维的混合策略。\n")
                 
-                f.write("3. **进一步实验**：建议与其他模型架构和特征工程策略进行对比实验，寻找最佳组合。\n")
+                if args.feature_selection:
+                    f.write(f"3. **特征选择方法**：当前使用的是{args.feature_selection}方法进行特征选择，可以尝试其他方法如{'互信息' if args.feature_selection != 'mi' else '随机森林'}进行比较。\n")
+                
+                f.write(f"4. **进一步实验**：建议与其他模型架构和特征工程策略进行对比实验，寻找最佳组合。\n")
                 
             logger.info(f"特征有效性报告已保存至 {report_path}")
             
         except Exception as e:
             logger.error(f"评估特征有效性失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     end_time = time.time()
     training_time = end_time - start_time
@@ -548,6 +722,8 @@ def main():
         "F1分数": float(metrics['f1_weighted']),
         "模型类型": args.model_type,
         "特征类型": args.feature_type,
+        "特征选择方法": args.feature_selection,
+        "特征子集": args.feature_subset,
         "特征维度": train_features.shape[1],
         "参数数量": total_params
     }
