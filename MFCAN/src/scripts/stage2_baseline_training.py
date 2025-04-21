@@ -27,11 +27,20 @@ def load_h5_data(file_path):
     import h5py
     data_dict = {}
     
+    print(f"开始加载数据文件: {file_path}")
     with h5py.File(file_path, 'r') as f:
-        # 读取所有组和数据集
+        # 打印H5文件的所有组
+        print("H5文件组结构:")
+        def visit_for_debug(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                print(f"  数据集: {name}, 形状: {obj.shape}, 类型: {obj.dtype}")
+            else:
+                print(f"  组: {name}")
+        f.visititems(visit_for_debug)
+        
+        # 原来的加载逻辑
         def visit_group(name, obj):
             if isinstance(obj, h5py.Dataset):
-                # 将数据集加载到内存
                 parts = name.split('/')
                 current_dict = data_dict
                 for i, part in enumerate(parts[:-1]):
@@ -39,9 +48,21 @@ def load_h5_data(file_path):
                         current_dict[part] = {}
                     current_dict = current_dict[part]
                 current_dict[parts[-1]] = obj[()]
+                print(f"已加载数据集: {name}")
         
         f.visititems(visit_group)
     
+    # 打印data_dict的结构
+    print("加载后的数据字典结构:")
+    def print_dict_structure(d, prefix=""):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                print(f"{prefix}{k}:")
+                print_dict_structure(v, prefix + "  ")
+            else:
+                print(f"{prefix}{k}: 形状={v.shape if hasattr(v, 'shape') else '标量'}")
+    
+    print_dict_structure(data_dict)
     return data_dict
 
 def main():
@@ -220,37 +241,30 @@ def main():
             else:
                 # 默认使用移除冗余后的'all'组特征
                 if 'all' in data_dict:
-                    # 处理训练集
-                    if isinstance(data_dict['all']['train'], h5py.Group):
-                        train_features = data_dict['all']['train']['features'][()]
-                        train_labels = data_dict['all']['train']['labels'][()] if 'labels' in data_dict['all']['train'] else None
+                    # 直接访问我们知道存在的路径
+                    if 'train' in data_dict['all'] and isinstance(data_dict['all']['train'], dict) and 'features' in data_dict['all']['train']:
+                        train_features = data_dict['all']['train']['features']
+                        train_labels = data_dict['all']['train']['labels'] if 'labels' in data_dict['all']['train'] else None
                     else:
-                        train_features = data_dict['all']['train'][()]
-                        train_labels = data_dict['all']['train_labels'][()] if 'train_labels' in data_dict['all'] else None
+                        # 旧式路径尝试
+                        train_features = data_dict['all']['train'] if isinstance(data_dict['all']['train'], np.ndarray) else None
+                        train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
                     
-                    # 处理验证集
-                    if 'val' in data_dict['all']:
-                        if isinstance(data_dict['all']['val'], h5py.Group):
-                            val_features = data_dict['all']['val']['features'][()]
-                            val_labels = data_dict['all']['val']['labels'][()] if 'labels' in data_dict['all']['val'] else None
-                        else:
-                            val_features = data_dict['all']['val'][()]
-                            val_labels = data_dict['all']['val_labels'][()] if 'val_labels' in data_dict['all'] else None
+                    # 同样处理验证集和测试集
+                    if 'val' in data_dict['all'] and isinstance(data_dict['all']['val'], dict) and 'features' in data_dict['all']['val']:
+                        val_features = data_dict['all']['val']['features']
+                        val_labels = data_dict['all']['val']['labels'] if 'labels' in data_dict['all']['val'] else None
                     else:
-                        val_features = None
-                        val_labels = None
+                        val_features = data_dict['all']['val'] if 'val' in data_dict['all'] and isinstance(data_dict['all']['val'], np.ndarray) else None
+                        val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
                     
-                    # 处理测试集
-                    if 'test' in data_dict['all']:
-                        if isinstance(data_dict['all']['test'], h5py.Group):
-                            test_features = data_dict['all']['test']['features'][()]
-                            test_labels = data_dict['all']['test']['labels'][()] if 'labels' in data_dict['all']['test'] else None
-                        else:
-                            test_features = data_dict['all']['test'][()]
-                            test_labels = data_dict['all']['test_labels'][()] if 'test_labels' in data_dict['all'] else None
+                    if 'test' in data_dict['all'] and isinstance(data_dict['all']['test'], dict) and 'features' in data_dict['all']['test']:
+                        test_features = data_dict['all']['test']['features']
+                        test_labels = data_dict['all']['test']['labels'] if 'labels' in data_dict['all']['test'] else None
                     else:
-                        test_features = None
-                        test_labels = None          
+                        test_features = data_dict['all']['test'] if 'test' in data_dict['all'] and isinstance(data_dict['all']['test'], np.ndarray) else None
+                        test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
+                        
                 else:
                     logger.error("在特征选择结果中找不到'all'组特征")
                     return
