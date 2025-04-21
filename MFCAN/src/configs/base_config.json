@@ -100,7 +100,7 @@
     
     "baseline_model": {
         "model_type": "deep_mlp",
-        "hidden_dims": [2048, 1536, 1024, 512, 256, 128],
+        "hidden_dims": [1024, 512, 256, 128],
         "dropout_rate": 0.4,
         "use_residual": true,
         "use_self_attention": true,
