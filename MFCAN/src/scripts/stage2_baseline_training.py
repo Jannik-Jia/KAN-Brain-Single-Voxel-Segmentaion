@@ -393,14 +393,39 @@ def main():
             attn_layers = model_config.get('attn_layers', [1, 3])
             
             input_dim = train_features.shape[1]
-            num_classes = len(np.unique(train_labels))
-            logger.info(f"数据中的唯一类别数: {num_classes}")
+            
+            
+            # 检查实际标签范围
+            unique_labels = np.unique(train_labels)
+            min_label = np.min(unique_labels)
+            max_label = np.max(unique_labels)
+            num_classes = len(unique_labels)
 
-            # 确保类别数量与模型输出匹配
+            # 如果标签是从1开始的，手动设置为从0开始
+            label_offset = 0
+            if min_label == 1 and max_label == 102:
+                logger.info("检测到标签从1开始，将进行0-101重新映射")
+                train_labels = train_labels - 1
+                val_labels = val_labels - 1
+                test_labels = test_labels - 1
+                label_offset = 1
+                # 重新计算唯一值和范围
+                unique_labels = np.unique(train_labels)
+                min_label = np.min(unique_labels)
+                max_label = np.max(unique_labels)
+                num_classes = len(unique_labels)
+
+            logger.info(f"调整后标签范围: {min_label} - {max_label}")
+            logger.info(f"实际类别数量: {num_classes}")
+            logger.info(f"使用的类别数量: {max_label + 1}")  # 因为标签是从0开始的
+
+            # 确保模型输出维度正确
+            model_num_classes = max_label + 1  # 使用最大标签值+1作为类别数
+
             model = DeepMLP(
                 input_dim=input_dim,
                 hidden_dims=hidden_dims,
-                num_classes=num_classes,  # 使用实际的类别数量
+                num_classes=model_num_classes,  # 使用正确的类别数
                 use_residual=False,
                 use_self_attention=use_self_attention,
                 use_feature_interaction=use_feature_interaction,
@@ -408,6 +433,7 @@ def main():
                 num_attn_heads=num_attn_heads,
                 attn_layers=attn_layers
             )
+
             
             logger.info(f"创建DeepMLP模型 - 输入维度: {input_dim}, 隐藏层: {hidden_dims}, 使用残差: {use_residual}, 使用自注意力: {use_self_attention}")
         
@@ -483,12 +509,19 @@ def main():
             print(f"标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
 
             # 预处理标签
+            # 无需再次截断标签，因为我们已经正确映射了
+            logger.info(f"最终标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
+            logger.info(f"模型输出类别数: {model_num_classes}")
+
+            # 只检查一下是否有问题，而不进行截断
             if np.max(train_labels) >= model_num_classes:
-                print(f"警告：标签值超出模型类别数，将进行截断")
+                logger.warning(f"警告：仍有 {np.sum(train_labels >= model_num_classes)} 个标签值超出模型类别数")
+                # 在这种情况下可能需要进行截断，但这应该是极少数情况
                 train_labels = np.clip(train_labels, 0, model_num_classes - 1)
                 val_labels = np.clip(val_labels, 0, model_num_classes - 1)
                 test_labels = np.clip(test_labels, 0, model_num_classes - 1)
-                print(f"处理后标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
+                logger.info(f"截断后标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
+
 
             # 创建张量和数据集
             train_tensor_x = torch.tensor(train_features, dtype=torch.float32)
@@ -516,7 +549,6 @@ def main():
 
             # 使用普通Trainer
             trainer = BaselineTrainer(model, temp_config_path, device)
-            
             # 确保损失函数已初始化
             if trainer.criterion is None:
                 trainer.criterion = nn.CrossEntropyLoss()
@@ -575,23 +607,39 @@ def main():
             
             # 准备数据加载器
 
-            # 添加以下代码来检查标签分布
+            # 详细检查标签范围
+            logger.info("标签详细检查：")
+            logger.info(f"标签最小值：{np.min(train_labels)}")
+            logger.info(f"标签最大值：{np.max(train_labels)}")
+            logger.info(f"标签唯一值的数量：{len(np.unique(train_labels))}")
+
+            # 检查是否存在大于等于101的标签
+            if np.max(train_labels) >= 101:
+                high_labels = np.sum(train_labels >= 101)
+                logger.info(f"存在 {high_labels} 个值>=101的标签")
+                # 查看这些高值标签的具体分布
+                for label in range(101, int(np.max(train_labels))+1):
+                    count = np.sum(train_labels == label)
+                    if count > 0:
+                        logger.info(f"  标签值 {label}: {count} 个样本")
+
+            # 添加标签分布统计
             label_counts = {}
             for i in range(int(np.max(train_labels)) + 1):
                 count = np.sum(train_labels == i)
                 if count > 0:
                     label_counts[i] = int(count)
 
-            print("标签分布:")
+            logger.info("标签分布概要:")
             for label, count in sorted(label_counts.items()):
-                print(f"  类别 {label}: {count} 样本")
+                    logger.info(f"  类别 {label}: {count} 样本")
 
             # 检查是否存在稀有类别（样本数较少的类别）
             rare_labels = {label: count for label, count in label_counts.items() if count < 100}
             if rare_labels:
-                print("警告: 存在稀有类别（样本数<100）:")
+                logger.info("警告: 存在稀有类别（样本数<100）:")
                 for label, count in sorted(rare_labels.items()):
-                    print(f"  类别 {label}: 仅有 {count} 样本")
+                    logger.info(f"  类别 {label}: 仅有 {count} 样本")
 
             data_loaders, feature_dims = evaluator._prepare_data_loaders(group_data_dict)
             
