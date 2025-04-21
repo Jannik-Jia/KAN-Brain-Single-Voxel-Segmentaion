@@ -465,7 +465,7 @@ def main():
                 f"模型第一层期望输入维度为 {first_layer.in_features}，"
                 f"但数据特征维度为 {train_features.shape[1]}"
             )
-            logging.info(f"模型第一层输入维度: {first_layer.in_features}，实际输入维度: {train_features.shape[1]} → ✅匹配")
+            logger.info(f"模型第一层输入维度: {first_layer.in_features}，实际输入维度: {train_features.shape[1]} → ✅匹配")
 
 
             
