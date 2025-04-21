@@ -19,4 +19,4 @@ python scripts/stage2_feature_engineering.py --config configs/base_config.json
 
 # 阶段二：模型训练
 echo "Starting stage2_baseline_training.py..."
-python scripts/stage2_baseline_training.py --config configs/baseline_config.json
+./run_stage2_baseline_training.sh --model_type deep_mlp --feature_type selected --feature_selection rf
