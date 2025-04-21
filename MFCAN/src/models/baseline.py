@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from utils.logging_utils import Logger
 
 class BaselineMLP(nn.Module):
     """简单的多层感知机基线模型"""
@@ -280,19 +281,22 @@ class DeepMLP(nn.Module):
         previous_output = None
         layer_outputs = {}
         
-        for i, layer in enumerate(self.layers):
-            if isinstance(layer, ResidualConnection):
-                # 为残差连接传递前一个线性层的输出
-                if previous_output is not None:
-                    x = layer(x, previous_output)
-                else:
-                    x = layer(x)
+for i, layer in enumerate(self.layers):
+        if isinstance(layer, ResidualConnection):
+            # 为残差连接传递前一个线性层的输出
+            if previous_output is not None:
+                # 确保添加日志来调试维度问题
+                if i > 1:  # 避免在第一层打印
+                    logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
+                x = layer(x, previous_output)
             else:
                 x = layer(x)
-                # 如果是线性层，记录其输出用于残差连接
-                if isinstance(layer, nn.Linear):
-                    previous_output = x
-                    
+        else:
+            x = layer(x)
+            # 如果是线性层，记录其输出用于残差连接
+            if isinstance(layer, nn.Linear):
+                previous_output = x
+
         logits = self.classifier(x)
         return logits
 
@@ -313,10 +317,8 @@ class ResidualConnection(nn.Module):
         self.needs_projection = input_dim is not None and input_dim != dim
         
         if self.needs_projection:
-            # 修改这一行，确保投影矩阵维度正确
-            # 应该是 input_dim -> dim，而不是 dim -> input_dim
             self.projection = nn.Linear(input_dim, dim)
-    
+
     def forward(self, x, residual=None):
         """
         前向传播
