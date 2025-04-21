@@ -317,6 +317,18 @@ class BaselineTrainer:
         for inputs, targets in pbar:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
+            # 添加标签验证和处理
+            num_classes = self.model.classifier.out_features
+            # 检查标签是否在有效范围内
+            if torch.max(targets) >= num_classes:
+                print(f"警告: 标签值 {torch.max(targets).item()} 超出类别数 {num_classes}")
+                # 截断超出范围的标签
+                targets = torch.clamp(targets, 0, num_classes - 1)
+            if torch.min(targets) < 0:
+                print(f"警告: 存在负标签值 {torch.min(targets).item()}")
+                # 将负值标签设为0
+                targets = torch.clamp(targets, 0, None)
+            
             # 清除梯度
             self.optimizer.zero_grad()
             

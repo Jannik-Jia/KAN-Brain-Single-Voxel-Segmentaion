@@ -394,12 +394,14 @@ def main():
             
             input_dim = train_features.shape[1]
             num_classes = len(np.unique(train_labels))
-            
+            logger.info(f"数据中的唯一类别数: {num_classes}")
+
+            # 确保类别数量与模型输出匹配
             model = DeepMLP(
                 input_dim=input_dim,
                 hidden_dims=hidden_dims,
-                num_classes=num_classes,
-                use_residual=False, # 暂时禁用残差连接
+                num_classes=num_classes,  # 使用实际的类别数量
+                use_residual=False,
                 use_self_attention=use_self_attention,
                 use_feature_interaction=use_feature_interaction,
                 dropout_rates=[dropout_rate] * len(hidden_dims),
@@ -474,27 +476,50 @@ def main():
             
             # 准备数据
             import torch.utils.data as data
+            num_classes = len(np.unique(train_labels))
+            model_num_classes = model.classifier.out_features
+            print(f"数据中的唯一类别数: {num_classes}")
+            print(f"模型输出的类别数: {model_num_classes}")
+            print(f"标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
+
+            # 预处理标签
+            if np.max(train_labels) >= model_num_classes:
+                print(f"警告：标签值超出模型类别数，将进行截断")
+                train_labels = np.clip(train_labels, 0, model_num_classes - 1)
+                val_labels = np.clip(val_labels, 0, model_num_classes - 1)
+                test_labels = np.clip(test_labels, 0, model_num_classes - 1)
+                print(f"处理后标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
+
+            # 创建张量和数据集
             train_tensor_x = torch.tensor(train_features, dtype=torch.float32)
             train_tensor_y = torch.tensor(train_labels, dtype=torch.long)
             val_tensor_x = torch.tensor(val_features, dtype=torch.float32)
             val_tensor_y = torch.tensor(val_labels, dtype=torch.long)
             test_tensor_x = torch.tensor(test_features, dtype=torch.float32)
             test_tensor_y = torch.tensor(test_labels, dtype=torch.long)
-            
+
             train_dataset = data.TensorDataset(train_tensor_x, train_tensor_y)
             val_dataset = data.TensorDataset(val_tensor_x, val_tensor_y)
             test_dataset = data.TensorDataset(test_tensor_x, test_tensor_y)
-            
+
+            # 创建数据加载器
             batch_size = model_config.get('batch_size', 128)
             train_loader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
             test_loader = data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-            
+
             data_loaders = {
                 'train': train_loader,
                 'val': val_loader,
                 'test': test_loader
             }
+
+            # 使用普通Trainer
+            trainer = BaselineTrainer(model, temp_config_path, device)
+            
+            # 确保损失函数已初始化
+            if trainer.criterion is None:
+                trainer.criterion = nn.CrossEntropyLoss()
             
             # 训练模型
             history = trainer.train(data_loaders)
@@ -549,6 +574,25 @@ def main():
             )
             
             # 准备数据加载器
+
+            # 添加以下代码来检查标签分布
+            label_counts = {}
+            for i in range(int(np.max(train_labels)) + 1):
+                count = np.sum(train_labels == i)
+                if count > 0:
+                    label_counts[i] = int(count)
+
+            print("标签分布:")
+            for label, count in sorted(label_counts.items()):
+                print(f"  类别 {label}: {count} 样本")
+
+            # 检查是否存在稀有类别（样本数较少的类别）
+            rare_labels = {label: count for label, count in label_counts.items() if count < 100}
+            if rare_labels:
+                print("警告: 存在稀有类别（样本数<100）:")
+                for label, count in sorted(rare_labels.items()):
+                    print(f"  类别 {label}: 仅有 {count} 样本")
+
             data_loaders, feature_dims = evaluator._prepare_data_loaders(group_data_dict)
             
             # 训练和评估
