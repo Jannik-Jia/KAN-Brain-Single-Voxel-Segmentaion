@@ -280,27 +280,30 @@ class DeepMLP(nn.Module):
 
     def forward(self, x):
         """前向传播"""
-        previous_output = None
-        previous_dim = None  # 添加这个变量来跟踪前一个线性层的维度
+        features = []  # 存储每一层的特征
         
         for i, layer in enumerate(self.layers):
             if isinstance(layer, ResidualConnection):
-                # 为残差连接提供正确的previous_output
-                if previous_output is not None:
-                    # 打印更详细的调试信息
-                    self.logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}, previous_dim={previous_dim}")
-                    x = layer(x, previous_output)
+                # 对于残差连接，我们需要确保维度匹配
+                if len(features) > 0:
+                    # 获取前一个特征，这个特征应该与当前层有相同的批量大小
+                    prev_feature = features[-1]
+                    
+                    # 打印详细信息
+                    self.logger.info(f"Layer {i} (Residual): x={x.shape}, prev_feature={prev_feature.shape}")
+                    
+                    # 应用残差连接
+                    x = layer(x, prev_feature)
                 else:
                     x = layer(x)
             else:
-                # 保存层处理前的形状
+                # 对于其他所有层类型
                 x = layer(x)
                 
-                # 如果是线性层，记录其输出用于残差连接
+                # 如果是线性层，记录其输出
                 if isinstance(layer, nn.Linear):
-                    previous_output = x
-                    previous_dim = x.shape[1]  # 保存该层的输出维度
-                    self.logger.info(f"Updated previous_output at layer {i}, shape={previous_output.shape}")
+                    features.append(x)
+                    self.logger.info(f"Stored feature from layer {i}: {x.shape}")
         
         logits = self.classifier(x)
         return logits
@@ -331,16 +334,25 @@ class ResidualConnection(nn.Module):
             x: 当前特征
             residual: 残差特征，默认为None（使用x作为残差）
         """
+        # 获取logger
+        logger = logging.getLogger("ResidualConnection")
+        
         if residual is None:
             residual = x
         
-        # 添加调试日志
-        print(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
+        logger.info(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
         if self.needs_projection:
-            print(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
-            residual = self.projection(residual)
-            print(f"After projection: residual shape={residual.shape}")
-            
+            logger.info(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
+            try:
+                residual = self.projection(residual)
+                logger.info(f"After projection: residual shape={residual.shape}")
+            except Exception as e:
+                logger.error(f"Error during projection: {e}")
+                # 添加一些额外诊断信息
+                logger.error(f"Detailed projection info - weight: {self.projection.weight.shape}, input: {residual.shape}")
+                # 重新抛出异常让外层捕获
+                raise
+                
         return x + residual
 
 
