@@ -78,7 +78,7 @@
         },
         "cpu_fallback": true,
         "gpu_acceleration": true
-    }
+    },
 
     
     "model_training": {
