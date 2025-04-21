@@ -235,13 +235,16 @@ class DeepMLP(nn.Module):
             
             # 如果使用残差连接，并且维度匹配或可以投影
             if use_residual and i > 0:
-                if hidden_dims[i-1] == dim:
-                    # 直接添加残差连接
-                    self.layers.append(ResidualConnection(dim))
-                    
+                # 修改这部分逻辑
+                prev_dim = hidden_dims[i-1]  # 前一层的维度
+                current_dim = dim  # 当前层的维度
+                
+                if prev_dim == current_dim:
+                    # 维度相同，直接使用恒等残差连接
+                    self.layers.append(ResidualConnection(current_dim))
                 else:
-                    # 使用1x1投影进行维度匹配
-                    self.layers.append(ResidualConnection(dim, hidden_dims[i-1]))
+                    # 维度不同，需要投影
+                    self.layers.append(ResidualConnection(current_dim, prev_dim))
                     
 
             
@@ -271,19 +274,25 @@ class DeepMLP(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-    
+ 
     def forward(self, x):
         """前向传播"""
         previous_output = None
+        layer_outputs = {}
+        
         for i, layer in enumerate(self.layers):
             if isinstance(layer, ResidualConnection):
-                # 检查是否提供了前一层的输出作为残差
-                x = layer(x, previous_output)
+                # 为残差连接传递前一个线性层的输出
+                if previous_output is not None:
+                    x = layer(x, previous_output)
+                else:
+                    x = layer(x)
             else:
-                # 存储非残差层的输出
-                previous_output = x
                 x = layer(x)
-        
+                # 如果是线性层，记录其输出用于残差连接
+                if isinstance(layer, nn.Linear):
+                    previous_output = x
+                    
         logits = self.classifier(x)
         return logits
 
