@@ -420,7 +420,12 @@ def main():
             logger.info(f"使用的类别数量: {max_label + 1}")  # 因为标签是从0开始的
 
             # 确保模型输出维度正确
-            model_num_classes = max_label + 1  # 使用最大标签值+1作为类别数
+            model_num_classes = int(max_label + 1) # 使用最大标签值+1作为类别数
+
+            logging.info(f"After setting - max_label: {max_label}, type: {type(max_label)}")
+            logging.info(f"After setting - model_num_classes: {model_num_classes}, type: {type(model_num_classes)}")
+
+            logging.info(f"model_num_classes type: {type(model_num_classes)}, value: {model_num_classes}")
 
             model = DeepMLP(
                 input_dim=input_dim,
