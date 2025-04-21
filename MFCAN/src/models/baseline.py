@@ -270,19 +270,13 @@ class DeepMLP(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
     
-    def forward(self, x, residual=None):
-        if residual is None:
-            residual = x
-            
-        # 添加调试信息
-        print(f"ResidualConnection: x.shape={x.shape}, residual.shape={residual.shape}")
+    def forward(self, x):
+        """前向传播"""
+        for layer in self.layers:
+            x = layer(x)
         
-        if self.needs_projection:
-            print(f"Before projection: residual.shape={residual.shape}")
-            residual = self.projection(residual)
-            print(f"After projection: residual.shape={residual.shape}")
-        
-        return x + residual
+        logits = self.classifier(x)
+        return logits
 
 
 class ResidualConnection(nn.Module):
