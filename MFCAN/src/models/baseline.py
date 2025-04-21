@@ -200,7 +200,9 @@ class DeepMLP(nn.Module):
             attn_layers: 使用注意力的层索引列表
         """
         super(DeepMLP, self).__init__()
-        
+        log_manager = Logger("DeepMLP", log_dir="logs/models")
+        self.logger = log_manager.get_logger()
+
         self.use_residual = use_residual
         self.use_self_attention = use_self_attention
         self.use_feature_interaction = use_feature_interaction
@@ -287,7 +289,7 @@ class DeepMLP(nn.Module):
                 if previous_output is not None:
                     # 确保添加日志来调试维度问题
                     if i > 1:  # 避免在第一层打印
-                        logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
+                        self.logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
                     x = layer(x, previous_output)
                 else:
                     x = layer(x)
