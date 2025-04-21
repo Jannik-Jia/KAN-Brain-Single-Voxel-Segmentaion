@@ -72,7 +72,8 @@ echo "Log file: $LOG_FILE"
 # 如果未指定特征文件路径，尝试自动查找最新的特征工程结果
 if [ -z "$SELECTED_FEATURES" ]; then
   # 根据特征选择方法设置子目录
-  FEATURE_PATH_PATTERN="results/feature_engineering/*/${FEATURE_SELECTION}*feature_selection*.h5"
+  # FEATURE_PATH_PATTERN="results/feature_engineering/*/${FEATURE_SELECTION}*feature_selection*.h5"
+  FEATURE_PATH_PATTERN="results/feature_engineering/*/*selected_features*.h5"
   SELECTED_FEATURES=$(ls -td ${FEATURE_PATH_PATTERN} 2>/dev/null | head -1)
   
   if [ ! -z "$SELECTED_FEATURES" ]; then
