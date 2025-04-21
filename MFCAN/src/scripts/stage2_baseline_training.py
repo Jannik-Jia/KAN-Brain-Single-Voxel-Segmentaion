@@ -451,7 +451,7 @@ def main():
                 input_dim=input_dim,
                 hidden_dims=hidden_dims,
                 num_classes=model_num_classes,  # 使用正确的类别数
-                use_residual=False,
+                use_residual=use_residual,
                 use_self_attention=use_self_attention,
                 use_feature_interaction=use_feature_interaction,
                 dropout_rates=[dropout_rate] * len(hidden_dims),
