@@ -321,10 +321,15 @@ class ResidualConnection(nn.Module):
         """
         super(ResidualConnection, self).__init__()
         
+        # 初始化logger
+        log_manager = Logger("ResidualConnection", log_dir="logs/models")
+        self.logger = log_manager.get_logger()
+        
         self.needs_projection = input_dim is not None and input_dim != dim
         
         if self.needs_projection:
             self.projection = nn.Linear(input_dim, dim)
+            self.logger.info(f"Created projection from {input_dim} to {dim}")
 
     def forward(self, x, residual=None):
         """
@@ -334,25 +339,20 @@ class ResidualConnection(nn.Module):
             x: 当前特征
             residual: 残差特征，默认为None（使用x作为残差）
         """
-        # 获取logger
-        logger = logging.getLogger("ResidualConnection")
-        
         if residual is None:
             residual = x
         
-        logger.info(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
+        self.logger.info(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
         if self.needs_projection:
-            logger.info(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
+            self.logger.info(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
             try:
                 residual = self.projection(residual)
-                logger.info(f"After projection: residual shape={residual.shape}")
+                self.logger.info(f"After projection: residual shape={residual.shape}")
             except Exception as e:
-                logger.error(f"Error during projection: {e}")
-                # 添加一些额外诊断信息
-                logger.error(f"Detailed projection info - weight: {self.projection.weight.shape}, input: {residual.shape}")
-                # 重新抛出异常让外层捕获
+                self.logger.error(f"Error during projection: {e}")
+                self.logger.error(f"Detailed projection info - weight: {self.projection.weight.shape}, input: {residual.shape}")
                 raise
-                
+            
         return x + residual
 
 
