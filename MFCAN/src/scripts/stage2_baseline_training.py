@@ -220,39 +220,37 @@ def main():
             else:
                 # 默认使用移除冗余后的'all'组特征
                 if 'all' in data_dict:
-                    # 特征和标签的提取更加灵活
-                    if 'train' in data_dict['all']:
-                        if isinstance(data_dict['all']['train'], dict) or isinstance(data_dict['all']['train'], h5py.Group):
-                            # 新结构：标签在train子组内
-                            train_features = data_dict['all']['train']['features'] if 'features' in data_dict['all']['train'] else data_dict['all']['train']
-                            train_labels = data_dict['all']['train']['labels'] if 'labels' in data_dict['all']['train'] else None
-                        else:
-                            # 旧结构：train是特征数组
-                            train_features = data_dict['all']['train']
-                            train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
+                    # 处理训练集
+                    if isinstance(data_dict['all']['train'], h5py.Group):
+                        train_features = data_dict['all']['train']['features'][()]
+                        train_labels = data_dict['all']['train']['labels'][()] if 'labels' in data_dict['all']['train'] else None
+                    else:
+                        train_features = data_dict['all']['train'][()]
+                        train_labels = data_dict['all']['train_labels'][()] if 'train_labels' in data_dict['all'] else None
                     
-                    # 验证集和测试集采用同样的逻辑
+                    # 处理验证集
                     if 'val' in data_dict['all']:
-                        if isinstance(data_dict['all']['val'], dict) or isinstance(data_dict['all']['val'], h5py.Group):
-                            val_features = data_dict['all']['val']['features'] if 'features' in data_dict['all']['val'] else data_dict['all']['val']
-                            val_labels = data_dict['all']['val']['labels'] if 'labels' in data_dict['all']['val'] else None
+                        if isinstance(data_dict['all']['val'], h5py.Group):
+                            val_features = data_dict['all']['val']['features'][()]
+                            val_labels = data_dict['all']['val']['labels'][()] if 'labels' in data_dict['all']['val'] else None
                         else:
-                            val_features = data_dict['all']['val']
-                            val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
+                            val_features = data_dict['all']['val'][()]
+                            val_labels = data_dict['all']['val_labels'][()] if 'val_labels' in data_dict['all'] else None
                     else:
                         val_features = None
                         val_labels = None
                     
+                    # 处理测试集
                     if 'test' in data_dict['all']:
-                        if isinstance(data_dict['all']['test'], dict) or isinstance(data_dict['all']['test'], h5py.Group):
-                            test_features = data_dict['all']['test']['features'] if 'features' in data_dict['all']['test'] else data_dict['all']['test']
-                            test_labels = data_dict['all']['test']['labels'] if 'labels' in data_dict['all']['test'] else None
+                        if isinstance(data_dict['all']['test'], h5py.Group):
+                            test_features = data_dict['all']['test']['features'][()]
+                            test_labels = data_dict['all']['test']['labels'][()] if 'labels' in data_dict['all']['test'] else None
                         else:
-                            test_features = data_dict['all']['test']
-                            test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
+                            test_features = data_dict['all']['test'][()]
+                            test_labels = data_dict['all']['test_labels'][()] if 'test_labels' in data_dict['all'] else None
                     else:
                         test_features = None
-                        test_labels = None             
+                        test_labels = None          
                 else:
                     logger.error("在特征选择结果中找不到'all'组特征")
                     return
