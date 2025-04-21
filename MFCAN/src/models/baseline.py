@@ -241,6 +241,7 @@ class DeepMLP(nn.Module):
                 else:
                     # 使用1x1投影进行维度匹配
                     self.layers.append(ResidualConnection(dim, hidden_dims[i-1]))
+
             
             # 如果当前层需要添加注意力
             if use_self_attention and i in attn_layers:
@@ -269,13 +270,19 @@ class DeepMLP(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
     
-    def forward(self, x):
-        """前向传播"""
-        for layer in self.layers:
-            x = layer(x)
+    def forward(self, x, residual=None):
+        if residual is None:
+            residual = x
+            
+        # 添加调试信息
+        print(f"ResidualConnection: x.shape={x.shape}, residual.shape={residual.shape}")
         
-        logits = self.classifier(x)
-        return logits
+        if self.needs_projection:
+            print(f"Before projection: residual.shape={residual.shape}")
+            residual = self.projection(residual)
+            print(f"After projection: residual.shape={residual.shape}")
+        
+        return x + residual
 
 
 class ResidualConnection(nn.Module):
@@ -294,6 +301,8 @@ class ResidualConnection(nn.Module):
         self.needs_projection = input_dim is not None and input_dim != dim
         
         if self.needs_projection:
+            # 修改这一行，确保投影矩阵维度正确
+            # 应该是 input_dim -> dim，而不是 dim -> input_dim
             self.projection = nn.Linear(input_dim, dim)
     
     def forward(self, x, residual=None):
