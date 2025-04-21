@@ -277,29 +277,30 @@ class DeepMLP(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
- 
+
     def forward(self, x):
         """前向传播"""
         previous_output = None
-        layer_outputs = {}
+        prev_dims = {}  # 跟踪每层的维度
         
         for i, layer in enumerate(self.layers):
             if isinstance(layer, ResidualConnection):
                 # 为残差连接传递前一个线性层的输出
                 if previous_output is not None:
-                    # 确保添加日志来调试维度问题
                     if i > 1:  # 避免在第一层打印
                         self.logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
                     x = layer(x, previous_output)
                 else:
                     x = layer(x)
             else:
+                prev_shape = x.shape  # 保存层处理前的形状
                 x = layer(x)
+                
                 # 如果是线性层，记录其输出用于残差连接
                 if isinstance(layer, nn.Linear):
                     previous_output = x
+                    prev_dims[i] = x.shape[1]  # 保存该层的输出维度
         
-        # 注意这里的缩进修正 - 在循环外调用分类器
         logits = self.classifier(x)
         return logits
 
