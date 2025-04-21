@@ -132,14 +132,17 @@ def main():
     if args.feature_type == 'selected' and args.selected_features:
         features_path = args.selected_features
         logger.info(f"使用特征选择结果: {features_path}")
+        data_dict = load_h5_data(features_path)
     elif args.feature_type == 'pca' and args.transformed_features:
         features_path = args.transformed_features
         logger.info(f"使用特征变换结果: {features_path}")
+        data_dict = load_h5_data(features_path)
     elif args.feature_type == 'combined':
         # 如果使用组合特征，同时加载选择和变换的特征
         if args.selected_features and args.transformed_features:
             selected_data = load_h5_data(args.selected_features)
             transformed_data = load_h5_data(args.transformed_features)
+            data_dict = selected_data
             logger.info(f"使用组合特征 (特征选择+PCA变换)")
         else:
             logger.error("组合特征模式需要同时提供特征选择和特征变换结果路径")
@@ -152,6 +155,8 @@ def main():
             logger.error(f"找不到预处理数据文件: {features_path}")
             return
         logger.info(f"使用预处理后的原始特征: {features_path}")
+        data_dict = load_h5_data(features_path) 
+
     
     # 加载特征数据
     try:
