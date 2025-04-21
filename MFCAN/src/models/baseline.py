@@ -281,24 +281,24 @@ class DeepMLP(nn.Module):
         previous_output = None
         layer_outputs = {}
         
-for i, layer in enumerate(self.layers):
-        if isinstance(layer, ResidualConnection):
-            # 为残差连接传递前一个线性层的输出
-            if previous_output is not None:
-                # 确保添加日志来调试维度问题
-                if i > 1:  # 避免在第一层打印
-                    logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
-                x = layer(x, previous_output)
-            else:
-                x = layer(x)
-        else:
-            x = layer(x)
-            # 如果是线性层，记录其输出用于残差连接
-            if isinstance(layer, nn.Linear):
-                previous_output = x
+        for i, layer in enumerate(self.layers):
+                if isinstance(layer, ResidualConnection):
+                    # 为残差连接传递前一个线性层的输出
+                    if previous_output is not None:
+                        # 确保添加日志来调试维度问题
+                        if i > 1:  # 避免在第一层打印
+                            logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
+                        x = layer(x, previous_output)
+                    else:
+                        x = layer(x)
+                else:
+                    x = layer(x)
+                    # 如果是线性层，记录其输出用于残差连接
+                    if isinstance(layer, nn.Linear):
+                        previous_output = x
 
-        logits = self.classifier(x)
-        return logits
+                logits = self.classifier(x)
+                return logits
 
 
 class ResidualConnection(nn.Module):
