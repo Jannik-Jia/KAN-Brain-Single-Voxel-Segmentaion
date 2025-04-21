@@ -155,234 +155,133 @@ def main():
     
     # 加载特征数据
     try:
-        if args.feature_type != 'combined':
-            data_dict = load_h5_data(features_path)
-            logger.info("特征数据加载成功")
+        # 更灵活的数据提取逻辑
+        train_features = None
+        train_labels = None
+        val_features = None
+        val_labels = None
+        test_features = None
+        test_labels = None
         
-        # 提取训练、验证和测试数据
-        if args.feature_type == 'original':
-            # 从预处理数据中提取原始特征
-            train_features = data_dict.get('train', {}).get('features')
-            train_labels = data_dict.get('train', {}).get('labels')
-            val_features = data_dict.get('val', {}).get('features')
-            val_labels = data_dict.get('val', {}).get('labels')
-            test_features = data_dict.get('test', {}).get('features')
-            test_labels = data_dict.get('test', {}).get('labels')
-            
-            # 提取特征组数据 (用于group_mlp模型)
-            group_features = {}
+        # 1. 首先尝试从顶级结构中提取
+        if 'train' in data_dict and 'features' in data_dict['train']:
+            train_features = data_dict['train']['features']
+            train_labels = data_dict['train']['labels'] if 'labels' in data_dict['train'] else None
+            val_features = data_dict['val']['features'] if 'val' in data_dict and 'features' in data_dict['val'] else None
+            val_labels = data_dict['val']['labels'] if 'val' in data_dict and 'labels' in data_dict['val'] else None
+            test_features = data_dict['test']['features'] if 'test' in data_dict and 'features' in data_dict['test'] else None
+            test_labels = data_dict['test']['labels'] if 'test' in data_dict and 'labels' in data_dict['test'] else None
+            logger.info("从顶级结构中提取数据")
+        
+        # 2. 如果上面失败，尝试从 'all' 组提取
+        elif 'all' in data_dict:
+            # 检查嵌套结构
+            if 'train' in data_dict['all']:
+                if isinstance(data_dict['all']['train'], dict) and 'features' in data_dict['all']['train']:
+                    train_features = data_dict['all']['train']['features']
+                    train_labels = data_dict['all']['train']['labels'] if 'labels' in data_dict['all']['train'] else None
+                    val_features = data_dict['all']['val']['features'] if 'val' in data_dict['all'] and 'features' in data_dict['all']['val'] else None
+                    val_labels = data_dict['all']['val']['labels'] if 'val' in data_dict['all'] and 'labels' in data_dict['all']['val'] else None
+                    test_features = data_dict['all']['test']['features'] if 'test' in data_dict['all'] and 'features' in data_dict['all']['test'] else None
+                    test_labels = data_dict['all']['test']['labels'] if 'test' in data_dict['all'] and 'labels' in data_dict['all']['test'] else None
+                    logger.info("从嵌套的 'all' 组结构中提取数据")
+                else:  # 可能是数组而不是字典
+                    train_features = data_dict['all']['train']
+                    train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
+                    val_features = data_dict['all']['val'] if 'val' in data_dict['all'] else None
+                    val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
+                    test_features = data_dict['all']['test'] if 'test' in data_dict['all'] else None
+                    test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
+                    logger.info("从 'all' 组的单一结构中提取数据")
+        
+        # 3. 如果还是失败，尝试其他可能的结构
+        elif args.feature_type == 'selected' and args.feature_selection:
+            # 尝试找到包含选定特征选择方法的键
             for key in data_dict.keys():
-                if key.startswith('group_'):
-                    group_name = key.replace('group_', '')
-                    group_features[group_name] = {
-                        'train': data_dict[key]['train']['features'],
-                        'val': data_dict[key]['val']['features'],
-                        'test': data_dict[key]['test']['features']
-                    }
-            
-        elif args.feature_type == 'selected':
-            # 从特征选择结果中提取特征
-            
-            # 特征选择方法处理
-            if args.feature_selection:
-                # 查找基于特定方法的特征选择结果
-                feature_selection_key = None
-                for key in data_dict.keys():
-                    # 找到包含选定特征选择方法的键
-                    if args.feature_selection in key.lower():
-                        feature_selection_key = key
-                        break
-                
-                if not feature_selection_key:
-                    logger.warning(f"无法找到使用 {args.feature_selection} 特征选择方法的结果，尝试使用默认结果")
-                    feature_selection_key = 'all'
-                
-                logger.info(f"使用 {feature_selection_key} 特征选择结果")
-                
-                # 特征子集处理
-                if args.feature_subset and feature_selection_key in data_dict:
-                    subset_found = False
-                    # 查找特定子集
-                    for subset_key in data_dict[feature_selection_key].keys():
-                        if args.feature_subset in subset_key:
-                            if 'train' in data_dict[feature_selection_key][subset_key]:
-                                train_features = data_dict[feature_selection_key][subset_key]['train']
-                                train_labels = data_dict[feature_selection_key][subset_key].get('train_labels')
-                                val_features = data_dict[feature_selection_key][subset_key].get('val')
-                                val_labels = data_dict[feature_selection_key][subset_key].get('val_labels')
-                                test_features = data_dict[feature_selection_key][subset_key].get('test')
-                                test_labels = data_dict[feature_selection_key][subset_key].get('test_labels')
-                                subset_found = True
-                                logger.info(f"使用 {subset_key} 特征子集")
-                                break
-                    
-                    if not subset_found:
-                        logger.warning(f"在 {feature_selection_key} 中找不到 {args.feature_subset} 特征子集，尝试使用默认数据")
-                        # 使用默认路径
-                        if 'train' in data_dict[feature_selection_key]:
-                            train_features = data_dict[feature_selection_key]['train']
-                            train_labels = data_dict[feature_selection_key].get('train_labels')
-                            val_features = data_dict[feature_selection_key].get('val')
-                            val_labels = data_dict[feature_selection_key].get('val_labels')
-                            test_features = data_dict[feature_selection_key].get('test')
-                            test_labels = data_dict[feature_selection_key].get('test_labels')
-                else:
-                    # 使用默认路径
-                    if feature_selection_key in data_dict and 'train' in data_dict[feature_selection_key]:
-                        train_features = data_dict[feature_selection_key]['train']
-                        train_labels = data_dict[feature_selection_key].get('train_labels')
-                        val_features = data_dict[feature_selection_key].get('val')
-                        val_labels = data_dict[feature_selection_key].get('val_labels')
-                        test_features = data_dict[feature_selection_key].get('test')
-                        test_labels = data_dict[feature_selection_key].get('test_labels')
-                    else:
-                        logger.error(f"在 {feature_selection_key} 中找不到训练数据")
-                        return
-            else:
-                # 默认使用移除冗余后的'all'组特征
-                if 'all' in data_dict:
-                    # 直接访问我们知道存在的路径
-                    if 'train' in data_dict['all'] and isinstance(data_dict['all']['train'], dict) and 'features' in data_dict['all']['train']:
-                        train_features = data_dict['all']['train']['features']
-                        train_labels = data_dict['all']['train']['labels'] if 'labels' in data_dict['all']['train'] else None
-                    else:
-                        # 旧式路径尝试
-                        train_features = data_dict['all']['train'] if isinstance(data_dict['all']['train'], np.ndarray) else None
-                        train_labels = data_dict['all']['train_labels'] if 'train_labels' in data_dict['all'] else None
-                    
-                    # 同样处理验证集和测试集
-                    if 'val' in data_dict['all'] and isinstance(data_dict['all']['val'], dict) and 'features' in data_dict['all']['val']:
-                        val_features = data_dict['all']['val']['features']
-                        val_labels = data_dict['all']['val']['labels'] if 'labels' in data_dict['all']['val'] else None
-                    else:
-                        val_features = data_dict['all']['val'] if 'val' in data_dict['all'] and isinstance(data_dict['all']['val'], np.ndarray) else None
-                        val_labels = data_dict['all']['val_labels'] if 'val_labels' in data_dict['all'] else None
-                    
-                    if 'test' in data_dict['all'] and isinstance(data_dict['all']['test'], dict) and 'features' in data_dict['all']['test']:
-                        test_features = data_dict['all']['test']['features']
-                        test_labels = data_dict['all']['test']['labels'] if 'labels' in data_dict['all']['test'] else None
-                    else:
-                        test_features = data_dict['all']['test'] if 'test' in data_dict['all'] and isinstance(data_dict['all']['test'], np.ndarray) else None
-                        test_labels = data_dict['all']['test_labels'] if 'test_labels' in data_dict['all'] else None
-                        
-                else:
-                    logger.error("在特征选择结果中找不到'all'组特征")
-                    return
-                
-            # 提取特征组数据 (用于group_mlp模型)
-            group_features = {}
-            for key in data_dict.keys():
-                if key != 'all' and key != feature_selection_key:
-                    # 检查是否包含训练数据
+                if args.feature_selection in key.lower():
                     if 'train' in data_dict[key]:
-                        group_features[key] = {
-                            'train': data_dict[key]['train'],
-                            'val': data_dict[key]['val'] if 'val' in data_dict[key] else None,
-                            'test': data_dict[key]['test'] if 'test' in data_dict[key] else None
-                        }
-                
-        elif args.feature_type == 'pca':
-            # 从特征变换结果中提取PCA特征
-            if 'pca' in data_dict:
-                train_features = data_dict['pca']['train']
-                train_labels = data_dict['pca']['train_labels'] if 'train_labels' in data_dict['pca'] else None
-                val_features = data_dict['pca']['val'] if 'val' in data_dict['pca'] else None
-                val_labels = data_dict['pca']['val_labels'] if 'val_labels' in data_dict['pca'] else None
-                test_features = data_dict['pca']['test'] if 'test' in data_dict['pca'] else None
-                test_labels = data_dict['pca']['test_labels'] if 'test_labels' in data_dict['pca'] else None
-                
-                # 提取特征组PCA数据 (用于group_mlp模型)
-                group_features = {}
-                for key in data_dict.keys():
-                    if key != 'pca' and 'pca' in data_dict[key]:
-                        group_features[key] = {
-                            'train': data_dict[key]['pca']['train'],
-                            'val': data_dict[key]['pca']['val'] if 'val' in data_dict[key]['pca'] else None,
-                            'test': data_dict[key]['pca']['test'] if 'test' in data_dict[key]['pca'] else None
-                        }
-            else:
-                logger.error("在特征变换结果中找不到PCA特征")
-                return
-                
-        elif args.feature_type == 'combined':
-            # 组合特征选择和PCA特征
-            
-            # 特征选择方法处理
-            if args.feature_selection:
-                feature_selection_key = None
-                for key in selected_data.keys():
-                    if args.feature_selection in key.lower():
-                        feature_selection_key = key
-                        break
-                
-                if not feature_selection_key:
-                    # 如果没有找到，再尝试其他可能名称
-                    for key in data_dict.keys():
-                        if args.feature_selection in key.lower():
-                            feature_selection_key = key
-                            break
-                
-                logger.info(f"使用 {feature_selection_key} 特征选择结果进行组合")
-                
-                # 提取特征选择结果
-                if feature_selection_key in selected_data:
-                    if args.feature_subset:
-                        subset_found = False
-                        for subset_key in selected_data[feature_selection_key].keys():
-                            if args.feature_subset in subset_key and 'train' in selected_data[feature_selection_key][subset_key]:
-                                train_features = selected_data[feature_selection_key][subset_key]['train']
-                                train_labels = selected_data[feature_selection_key][subset_key].get('train_labels')
-                                val_features = selected_data[feature_selection_key][subset_key].get('val')
-                                val_labels = selected_data[feature_selection_key][subset_key].get('val_labels')
-                                test_features = selected_data[feature_selection_key][subset_key].get('test')
-                                test_labels = selected_data[feature_selection_key][subset_key].get('test_labels')
-                                subset_found = True
-                                logger.info(f"使用 {subset_key} 特征子集进行组合")
-                                break
+                        if isinstance(data_dict[key]['train'], dict) and 'features' in data_dict[key]['train']:
+                            train_features = data_dict[key]['train']['features']
+                            train_labels = data_dict[key]['train']['labels'] if 'labels' in data_dict[key]['train'] else None
+                        else:
+                            train_features = data_dict[key]['train']
+                            train_labels = data_dict[key]['train_labels'] if 'train_labels' in data_dict[key] else None
                         
-                        if not subset_found:
-                            logger.warning(f"在 {feature_selection_key} 中找不到 {args.feature_subset} 特征子集，使用默认数据")
-                            if 'train' in selected_data[feature_selection_key]:
-                                train_features = selected_data[feature_selection_key]['train']
-                                train_labels = selected_data[feature_selection_key].get('train_labels')
-                                val_features = selected_data[feature_selection_key].get('val')
-                                val_labels = selected_data[feature_selection_key].get('val_labels')
-                                test_features = selected_data[feature_selection_key].get('test')
-                                test_labels = selected_data[feature_selection_key].get('test_labels')
-                    else:
-                        # 使用默认路径
-                        if 'train' in selected_data[feature_selection_key]:
-                            train_features = selected_data[feature_selection_key]['train']
-                            train_labels = selected_data[feature_selection_key].get('train_labels')
-                            val_features = selected_data[feature_selection_key].get('val')
-                            val_labels = selected_data[feature_selection_key].get('val_labels')
-                            test_features = selected_data[feature_selection_key].get('test')
-                            test_labels = selected_data[feature_selection_key].get('test_labels')
-                else:
-                    logger.error(f"在特征选择结果中找不到 {feature_selection_key} 组特征")
-                    return
-            else:
-                # 使用默认'all'组特征
-                if 'all' in selected_data:
-                    train_features = selected_data['all']['train']
-                    train_labels = selected_data['all']['train_labels'] if 'train_labels' in selected_data['all'] else None
-                    val_features = selected_data['all']['val'] if 'val' in selected_data['all'] else None
-                    val_labels = selected_data['all']['val_labels'] if 'val_labels' in selected_data['all'] else None
-                    test_features = selected_data['all']['test'] if 'test' in selected_data['all'] else None
-                    test_labels = selected_data['all']['test_labels'] if 'test_labels' in selected_data['all'] else None
-                else:
-                    logger.error("在特征选择结果中找不到'all'组特征")
-                    return
+                        # 提取验证集和测试集
+                        if 'val' in data_dict[key]:
+                            val_features = data_dict[key]['val']['features'] if isinstance(data_dict[key]['val'], dict) and 'features' in data_dict[key]['val'] else data_dict[key]['val']
+                            val_labels = data_dict[key]['val']['labels'] if isinstance(data_dict[key]['val'], dict) and 'labels' in data_dict[key]['val'] else data_dict[key]['val_labels'] if 'val_labels' in data_dict[key] else None
+                        
+                        if 'test' in data_dict[key]:
+                            test_features = data_dict[key]['test']['features'] if isinstance(data_dict[key]['test'], dict) and 'features' in data_dict[key]['test'] else data_dict[key]['test']
+                            test_labels = data_dict[key]['test']['labels'] if isinstance(data_dict[key]['test'], dict) and 'labels' in data_dict[key]['test'] else data_dict[key]['test_labels'] if 'test_labels' in data_dict[key] else None
+                        
+                        logger.info(f"从特征选择结果 '{key}' 中提取数据")
+                        break
+        
+        # 4. 最后一次尝试 - 直接搜索任何包含训练特征和标签的路径
+        if train_features is None:
+            logger.warning("无法通过正常路径找到数据，尝试搜索任何可能的路径...")
+            
+            # 尝试搜索特征和标签
+            for key1 in data_dict.keys():
+                if train_features is not None:
+                    break
+                    
+                if isinstance(data_dict[key1], dict):
+                    for key2 in data_dict[key1].keys():
+                        if key2 == 'train' or key2 == 'features' or 'train' in key2:
+                            if isinstance(data_dict[key1][key2], np.ndarray):
+                                # 可能是特征
+                                if len(data_dict[key1][key2].shape) == 2:
+                                    train_features = data_dict[key1][key2]
+                                    logger.info(f"找到可能的训练特征: {key1}/{key2} 形状={train_features.shape}")
+                                    
+                                    # 尝试找到相关的标签
+                                    label_keys = [k for k in data_dict[key1].keys() if 'label' in k.lower()]
+                                    if label_keys:
+                                        train_labels = data_dict[key1][label_keys[0]]
+                                        logger.info(f"找到可能的训练标签: {key1}/{label_keys[0]} 形状={train_labels.shape}")
+                                    break
+        
+        # 检查是否成功提取特征和标签
+        if train_features is None:
+            logger.error("无法从数据中提取特征")
+            return
+            
+        if train_labels is None:
+            # 尝试在整个数据字典中查找任何标签数据
+            def find_labels(d, path=""):
+                for k, v in d.items():
+                    if 'label' in k.lower() and isinstance(v, np.ndarray):
+                        logger.info(f"找到可能的标签数据: {path}/{k} 形状={v.shape}")
+                        return v
+                    elif isinstance(v, dict):
+                        result = find_labels(v, f"{path}/{k}")
+                        if result is not None:
+                            return result
+                return None
                 
-            # 提取特征组PCA数据 (用于group_mlp模型)
-            group_features = {}
-            for key in transformed_data.keys():
-                if key != 'pca' and 'pca' in transformed_data[key]:
+            train_labels = find_labels(data_dict)
+            
+            if train_labels is None:
+                logger.error("无法从数据中提取标签")
+                return
+        
+        # 提取特征组数据 (用于group_mlp模型)
+        group_features = {}
+        for key in data_dict.keys():
+            if key not in ['all', 'original'] and not key.startswith('_'):
+                if 'train' in data_dict[key]:
                     group_features[key] = {
-                        'train': transformed_data[key]['pca']['train'],
-                        'val': transformed_data[key]['pca']['val'] if 'val' in transformed_data[key]['pca'] else None,
-                        'test': transformed_data[key]['pca']['test'] if 'test' in transformed_data[key]['pca'] else None
+                        'train': data_dict[key]['train']['features'] if isinstance(data_dict[key]['train'], dict) and 'features' in data_dict[key]['train'] else data_dict[key]['train'],
+                        'val': data_dict[key]['val']['features'] if 'val' in data_dict[key] and isinstance(data_dict[key]['val'], dict) and 'features' in data_dict[key]['val'] else data_dict[key]['val'] if 'val' in data_dict[key] else None,
+                        'test': data_dict[key]['test']['features'] if 'test' in data_dict[key] and isinstance(data_dict[key]['test'], dict) and 'features' in data_dict[key]['test'] else data_dict[key]['test'] if 'test' in data_dict[key] else None
                     }
+                    logger.info(f"提取到特征组 '{key}'")
+
+
+
         
         # 检查是否成功提取特征和标签
         if train_features is None:
