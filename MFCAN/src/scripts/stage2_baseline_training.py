@@ -378,7 +378,7 @@ def main():
             
         elif args.model_type == 'deep_mlp':
             # 增强版DeepMLP模型
-            hidden_dims = model_config.get('hidden_dims', [1024, 512, 256])
+            hidden_dims = model_config.get('hidden_dims', [2048, 1536, 1024, 512, 256, 128])
             dropout_rate = model_config.get('dropout_rate', 0.3)
             use_residual = model_config.get('use_residual', True)
             use_self_attention = model_config.get('use_self_attention', True)
