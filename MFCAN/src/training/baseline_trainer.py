@@ -48,7 +48,7 @@ class BaselineTrainer:
         os.makedirs(self.save_dir, exist_ok=True)
         
         # 初始化优化器、损失函数和调度器
-        self.criterion = None  # 将在prepare_data后初始化，因为可能需要类别权重
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=self.label_smoothing)
         self.optimizer = self._create_optimizer()
         self.scheduler = None  # 将在prepare_data后初始化，因为可能需要知道数据集大小
         
@@ -220,6 +220,12 @@ class BaselineTrainer:
         """
         print(f"Starting training for {self.num_epochs} epochs...")
         
+
+        if self.criterion is None:
+            print("警告: 损失函数未初始化，使用默认CrossEntropyLoss")
+            self.criterion = nn.CrossEntropyLoss()
+    
+
         best_val_loss = float('inf')
         best_epoch = 0
         best_model_path = None

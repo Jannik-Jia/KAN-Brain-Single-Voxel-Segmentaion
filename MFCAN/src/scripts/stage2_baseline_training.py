@@ -440,6 +440,37 @@ def main():
         if args.model_type in ['mlp', 'deep_mlp']:
             # 使用标准训练器
             trainer = BaselineTrainer(model, temp_config_path, device)
+
+            if trainer.criterion is None:
+                # 根据配置创建损失函数
+                criterion_type = model_config.get('criterion', 'cross_entropy')
+                label_smoothing = model_config.get('label_smoothing', 0.1)
+                
+                if criterion_type.lower() == 'cross_entropy':
+                    trainer.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+                elif criterion_type.lower() == 'focal':
+                    # 简化版Focal Loss实现
+                    from torch.nn import functional as F
+                    class FocalLoss(nn.Module):
+                        def __init__(self, gamma=2.0, reduction='mean'):
+                            super(FocalLoss, self).__init__()
+                            self.gamma = gamma
+                            self.reduction = reduction
+                        
+                        def forward(self, input, target):
+                            ce_loss = F.cross_entropy(input, target, reduction='none')
+                            pt = torch.exp(-ce_loss)
+                            focal_loss = (1 - pt) ** self.gamma * ce_loss
+                            
+                            if self.reduction == 'mean':
+                                return focal_loss.mean()
+                            elif self.reduction == 'sum':
+                                return focal_loss.sum()
+                            else:
+                                return focal_loss
+                    
+                    trainer.criterion = FocalLoss()
+
             
             # 准备数据
             import torch.utils.data as data
