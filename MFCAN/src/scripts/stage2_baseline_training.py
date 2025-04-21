@@ -313,6 +313,12 @@ def main():
                 train_features, train_labels, test_size=0.1, random_state=42, stratify=train_labels
             )
             
+        # 在加载特征后添加
+        print(f"Feature stats - Min: {np.min(train_features)}, Max: {np.max(train_features)}")
+        print(f"Feature sample (first 5 elements): {train_features[0, :5]}")
+        print(f"Any NaN values: {np.isnan(train_features).any()}")
+        print(f"Any Inf values: {np.isinf(train_features).any()}")
+
         logger.info(f"成功提取特征 - 训练集: {train_features.shape}, 验证集: {val_features.shape}, 测试集: {test_features.shape}")
         if group_features:
             logger.info(f"提取了 {len(group_features)} 个特征组用于group_mlp模型")
@@ -393,7 +399,7 @@ def main():
                 input_dim=input_dim,
                 hidden_dims=hidden_dims,
                 num_classes=num_classes,
-                use_residual=use_residual,
+                use_residual=False, # 暂时禁用残差连接
                 use_self_attention=use_self_attention,
                 use_feature_interaction=use_feature_interaction,
                 dropout_rates=[dropout_rate] * len(hidden_dims),
@@ -412,7 +418,10 @@ def main():
         import traceback
         logger.error(traceback.format_exc())
         return
-    
+        # 在stage2_baseline_training.py的main函数中，创建模型后添加
+    print(f"Model structure:\n{model}")
+    print(f"Input shape: {train_features.shape}")
+    print(f"Expected first layer input: {model.layers[0].in_features if hasattr(model.layers[0], 'in_features') else 'Unknown'}")
     # 步骤3：训练模型
     logger.info("步骤3: 训练模型...")
     try:
