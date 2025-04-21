@@ -281,25 +281,26 @@ class DeepMLP(nn.Module):
     def forward(self, x):
         """前向传播"""
         previous_output = None
-        prev_dims = {}  # 跟踪每层的维度
+        previous_dim = None  # 添加这个变量来跟踪前一个线性层的维度
         
         for i, layer in enumerate(self.layers):
             if isinstance(layer, ResidualConnection):
-                # 为残差连接传递前一个线性层的输出
+                # 为残差连接提供正确的previous_output
                 if previous_output is not None:
-                    if i > 1:  # 避免在第一层打印
-                        self.logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}")
+                    # 打印更详细的调试信息
+                    self.logger.info(f"Layer {i}: x shape={x.shape}, previous_output shape={previous_output.shape}, previous_dim={previous_dim}")
                     x = layer(x, previous_output)
                 else:
                     x = layer(x)
             else:
-                prev_shape = x.shape  # 保存层处理前的形状
+                # 保存层处理前的形状
                 x = layer(x)
                 
                 # 如果是线性层，记录其输出用于残差连接
                 if isinstance(layer, nn.Linear):
                     previous_output = x
-                    prev_dims[i] = x.shape[1]  # 保存该层的输出维度
+                    previous_dim = x.shape[1]  # 保存该层的输出维度
+                    self.logger.info(f"Updated previous_output at layer {i}, shape={previous_output.shape}")
         
         logits = self.classifier(x)
         return logits
@@ -332,9 +333,13 @@ class ResidualConnection(nn.Module):
         """
         if residual is None:
             residual = x
-            
+        
+        # 添加调试日志
+        print(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
         if self.needs_projection:
+            print(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
             residual = self.projection(residual)
+            print(f"After projection: residual shape={residual.shape}")
             
         return x + residual
 
