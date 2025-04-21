@@ -254,6 +254,26 @@ def main():
             logger.error("无法从数据中提取特征")
             return
             
+        # 标签强制转为整型（int64），避免 float 类型引发分类问题
+        if train_labels is not None and not np.issubdtype(train_labels.dtype, np.integer):
+            logger.warning(f"训练集标签类型为 {train_labels.dtype}，正在转换为 int64")
+            train_labels = train_labels.astype(np.int64)
+        else:
+            logger.info(f"训练集标签类型: {train_labels.dtype}")
+
+        if val_labels is not None and not np.issubdtype(val_labels.dtype, np.integer):
+            logger.warning(f"验证集标签类型为 {val_labels.dtype}，正在转换为 int64")
+            val_labels = val_labels.astype(np.int64)
+        else:
+            logger.info(f"验证集标签类型: {val_labels.dtype}")
+
+        if test_labels is not None and not np.issubdtype(test_labels.dtype, np.integer):
+            logger.warning(f"测试集标签类型为 {test_labels.dtype}，正在转换为 int64")
+            test_labels = test_labels.astype(np.int64)
+        else:
+            logger.info(f"测试集标签类型: {test_labels.dtype}")
+
+            
         if train_labels is None:
             # 尝试在整个数据字典中查找任何标签数据
             def find_labels(d, path=""):
@@ -438,6 +458,15 @@ def main():
                 num_attn_heads=num_attn_heads,
                 attn_layers=attn_layers
             )
+
+            first_layer = model.layers[0]  # 或 model.classifier[0]，取决于你结构
+            assert isinstance(first_layer, torch.nn.Linear), "模型第一层不是 Linear 层，检查结构"
+            assert first_layer.in_features == train_features.shape[1], (
+                f"模型第一层期望输入维度为 {first_layer.in_features}，"
+                f"但数据特征维度为 {train_features.shape[1]}"
+            )
+            logging.info(f"模型第一层输入维度: {first_layer.in_features}，实际输入维度: {train_features.shape[1]} → ✅匹配")
+
 
             
             logger.info(f"创建DeepMLP模型 - 输入维度: {input_dim}, 隐藏层: {hidden_dims}, 使用残差: {use_residual}, 使用自注意力: {use_self_attention}")
