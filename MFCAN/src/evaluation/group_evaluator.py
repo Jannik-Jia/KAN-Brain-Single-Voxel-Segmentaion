@@ -266,7 +266,7 @@ class GroupEvaluator:
         
         # 评估模型
         metrics = self._evaluate_model(model, data_loaders.get('test', data_loaders.get('val')), 
-                                      active_groups)
+                                    active_groups)
         
         # 保存训练历史
         metrics['history'] = history
@@ -315,11 +315,13 @@ class GroupEvaluator:
             'train_loss': [],
             'val_loss': [],
             'train_acc': [],
-            'val_acc': []
+            'val_acc': [],
+            'train_f1_macro': [],  # 添加宏平均F1记录
+            'val_f1_macro': [],    # 添加宏平均F1记录
         }
         
-        # 用于早停的变量
-        best_val_loss = float('inf')
+        # 用于早停的变量 - 修改为使用F1分数
+        best_val_f1 = 0.0  # 改为F1分数，初始值设为0
         best_model_state = None
         patience_counter = 0
         
@@ -328,8 +330,8 @@ class GroupEvaluator:
             # 训练阶段
             model.train()
             train_loss = 0
-            train_correct = 0
-            train_total = 0
+            train_preds = []
+            train_labels = []
             
             for batch in data_loaders['train']:
                 # 提取特征和标签
@@ -353,18 +355,22 @@ class GroupEvaluator:
                 # 统计
                 train_loss += loss.item() * labels.size(0)
                 _, predicted = outputs.max(1)
-                train_total += labels.size(0)
-                train_correct += predicted.eq(labels).sum().item()
+                
+                # 收集预测和标签用于计算F1
+                train_preds.extend(predicted.cpu().numpy())
+                train_labels.extend(labels.cpu().numpy())
             
             # 计算训练指标
+            train_total = len(train_labels)
             avg_train_loss = train_loss / train_total
-            train_acc = train_correct / train_total
+            train_acc = np.mean(np.array(train_preds) == np.array(train_labels))
+            train_f1 = f1_score(train_labels, train_preds, average='macro')  # 计算宏平均F1
             
             # 验证阶段
             model.eval()
             val_loss = 0
-            val_correct = 0
-            val_total = 0
+            val_preds = []
+            val_labels = []
             
             if 'val' in data_loaders:
                 with torch.no_grad():
@@ -383,44 +389,54 @@ class GroupEvaluator:
                         # 统计
                         val_loss += loss.item() * labels.size(0)
                         _, predicted = outputs.max(1)
-                        val_total += labels.size(0)
-                        val_correct += predicted.eq(labels).sum().item()
+                        
+                        # 收集预测和标签
+                        val_preds.extend(predicted.cpu().numpy())
+                        val_labels.extend(labels.cpu().numpy())
                 
                 # 计算验证指标
+                val_total = len(val_labels)
                 avg_val_loss = val_loss / val_total
-                val_acc = val_correct / val_total
+                val_acc = np.mean(np.array(val_preds) == np.array(val_labels))
+                val_f1 = f1_score(val_labels, val_preds, average='macro')  # 计算宏平均F1
                 
                 # 记录历史
                 history['train_loss'].append(avg_train_loss)
                 history['val_loss'].append(avg_val_loss)
                 history['train_acc'].append(train_acc)
                 history['val_acc'].append(val_acc)
+                history['train_f1_macro'].append(train_f1)
+                history['val_f1_macro'].append(val_f1)
                 
-                # 打印进度
+                # 打印进度 - 添加F1分数信息
                 self.logger.info(f"Epoch {epoch+1}/{self.num_epochs}: "
                                 f"Train Loss: {avg_train_loss:.4f}, "
                                 f"Train Acc: {train_acc:.4f}, "
+                                f"Train F1: {train_f1:.4f}, "
                                 f"Val Loss: {avg_val_loss:.4f}, "
-                                f"Val Acc: {val_acc:.4f}")
+                                f"Val Acc: {val_acc:.4f}, "
+                                f"Val F1: {val_f1:.4f}")
                 
-                # 早停检查
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
+                # 早停检查 - 使用F1分数代替损失作为指标
+                if val_f1 > best_val_f1:  # 变为 > 而不是 <
+                    best_val_f1 = val_f1
                     best_model_state = model.state_dict().copy()
                     patience_counter = 0
                 else:
                     patience_counter += 1
                     if patience_counter >= self.early_stopping:
-                        self.logger.info(f"早停: {patience_counter} 轮无改善")
+                        self.logger.info(f"早停: {patience_counter} 轮F1无改善")
                         break
             else:
                 # 没有验证集时，只记录训练指标
                 history['train_loss'].append(avg_train_loss)
                 history['train_acc'].append(train_acc)
+                history['train_f1_macro'].append(train_f1)
                 
                 self.logger.info(f"Epoch {epoch+1}/{self.num_epochs}: "
                                 f"Train Loss: {avg_train_loss:.4f}, "
-                                f"Train Acc: {train_acc:.4f}")
+                                f"Train Acc: {train_acc:.4f}, "
+                                f"Train F1: {train_f1:.4f}")
         
         # 恢复最佳模型状态
         if best_model_state is not None:
@@ -428,13 +444,13 @@ class GroupEvaluator:
             
         self.logger.info("模型训练完成")
         return model, history
-    
+        
     def _evaluate_model(self, model, data_loader, active_groups):
         """评估模型"""
         if data_loader is None:
             self.logger.warning("未提供评估数据集")
             return {}
-            
+                
         self.logger.info(f"评估模型，特征组: {active_groups}")
         
         model.eval()
@@ -480,12 +496,14 @@ class GroupEvaluator:
                 'active_groups': active_groups
             }
             
-            self.logger.info(f"评估结果: 准确率={accuracy:.4f}, 宏平均F1={f1_macro:.4f}")
+            # 修改日志，突出宏平均F1分数
+            self.logger.info(f"评估结果: 宏平均F1={f1_macro:.4f}, 准确率={accuracy:.4f}")
             
             return metrics
         except Exception as e:
             self.logger.error(f"计算评估指标失败: {e}")
             return {'error': str(e)}
+
     
     def _save_evaluation_result(self, group_key, metrics):
         """保存评估结果"""
@@ -592,8 +610,8 @@ class GroupEvaluator:
         # 创建汇总数据框
         summary_df = pd.DataFrame(summary)
         
-        # 按准确率排序
-        summary_df = summary_df.sort_values('accuracy', ascending=False)
+        # 按宏平均F1分数排序，而不是准确率
+        summary_df = summary_df.sort_values('f1_macro', ascending=False)
         
         # 保存汇总结果
         summary_path = os.path.join(self.output_dir, "evaluation_summary.csv")
@@ -609,13 +627,26 @@ class GroupEvaluator:
         
         try:
             # 绘制不同组大小的性能比较
-            plt.figure(figsize=(12, 8))
+            plt.figure(figsize=(12, 12))  # 增加图形高度
             
             # 按组大小分组
             group_sizes = sorted(summary_df['group_count'].unique())
             
-            # 准确率对比
-            plt.subplot(2, 1, 1)
+            # 宏平均F1对比 - 将此图从原来的第二位置调到第一位置，表明其重要性
+            plt.subplot(3, 1, 1)  # 修改为3行1列的第1个子图
+            data = []
+            for size in group_sizes:
+                size_df = summary_df[summary_df['group_count'] == size]
+                data.append(size_df['f1_macro'].values)
+            
+            plt.boxplot(data, labels=group_sizes)
+            plt.title('Macro-averaged F1 score distribution for different feature group sizes')
+            plt.xlabel('Number of feature groups')
+            plt.ylabel('Macro-averaged F1')
+            plt.grid(True, alpha=0.3)
+            
+            # 准确率对比 - 移到第二位置
+            plt.subplot(3, 1, 2)  # 修改为3行1列的第2个子图
             data = []
             for size in group_sizes:
                 size_df = summary_df[summary_df['group_count'] == size]
@@ -627,17 +658,17 @@ class GroupEvaluator:
             plt.ylabel('Accuracy')
             plt.grid(True, alpha=0.3)
             
-            # F1分数对比
-            plt.subplot(2, 1, 2)
+            # 加权F1分数对比 - 新增子图
+            plt.subplot(3, 1, 3)  # 添加为3行1列的第3个子图
             data = []
             for size in group_sizes:
                 size_df = summary_df[summary_df['group_count'] == size]
-                data.append(size_df['f1_macro'].values)
+                data.append(size_df['f1_weighted'].values)
             
             plt.boxplot(data, labels=group_sizes)
-            plt.title('Macro-averaged F1 score distribution for different feature group sizes')
+            plt.title('Weighted F1 score distribution for different feature group sizes')
             plt.xlabel('Number of feature groups')
-            plt.ylabel('Macro-averaged F1')
+            plt.ylabel('Weighted F1')
             plt.grid(True, alpha=0.3)
             
             plt.tight_layout()
@@ -715,17 +746,27 @@ class GroupEvaluator:
             if len(single_group_df) == 0:
                 self.logger.warning("未找到单个特征组的评估结果")
                 return
-                
+                    
             # 添加组名列
             single_group_df['group_name'] = single_group_df['active_groups'].apply(lambda x: x[0] if x else None)
             
-            # 按准确率排序
-            single_group_df = single_group_df.sort_values('accuracy', ascending=False)
+            # 按宏平均F1分数排序，而不是准确率
+            single_group_df = single_group_df.sort_values('f1_macro', ascending=False)
             
             # 绘制条形图
-            plt.figure(figsize=(12, 8))
+            plt.figure(figsize=(12, 12))  # 增加图形高度以容纳3个子图
             
-            plt.subplot(2, 1, 1)
+            # 宏平均F1条形图 - 放在第一位置，表明其重要性
+            plt.subplot(3, 1, 1)
+            plt.bar(single_group_df['group_name'], single_group_df['f1_macro'], color='forestgreen')
+            plt.title('Macro-averaged F1 of individual feature groups')
+            plt.xlabel('Feature group')
+            plt.ylabel('Macro-averaged F1')
+            plt.xticks(rotation=45, ha='right')
+            plt.grid(True, alpha=0.3)
+            
+            # 准确率条形图 - 移到第二位置
+            plt.subplot(3, 1, 2)
             plt.bar(single_group_df['group_name'], single_group_df['accuracy'], color='steelblue')
             plt.title('Accuracy of individual feature groups')
             plt.xlabel('Feature group')
@@ -733,11 +774,12 @@ class GroupEvaluator:
             plt.xticks(rotation=45, ha='right')
             plt.grid(True, alpha=0.3)
             
-            plt.subplot(2, 1, 2)
-            plt.bar(single_group_df['group_name'], single_group_df['f1_macro'], color='forestgreen')
-            plt.title('Macro-averaged F1 of individual feature groups')
+            # 加权F1条形图 - 添加为第三个子图
+            plt.subplot(3, 1, 3)
+            plt.bar(single_group_df['group_name'], single_group_df['f1_weighted'], color='darkorange')
+            plt.title('Weighted F1 of individual feature groups')
             plt.xlabel('Feature group')
-            plt.ylabel('Macro-averaged F1')
+            plt.ylabel('Weighted F1')
             plt.xticks(rotation=45, ha='right')
             plt.grid(True, alpha=0.3)
             

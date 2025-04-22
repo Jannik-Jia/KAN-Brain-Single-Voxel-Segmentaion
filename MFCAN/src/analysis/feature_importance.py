@@ -13,7 +13,7 @@ import joblib
 class FeatureImportanceAnalyzer:
     """特征重要性分析工具，使用随机森林和互信息评估特征重要性"""
     
-    def __init__(self, config_path=None, output_dir=None, logger=Non, use_gpu=False):
+    def __init__(self, config_path=None, output_dir=None, logger=None, use_gpu=False):
         """
         初始化特征重要性分析器
         
@@ -48,7 +48,8 @@ class FeatureImportanceAnalyzer:
             'max_depth': 10,
             'random_state': 42,
             'n_jobs': -1
-        }
+        })
+
         # 设置GPU加速
         self.use_gpu = use_gpu
         if use_gpu:
@@ -59,9 +60,6 @@ class FeatureImportanceAnalyzer:
             except ImportError:
                 self.logger.warning("无法导入GPU库，回退到CPU实现")
                 self.use_gpu = False
-                
-        
-        )
     
     def compute_importance_scores(self, features, labels, feature_names=None, 
                                 method='all', feature_group="all"):

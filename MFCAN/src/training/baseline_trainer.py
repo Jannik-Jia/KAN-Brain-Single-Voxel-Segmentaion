@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from utils.logging_utils import Logger
 import h5py
 
 class BaselineTrainer:
@@ -26,6 +27,10 @@ class BaselineTrainer:
         self.model = model
         self.device = device
         self.model.to(device)
+        
+        # 设置日志记录器
+        log_manager = Logger("BaselineTrainer", log_dir="logs/training")
+        self.logger = log_manager.get_logger()
         
         # 加载配置
         with open(config_path, 'r') as f:
@@ -58,6 +63,12 @@ class BaselineTrainer:
             'val_loss': [],
             'train_acc': [],
             'val_acc': [],
+            'train_f1_macro': [],
+            'val_f1_macro': [],
+            # 添加测试集指标记录
+            'test_loss': [],
+            'test_acc': [],
+            'test_f1_macro': [],
             'learning_rates': []
         }
     
@@ -79,7 +90,8 @@ class BaselineTrainer:
         elif self.scheduler_type.lower() == 'step':
             return optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
         elif self.scheduler_type.lower() == 'plateau':
-            return optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=5)
+            # 修改为监控验证集F1分数，因为我们现在使用F1作为主要指标
+            return optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='max', factor=0.1, patience=5)
         elif self.scheduler_type.lower() == 'onecycle':
             return optim.lr_scheduler.OneCycleLR(
                 self.optimizer, 
@@ -218,29 +230,35 @@ class BaselineTrainer:
         返回:
             history: 训练历史记录
         """
-        print(f"Starting training for {self.num_epochs} epochs...")
+        self.logger.info(f"开始训练，共 {self.num_epochs} 轮")
         
-
         if self.criterion is None:
-            print("警告: 损失函数未初始化，使用默认CrossEntropyLoss")
+            self.logger.warning("损失函数未初始化，使用默认CrossEntropyLoss")
             self.criterion = nn.CrossEntropyLoss()
-    
-
-        best_val_loss = float('inf')
+        
+        # 修改为使用宏平均F1作为主要指标
+        best_val_f1 = 0.0  # 初始化为最小值，因为我们想要最大化F1
         best_epoch = 0
         best_model_path = None
+        best_test_f1 = 0.0  # 记录最佳测试集性能
+        
+        # 设置评估间隔
+        eval_interval = max(1, self.num_epochs // 10)  # 默认每10%的轮次评估一次
+        if self.num_epochs <= 10:
+            eval_interval = 1  # 如果总轮次很少，每轮都评估
         
         for epoch in range(self.num_epochs):
             # 训练一个轮次
-            train_loss, train_acc = self._train_epoch(data_loaders['train'])
+            train_loss, train_acc, train_f1 = self._train_epoch(data_loaders['train'])
             
             # 验证
-            val_loss, val_acc = self._validate(data_loaders['val'])
+            val_loss, val_acc, val_f1 = self._validate(data_loaders['val'])
             
             # 更新学习率
             if self.scheduler is not None:
                 if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_loss)
+                    # 使用宏平均F1分数来调整学习率
+                    self.scheduler.step(val_f1)
                 else:
                     self.scheduler.step()
             
@@ -248,22 +266,51 @@ class BaselineTrainer:
             current_lr = self.optimizer.param_groups[0]['lr']
             self.history['learning_rates'].append(current_lr)
             
-            # 打印进度
-            print(f"Epoch {epoch+1}/{self.num_epochs} - "
-                  f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
-                  f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, "
-                  f"LR: {current_lr:.8f}")
-            
             # 保存历史记录
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
             self.history['train_acc'].append(train_acc)
             self.history['val_acc'].append(val_acc)
+            self.history['train_f1_macro'].append(train_f1)
+            self.history['val_f1_macro'].append(val_f1)
             
-            # 保存最佳模型
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            # 定期在测试集上评估
+            if (epoch + 1) % eval_interval == 0 or epoch == self.num_epochs - 1:
+                self.logger.info(f"在测试集上评估（第 {epoch+1} 轮）...")
+                test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
+                self.logger.info(f"测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
+                
+                # 如果您想保存测试集指标历史
+                if 'test_loss' not in self.history:
+                    self.history['test_loss'] = [None] * epoch
+                    self.history['test_acc'] = [None] * epoch
+                    self.history['test_f1_macro'] = [None] * epoch
+                
+                self.history['test_loss'].append(test_loss)
+                self.history['test_acc'].append(test_acc)
+                self.history['test_f1_macro'].append(test_f1)
+            else:
+                # 填充空值保持历史记录长度一致
+                if 'test_loss' in self.history:
+                    self.history['test_loss'].append(None)
+                    self.history['test_acc'].append(None)
+                    self.history['test_f1_macro'].append(None)
+            
+            # 打印进度 - 强调宏平均F1
+            self.logger.info(f"第 {epoch+1}/{self.num_epochs} 轮 - "
+                            f"训练: 宏平均F1={train_f1:.4f}, 准确率={train_acc:.4f}, 损失={train_loss:.4f}, "
+                            f"验证: 宏平均F1={val_f1:.4f}, 准确率={val_acc:.4f}, 损失={val_loss:.4f}, "
+                            f"学习率: {current_lr:.8f}")
+            
+            # 保存最佳模型 - 使用宏平均F1作为判断标准
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
                 best_epoch = epoch
+                
+                # 在最佳验证集性能时评估测试集
+                test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
+                self.logger.info(f"【新的最佳模型】测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}")
+                best_test_f1 = test_f1  # 记录最佳测试集性能
                 
                 # 删除之前的最佳模型
                 if best_model_path is not None and os.path.exists(best_model_path):
@@ -277,14 +324,24 @@ class BaselineTrainer:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'val_loss': val_loss,
                     'val_acc': val_acc,
+                    'val_f1_macro': val_f1,
+                    'test_f1_macro': test_f1,
+                    'test_acc': test_acc,
+                    'test_loss': test_loss
                 }, best_model_path)
                 
-                print(f"Saved best model at epoch {epoch+1} with validation loss {val_loss:.4f}")
+                self.logger.info(f"已保存最佳模型到第 {epoch+1} 轮，验证集宏平均F1: {val_f1:.4f}")
             
-            # 早停
+            # 早停 - 基于F1分数
             if epoch - best_epoch >= self.early_stopping:
-                print(f"Early stopping at epoch {epoch+1} since no improvement for {self.early_stopping} epochs")
+                self.logger.info(f"早停：连续 {self.early_stopping} 轮未提升F1分数，在第 {epoch+1} 轮停止训练")
                 break
+        
+        # 训练结束时的总结
+        self.logger.info("训练完成")
+        self.logger.info(f"最佳模型来自第 {best_epoch+1} 轮")
+        self.logger.info(f"最佳验证集宏平均F1: {best_val_f1:.4f}")
+        self.logger.info(f"最佳模型测试集宏平均F1: {best_test_f1:.4f}")
         
         # 可视化训练历史
         self._plot_training_history()
@@ -293,7 +350,7 @@ class BaselineTrainer:
         if best_model_path is not None:
             checkpoint = torch.load(best_model_path)
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"Loaded best model from epoch {checkpoint['epoch']+1} with validation loss {checkpoint['val_loss']:.4f}")
+            self.logger.info(f"已加载最佳模型（第 {best_epoch+1} 轮）")
         
         return self.history
     
@@ -307,28 +364,34 @@ class BaselineTrainer:
         返回:
             avg_loss: 平均损失
             accuracy: 分类准确率
+            f1_macro: 宏平均F1分数
         """
         self.model.train()
         total_loss = 0
-        correct = 0
-        total = 0
+        all_targets = []
+        all_predictions = []
         
-        pbar = tqdm(train_loader, desc="Training")
+        # 替换tqdm为简单的日志
+        self.logger.info(f"训练批次数: {len(train_loader)}")
+        batch_count = len(train_loader)
+        log_interval = max(1, batch_count // 10)  # 每10%记录一次日志
+
         for inputs, targets in pbar:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
             # 添加标签验证和处理
             num_classes = self.model.classifier.out_features
-            # 检查标签是否在有效范围内
+            
+            # 检查标签是否在有效范围
             if torch.max(targets) >= num_classes:
-                logging.warning(f"警告: 训练中发现标签值 {torch.max(targets).item()} 超出类别数 {num_classes}")
+                self.logger.warning(f"警告: 训练中发现标签值 {torch.max(targets).item()} 超出类别数 {num_classes}")
                 # 截断超出范围的标签
                 targets = torch.clamp(targets, 0, num_classes - 1)
             if torch.min(targets) < 0:
-                logging.warning(f"警告: 训练中发现负标签值 {torch.min(targets).item()}")
+                self.logger.warning(f"警告: 训练中发现负标签值 {torch.min(targets).item()}")
                 # 将负值标签设为0
                 targets = torch.clamp(targets, 0, None)
-            
+
             # 清除梯度
             self.optimizer.zero_grad()
             
@@ -343,16 +406,26 @@ class BaselineTrainer:
             # 统计
             total_loss += loss.item() * inputs.size(0)
             _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
             
-            # 更新进度条
-            pbar.set_postfix({'loss': loss.item(), 'acc': correct / total})
+            # 收集预测和目标用于计算F1
+            all_targets.extend(targets.cpu().numpy())
+            all_predictions.extend(predicted.cpu().numpy())
+            
+            # 减少日志频率，只在开始、结束和每10%的时候记录
+            if i == 0 or (i+1) % log_interval == 0 or i == batch_count - 1:
+                self.logger.info(f"训练进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
         
-        avg_loss = total_loss / total
-        accuracy = correct / total
         
-        return avg_loss, accuracy
+        # 计算整体指标
+        all_targets = np.array(all_targets)
+        all_predictions = np.array(all_predictions)
+        
+        total_samples = len(all_targets)
+        avg_loss = total_loss / total_samples
+        accuracy = accuracy_score(all_targets, all_predictions)
+        f1_macro = f1_score(all_targets, all_predictions, average='macro')
+        
+        return avg_loss, accuracy, f1_macro
     
     def _validate(self, val_loader):
         """
@@ -364,11 +437,12 @@ class BaselineTrainer:
         返回:
             avg_loss: 平均损失
             accuracy: 分类准确率
+            f1_macro: 宏平均F1分数
         """
         self.model.eval()
         total_loss = 0
-        correct = 0
-        total = 0
+        all_targets = []
+        all_predictions = []
         
         with torch.no_grad():
             for inputs, targets in val_loader:
@@ -381,13 +455,21 @@ class BaselineTrainer:
                 # 统计
                 total_loss += loss.item() * inputs.size(0)
                 _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                
+                # 收集预测和目标用于计算F1
+                all_targets.extend(targets.cpu().numpy())
+                all_predictions.extend(predicted.cpu().numpy())
         
-        avg_loss = total_loss / total
-        accuracy = correct / total
+        # 计算整体指标
+        all_targets = np.array(all_targets)
+        all_predictions = np.array(all_predictions)
         
-        return avg_loss, accuracy
+        total_samples = len(all_targets)
+        avg_loss = total_loss / total_samples
+        accuracy = accuracy_score(all_targets, all_predictions)
+        f1_macro = f1_score(all_targets, all_predictions, average='macro')
+        
+        return avg_loss, accuracy, f1_macro
     
     def evaluate(self, data_loader):
         """
@@ -429,9 +511,21 @@ class BaselineTrainer:
         f1_weighted = f1_score(all_targets, all_predictions, average='weighted')
         conf_matrix = confusion_matrix(all_targets, all_predictions)
         
-        # 类别别名
-        class_names = [f"Class {i}" for i in range(all_probabilities.shape[1])]
-        classification_rep = classification_report(all_targets, all_predictions, target_names=class_names, output_dict=True)
+        # 获取实际使用的类别数
+        unique_classes = np.unique(np.concatenate([all_targets, all_predictions]))
+        num_classes = len(unique_classes)
+        
+        # 类别别名 - 修改这里，确保类别名称数量与实际类别数量一致
+        class_names = [f"Class {i}" for i in range(np.max(unique_classes) + 1)]
+        
+        # 明确指定标签参数
+        classification_rep = classification_report(
+            all_targets, 
+            all_predictions, 
+            labels=range(len(class_names)),  # 显式指定标签范围
+            target_names=class_names, 
+            output_dict=True
+        )
         
         # 可视化混淆矩阵(只显示部分类别，避免过于复杂)
         self._plot_confusion_matrix(conf_matrix, class_names[:10], "Top 10 Classes Confusion Matrix")
@@ -449,13 +543,14 @@ class BaselineTrainer:
         self._save_evaluation_results(metrics)
         
         return metrics
+
     
     def _plot_training_history(self):
         """可视化训练历史"""
-        plt.figure(figsize=(15, 10))
+        plt.figure(figsize=(15, 15))  # 增加图形大小以容纳额外的F1曲线图
         
         # Plot loss curve
-        plt.subplot(2, 2, 1)
+        plt.subplot(3, 2, 1)
         plt.plot(self.history['train_loss'], label='Train Loss')
         plt.plot(self.history['val_loss'], label='Val Loss')
         plt.title('Training and Validation Loss')
@@ -465,7 +560,7 @@ class BaselineTrainer:
         plt.grid(True)
         
         # Plot accuracy curve
-        plt.subplot(2, 2, 2)
+        plt.subplot(3, 2, 2)
         plt.plot(self.history['train_acc'], label='Train Accuracy')
         plt.plot(self.history['val_acc'], label='Val Accuracy')
         plt.title('Training and Validation Accuracy')
@@ -474,8 +569,18 @@ class BaselineTrainer:
         plt.legend()
         plt.grid(True)
         
+        # Plot macro F1 curve - 新增F1曲线图
+        plt.subplot(3, 2, 3)
+        plt.plot(self.history['train_f1_macro'], label='Train Macro F1')
+        plt.plot(self.history['val_f1_macro'], label='Val Macro F1')
+        plt.title('Training and Validation Macro F1 Score')
+        plt.xlabel('Epoch')
+        plt.ylabel('Macro F1')
+        plt.legend()
+        plt.grid(True)
+        
         # Plot learning rate curve
-        plt.subplot(2, 2, 3)
+        plt.subplot(3, 2, 4)
         plt.plot(self.history['learning_rates'])
         plt.title('Learning Rate')
         plt.xlabel('Epoch')
@@ -541,7 +646,7 @@ class BaselineTrainer:
         with open(os.path.join(self.save_dir, 'evaluation_results.json'), 'w') as f:
             json.dump(results, f, indent=4)
         
-        # 生成可读性报告
+        # 生成可读性报告 - 突出显示宏平均F1分数
         report = f"""
 # 模型评估报告
 
@@ -550,9 +655,9 @@ class BaselineTrainer:
 - 评估时间: {time.strftime('%Y-%m-%d %H:%M:%S')}
 
 ## 整体性能
-- 准确率: {metrics['accuracy']:.4f}
-- 宏平均F1分数: {metrics['f1_macro']:.4f}
+- **宏平均F1分数**: {metrics['f1_macro']:.4f}  <!-- 主要指标 -->
 - 加权F1分数: {metrics['f1_weighted']:.4f}
+- 准确率: {metrics['accuracy']:.4f}
 
 ## 每类性能
 | 类别 | 精确率 | 召回率 | F1分数 | 支持度 |
@@ -563,10 +668,10 @@ class BaselineTrainer:
             if class_name not in ['accuracy', 'macro avg', 'weighted avg']:
                 report += f"| {class_name} | {metrics_dict['precision']:.4f} | {metrics_dict['recall']:.4f} | {metrics_dict['f1-score']:.4f} | {metrics_dict['support']} |\n"
         
-        # 添加总结
+        # 添加总结 - 突出显示宏平均F1
         report += f"""
 ## 摘要
-- Macro Avg: 精确率={metrics['classification_report']['macro avg']['precision']:.4f}, 召回率={metrics['classification_report']['macro avg']['recall']:.4f}, F1={metrics['classification_report']['macro avg']['f1-score']:.4f}
+- **Macro Avg**: 精确率={metrics['classification_report']['macro avg']['precision']:.4f}, 召回率={metrics['classification_report']['macro avg']['recall']:.4f}, F1={metrics['classification_report']['macro avg']['f1-score']:.4f}
 - Weighted Avg: 精确率={metrics['classification_report']['weighted avg']['precision']:.4f}, 召回率={metrics['classification_report']['weighted avg']['recall']:.4f}, F1={metrics['classification_report']['weighted avg']['f1-score']:.4f}
 """
         

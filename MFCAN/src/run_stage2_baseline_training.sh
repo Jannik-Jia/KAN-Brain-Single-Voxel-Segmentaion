@@ -59,7 +59,7 @@ done
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="logs/shell/stage2_baseline_${MODEL_TYPE}_${FEATURE_TYPE}_${FEATURE_SELECTION}_${TIMESTAMP}.log"
 
-echo "Starting Stage 2 Baseline Training..."
+echo "Starting Stage 2 Baseline Training (with Macro F1 as primary metric)..."
 echo "Model type: $MODEL_TYPE"
 echo "Feature type: $FEATURE_TYPE"
 echo "Feature selection method: $FEATURE_SELECTION"

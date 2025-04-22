@@ -305,9 +305,6 @@ def main():
                     }
                     logger.info(f"提取到特征组 '{key}'")
 
-
-
-        
         # 检查是否成功提取特征和标签
         if train_features is None:
             logger.error("无法从数据中提取特征")
@@ -466,8 +463,6 @@ def main():
                 f"但数据特征维度为 {train_features.shape[1]}"
             )
             logger.info(f"模型第一层输入维度: {first_layer.in_features}，实际输入维度: {train_features.shape[1]} → ✅匹配")
-
-
             
             logger.info(f"创建DeepMLP模型 - 输入维度: {input_dim}, 隐藏层: {hidden_dims}, 使用残差: {use_residual}, 使用自注意力: {use_self_attention}")
         
@@ -556,7 +551,6 @@ def main():
                 test_labels = np.clip(test_labels, 0, model_num_classes - 1)
                 logger.info(f"截断后标签值范围: {np.min(train_labels)} - {np.max(train_labels)}")
 
-
             # 创建张量和数据集
             train_tensor_x = torch.tensor(train_features, dtype=torch.float32)
             train_tensor_y = torch.tensor(train_labels, dtype=torch.long)
@@ -593,7 +587,8 @@ def main():
             # 评估模型
             metrics = trainer.evaluate(data_loaders['test'])
             
-            logger.info(f"训练完成 - 测试集准确率: {metrics['accuracy']:.4f}, 测试集F1分数: {metrics['f1_weighted']:.4f}")
+            # 修改日志输出，突出显示宏平均F1分数
+            logger.info(f"训练完成 - 测试集宏平均F1分数: {metrics['f1_macro']:.4f}, 测试集准确率: {metrics['accuracy']:.4f}, 测试集加权F1分数: {metrics['f1_weighted']:.4f}")
             
         elif args.model_type == 'group_mlp':
             # 使用特征组评估器进行训练
@@ -680,7 +675,8 @@ def main():
             # 训练和评估
             metrics = evaluator.train_and_evaluate(data_loaders, feature_dims, list(group_features.keys()))
             
-            logger.info(f"训练完成 - 测试集准确率: {metrics['accuracy']:.4f}, 测试集F1分数: {metrics['f1_weighted']:.4f}")
+            # 修改日志输出，突出显示宏平均F1分数
+            logger.info(f"训练完成 - 测试集宏平均F1分数: {metrics['f1_macro']:.4f}, 测试集准确率: {metrics['accuracy']:.4f}, 测试集加权F1分数: {metrics['f1_weighted']:.4f}")
         
     except Exception as e:
         logger.error(f"训练模型失败: {e}")
@@ -725,10 +721,9 @@ def main():
                 f.write(f"分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 
                 f.write("## 模型性能\n\n")
-                f.write(f"- 准确率: {metrics['accuracy']:.4f}\n")
+                f.write(f"- 宏平均F1分数: {metrics['f1_macro']:.4f}\n")
                 f.write(f"- 加权F1分数: {metrics['f1_weighted']:.4f}\n")
-                if 'f1_macro' in metrics:
-                    f.write(f"- 宏平均F1分数: {metrics['f1_macro']:.4f}\n")
+                f.write(f"- 准确率: {metrics['accuracy']:.4f}\n")
                 f.write(f"- 特征维度: {train_features.shape[1]}\n")
                 f.write(f"- 模型参数数量: {total_params:,}\n\n")
                 
@@ -797,15 +792,15 @@ def main():
                     
                 f.write("## 建议\n\n")
                 
-                # 根据评估结果给出建议
+                # 根据评估结果给出建议 - 修改为使用宏平均F1分数作为主要判断标准
                 f.write("基于当前评估结果，对模型训练提出以下建议：\n\n")
                 
-                if metrics['accuracy'] > 0.8:
-                    f.write("1. **模型性能良好**：当前模型已达到较高准确率，可以考虑部署使用。\n")
-                elif metrics['accuracy'] > 0.6:
-                    f.write("1. **模型性能中等**：可尝试调整模型超参数或尝试更复杂的模型架构提升性能。\n")
+                if metrics['f1_macro'] > 0.75:
+                    f.write("1. **模型性能良好**：当前模型已达到较高宏平均F1分数，表明对所有类别均有良好的识别能力，可以考虑部署使用。\n")
+                elif metrics['f1_macro'] > 0.5:
+                    f.write("1. **模型性能中等**：宏平均F1分数处于中等水平，可尝试调整模型超参数或尝试更复杂的模型架构提升各类别的识别性能。\n")
                 else:
-                    f.write("1. **模型性能有限**：建议重新审视特征工程策略，或考虑更高级的模型架构。\n")
+                    f.write("1. **模型性能有限**：宏平均F1分数较低，表明模型对部分类别的识别能力不足，建议重新审视特征工程策略，或考虑更高级的模型架构。\n")
                 
                 if args.model_type == 'group_mlp':
                     f.write("2. **特征组融合**：当前使用特征组分别建模再融合的策略，可以进一步优化每个特征组的处理方式和融合机制。\n")
@@ -827,12 +822,13 @@ def main():
     end_time = time.time()
     training_time = end_time - start_time
     
-    # 记录实验结束
+    # 记录实验结束 - 修改为使用宏平均F1分数作为主要指标
     results = {
         "状态": "成功",
         "训练时间(秒)": training_time,
+        "宏平均F1分数": float(metrics['f1_macro']),
+        "加权F1分数": float(metrics['f1_weighted']),
         "准确率": float(metrics['accuracy']),
-        "F1分数": float(metrics['f1_weighted']),
         "模型类型": args.model_type,
         "特征类型": args.feature_type,
         "特征选择方法": args.feature_selection,
@@ -847,8 +843,9 @@ def main():
     
     return {
         'model_dir': output_dir,
+        'f1_macro': float(metrics['f1_macro']),  # 修改为返回宏平均F1分数作为主要指标
         'accuracy': float(metrics['accuracy']),
-        'f1_score': float(metrics['f1_weighted']),
+        'f1_weighted': float(metrics['f1_weighted']),
         'timestamp': timestamp
     }
 
