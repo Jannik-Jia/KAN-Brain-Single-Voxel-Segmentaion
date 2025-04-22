@@ -9,7 +9,7 @@ CONFIG_PATH="configs/encoders_config.json"
 
 # ===== 自定义H5文件路径 - 在这里修改 =====
 # 直接指定您想使用的H5文件的完整路径
-DATA_PATH="results/feature_engineering/combined_20240422_154030/combined_selected_features.h5"
+DATA_PATH="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/MFCAN/src/data/processed/reorganized_encoder_data.h5"
 
 # 设置日志文件路径
 LOG_FILE="logs/shell/stage3_encoder_pretraining_${MODALITY}_$(date +%Y%m%d_%H%M%S).log"
