@@ -319,6 +319,7 @@ class ResidualConnection(nn.Module):
         # 只在必要时创建投影层
         self.needs_projection = input_dim is not None and input_dim != dim
         if self.needs_projection:
+            # 确保投影方向正确：从input_dim到dim
             self.projection = nn.Linear(input_dim, dim)
             self.logger.info(f"Created projection from {input_dim} to {dim}")
         
@@ -329,24 +330,25 @@ class ResidualConnection(nn.Module):
         # 仅在调试级别记录形状信息
         self.logger.debug(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
         
-        # 判断是否需要投影
-        if self.needs_projection:
-            # 记录更少的日志，只在debug级别显示
-            self.logger.debug(f"Applying projection: {residual.size(-1)} -> {x.size(-1)}")
-            residual = self.projection(residual)
-        elif x.size(-1) != residual.size(-1):
-            # 创建缓存键 - 从输入维度到输出维度
-            cache_key = f"{residual.size(-1)}_{x.size(-1)}"
-            
-            # 如果缓存中没有这个维度的投影层，则创建并缓存
-            if cache_key not in ResidualConnection.projection_cache:
-                self.logger.warning(f"Creating and caching projection: {residual.size(-1)} -> {x.size(-1)}")
-                ResidualConnection.projection_cache[cache_key] = nn.Linear(
-                    residual.size(-1), x.size(-1)).to(x.device)
-            
-            # 使用缓存的投影层
-            temp_projection = ResidualConnection.projection_cache[cache_key]
-            residual = temp_projection(residual)
+        # 检查残差特征和目标特征的最后一维是否匹配
+        if residual.size(-1) != x.size(-1):
+            # 如果预先定义了投影且维度正确，使用预定义的投影
+            if self.needs_projection and residual.size(-1) == self.projection.in_features and x.size(-1) == self.projection.out_features:
+                self.logger.debug(f"Using predefined projection: {residual.size(-1)} -> {x.size(-1)}")
+                residual = self.projection(residual)
+            else:
+                # 创建缓存键 - 从输入维度到输出维度
+                cache_key = f"{residual.size(-1)}_{x.size(-1)}"
+                
+                # 如果缓存中没有这个维度的投影层，则创建并缓存
+                if cache_key not in ResidualConnection.projection_cache:
+                    self.logger.warning(f"Creating and caching projection: {residual.size(-1)} -> {x.size(-1)}")
+                    ResidualConnection.projection_cache[cache_key] = nn.Linear(
+                        residual.size(-1), x.size(-1)).to(x.device)
+                
+                # 使用缓存的投影层
+                temp_projection = ResidualConnection.projection_cache[cache_key]
+                residual = temp_projection(residual)
         
         return x + residual
 
