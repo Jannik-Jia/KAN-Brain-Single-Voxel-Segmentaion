@@ -343,34 +343,28 @@ class ResidualConnection(nn.Module):
             residual = x
         
         self.logger.info(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
+        
+        # 判断是否需要投影
         if self.needs_projection:
-            self.logger.info(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
-            try:
-                # 检查维度是否匹配
-                in_features = self.projection.weight.size(1)  # 输入特征维度
-                out_features = self.projection.weight.size(0)  # 输出特征维度
+            # 检查维度是否匹配
+            out_features = self.projection.weight.size(0)  # 输出特征维度
+            in_features = self.projection.weight.size(1)   # 输入特征维度
+            
+            # 记录详细日志
+            self.logger.info(f"Projection weight shape: ({out_features}, {in_features})")
+            self.logger.info(f"Residual feature shape: {residual.shape}")
+            
+            if residual.size(-1) != in_features:
+                # 如果输入维度不匹配，使用适当尺寸的线性层
+                self.logger.warning(f"Input feature mismatch, creating new projection: {residual.size(-1)} -> {x.size(-1)}")
                 
-                # 如果residual的最后一维不等于输入特征维度，则交换投影矩阵的维度
-                if residual.size(-1) != in_features and residual.size(-1) == out_features:
-                    self.logger.warning(f"Input feature dimension ({residual.size(-1)}) matches output dimension, transposing weight matrix")
-                    # 创建新的投影层，权重矩阵为原投影矩阵的转置
-                    new_projection = nn.Linear(out_features, in_features, bias=self.projection.bias is not None)
-                    with torch.no_grad():
-                        new_projection.weight.copy_(self.projection.weight.t())
-                        if self.projection.bias is not None:
-                            new_projection.bias.copy_(self.projection.bias)
-                    # 替换原投影层
-                    self.projection = new_projection
-                    self.logger.info(f"New projection weight shape: {self.projection.weight.shape}")
-                
-                # 执行投影
+                # 创建一个新的投影层，直接从输入维度到输出维度
+                temp_projection = nn.Linear(residual.size(-1), x.size(-1)).to(x.device)
+                residual = temp_projection(residual)
+            else:
+                # 正常执行投影
                 residual = self.projection(residual)
-                self.logger.info(f"After projection: residual shape={residual.shape}")
-            except Exception as e:
-                self.logger.error(f"Error during projection: {e}")
-                self.logger.error(f"Detailed projection info - weight: {self.projection.weight.shape}, input: {residual.shape}")
-                raise
-                
+        
         return x + residual
 
 
