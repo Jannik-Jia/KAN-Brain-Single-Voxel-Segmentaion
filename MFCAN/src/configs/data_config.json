@@ -14,5 +14,25 @@
     "qti_description": "包含mdm_QTI_NII_mc_s_xps特征",
     "apply_pca": false,
     "n_components": 0,
-    "normalization": "standard"
+    "normalization": "standard",
+    
+    "feature_selection": {
+        "methods": ["rf", "mi", "permutation"],
+        "default_method": "rf",
+        "rf_params": {
+            "n_estimators": 100,
+            "max_depth": 10,
+            "random_state": 42,
+            "n_jobs": -1
+        },
+        "coverage_levels": [0.8, 0.9, 0.95, 0.98, 0.99],
+        "importance_thresholds": {
+            "high": 0.05,
+            "medium": 0.01,
+            "low": 0.001
+        },
+        "correlation_threshold": 0.9
+    },
+    
+    "use_gpu_acceleration": true
 }

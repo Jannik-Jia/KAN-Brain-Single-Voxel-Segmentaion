@@ -379,6 +379,70 @@ class DimensionReducer:
             self.logger.warning(f"自定义变换 '{transform_type}' 尚未实现")
         return {'transformed': features}
     
+    def save_selected_features(self, selected_data, train_labels=None, val_labels=None, test_labels=None,
+                        output_path=None):
+        """
+        保存特征选择结果（不进行PCA降维）
+        
+        参数:
+            selected_data: 特征选择结果字典
+            train_labels: 训练集标签
+            val_labels: 验证集标签
+            test_labels: 测试集标签
+            output_path: 输出文件路径
+        """
+        if output_path is None:
+            output_path = os.path.join(self.output_dir, f"rf_selected_features_{self.timestamp}.h5")
+            
+        if self.logger:
+            self.logger.info(f"保存特征选择结果到 {output_path}")
+            
+        try:
+            with h5py.File(output_path, 'w') as f:
+                # 保存元数据
+                f.attrs['timestamp'] = self.timestamp
+                f.attrs['feature_selection_method'] = 'random_forest'
+                
+                # 保存每个特征子集
+                for group_name, group_data in selected_data.items():
+                    # 创建组
+                    group = f.create_group(group_name)
+                    
+                    # 保存选中的特征索引
+                    if 'selected_indices' in group_data:
+                        group.create_dataset('selected_indices', data=group_data['selected_indices'])
+                    
+                    # 保存特征数据
+                    if 'train' in group_data:
+                        train_group = group.create_group('train')
+                        train_group.create_dataset('features', data=group_data['train'])
+                        if train_labels is not None:
+                            train_group.create_dataset('labels', data=train_labels)
+                    
+                    if 'val' in group_data:
+                        val_group = group.create_group('val')
+                        val_group.create_dataset('features', data=group_data['val'])
+                        if val_labels is not None:
+                            val_group.create_dataset('labels', data=val_labels)
+                    
+                    if 'test' in group_data:
+                        test_group = group.create_group('test')
+                        test_group.create_dataset('features', data=group_data['test'])
+                        if test_labels is not None:
+                            test_group.create_dataset('labels', data=test_labels)
+                    
+                    if self.logger:
+                        self.logger.info(f"保存了 {group_name} 组的特征子集")
+            
+            if self.logger:
+                self.logger.info(f"特征选择结果已保存至 {output_path}")
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"保存特征选择结果失败: {e}")
+                
+
+
     def _visualize_pca_results(self, pca_model, explained_variance_ratio, cumulative_variance, 
                             elbow_point, final_dims, feature_group):
         """可视化PCA降维结果，包括肘点和选择的维度标记"""

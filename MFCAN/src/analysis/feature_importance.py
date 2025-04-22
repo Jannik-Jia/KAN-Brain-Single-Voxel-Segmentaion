@@ -13,7 +13,7 @@ import joblib
 class FeatureImportanceAnalyzer:
     """特征重要性分析工具，使用随机森林和互信息评估特征重要性"""
     
-    def __init__(self, config_path=None, output_dir=None, logger=None):
+    def __init__(self, config_path=None, output_dir=None, logger=Non, use_gpu=False):
         """
         初始化特征重要性分析器
         
@@ -48,7 +48,20 @@ class FeatureImportanceAnalyzer:
             'max_depth': 10,
             'random_state': 42,
             'n_jobs': -1
-        })
+        }
+        # 设置GPU加速
+        self.use_gpu = use_gpu
+        if use_gpu:
+            try:
+                import cupy
+                import cuml
+                self.logger.info(f"GPU加速已启用，使用cuML库")
+            except ImportError:
+                self.logger.warning("无法导入GPU库，回退到CPU实现")
+                self.use_gpu = False
+                
+        
+        )
     
     def compute_importance_scores(self, features, labels, feature_names=None, 
                                 method='all', feature_group="all"):
@@ -212,18 +225,98 @@ class FeatureImportanceAnalyzer:
         # 计算每个特征与类别之间的互信息
         mi_scores = mutual_info_classif(features, labels, random_state=42)
         return mi_scores
-    
+        
     def _compute_permutation_importance(self, features, labels):
-        """使用排列重要性计算特征重要性"""
-        # 创建和训练随机森林
-        rf = RandomForestClassifier(**self.rf_params)
-        rf.fit(features, labels)
-        
-        # 计算排列重要性
-        result = permutation_importance(rf, features, labels, n_repeats=10, 
-                                      random_state=42, n_jobs=-1)
-        
-        return result.importances_mean
+        """使用排列重要性计算特征重要性，支持GPU加速"""
+        try:
+            # 尝试使用GPU加速
+            import cupy as cp
+            import cuml
+            from cuml.ensemble import RandomForestClassifier as cuRF
+            
+            self.logger.info("尝试使用GPU计算排列重要性")
+            
+            # 将数据转移到GPU
+            features_gpu = cp.array(features)
+            labels_gpu = cp.array(labels)
+            
+            # 创建并训练GPU上的随机森林模型
+            rf = cuRF(**self.rf_params, output_type='numpy')
+            rf.fit(features_gpu, labels_gpu)
+            
+            # 计算排列重要性
+            n_repeats = 10
+            feature_importances = cp.zeros(features.shape[1])
+            
+            # 基准性能
+            baseline_score = rf.score(features_gpu, labels_gpu)
+            
+            # 分批处理特征以避免内存问题
+            batch_size = min(50, features.shape[1])  # 根据显存大小调整
+            for i in range(0, features.shape[1], batch_size):
+                batch_end = min(i + batch_size, features.shape[1])
+                self.logger.info(f"正在处理特征批次 {i}-{batch_end-1}/{features.shape[1]}")
+                
+                for feat_idx in range(i, batch_end):
+                    # 对于每个特征重复多次
+                    importance = 0.0
+                    for _ in range(n_repeats):
+                        # 创建特征副本
+                        X_permuted = features_gpu.copy()
+                        
+                        # 随机排列当前特征的值
+                        permutation = cp.random.permutation(features_gpu.shape[0])
+                        X_permuted[:, feat_idx] = X_permuted[permutation, feat_idx]
+                        
+                        # 计算排列后的得分
+                        permuted_score = rf.score(X_permuted, labels_gpu)
+                        
+                        # 重要性为基准得分与排列后得分的差异
+                        importance += (baseline_score - permuted_score)
+                    
+                    # 平均重要性
+                    feature_importances[feat_idx] = importance / n_repeats
+            
+            # 转回CPU
+            return feature_importances.get()
+            
+        except (ImportError, Exception) as e:
+            if isinstance(e, ImportError):
+                self.logger.warning(f"无法导入GPU库: {e}，回退到CPU实现")
+            else:
+                self.logger.warning(f"GPU计算失败: {e}，回退到CPU实现")
+            
+            # 回退到CPU实现，但使用更低的n_repeats和批处理以降低内存需求
+            self.logger.info("使用优化的CPU实现计算排列重要性")
+            
+            # 创建和训练随机森林
+            rf = RandomForestClassifier(**self.rf_params)
+            rf.fit(features, labels)
+            
+            # 设置较低的n_repeats值以降低内存需求
+            n_repeats = 5
+            
+            # 使用更小的批量处理特征，一次处理一部分特征
+            feature_importances = np.zeros(features.shape[1])
+            batch_size = 20  # 小批量处理特征
+            
+            for i in range(0, features.shape[1], batch_size):
+                batch_end = min(i + batch_size, features.shape[1])
+                self.logger.info(f"处理特征批次 {i}-{batch_end-1}/{features.shape[1]}")
+                
+                # 为当前批次计算排列重要性
+                result = permutation_importance(
+                    rf, features, labels, 
+                    n_repeats=n_repeats,
+                    random_state=42, 
+                    n_jobs=4,  # 使用更少的进程以减少内存使用
+                    feature_indices=range(i, batch_end)
+                )
+                
+                # 保存结果
+                feature_importances[i:batch_end] = result.importances_mean
+            
+            return feature_importances
     
     def rank_features(self, importance_df=None, feature_group="all"):
         """

@@ -50,8 +50,21 @@ def main():
     parser.add_argument('--data_path', type=str, default='data/processed/feature_groups.h5', help='特征组数据路径')
     parser.add_argument('--analysis_dir', type=str, default=None, help='阶段一分析结果目录，若不指定则使用最新结果')
     parser.add_argument('--output_dir', type=str, default=None, help='输出目录，若不指定则使用配置文件中的设置')
+    parser.add_argument('--skip_pca', type=str, default='false', help='是否跳过PCA降维步骤')
+    parser.add_argument('--feature_selection_method', type=str, default='combined', choices=['rf', 'mi', 'permutation', 'combined'], help='特征选择方法')
+    parser.add_argument('--use_gpu', type=str, default='false', help='是否使用GPU加速计算')
+    parser.add_argument('--skip_umap', type=str, default='false', help='是否跳过UMAP可视化步骤')
+    
     args = parser.parse_args()
     
+    # 解析布尔参数
+    skip_pca = args.skip_pca.lower() == 'true'
+    skip_umap = args.skip_umap.lower() == 'true'
+    feature_selection_method = args.feature_selection_method
+    use_gpu = args.use_gpu.lower() == 'true'
+
+
+
     # 设置时间戳
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -63,6 +76,10 @@ def main():
     logger.info("阶段二：开始特征工程流程")
     logger.info(f"配置文件: {args.config}")
     logger.info(f"数据路径: {args.data_path}")
+    logger.info(f"特征选择方法: {feature_selection_method}")
+    logger.info(f"跳过PCA: {skip_pca}")
+    logger.info(f"使用GPU: {use_gpu}")
+    logger.info(f"跳过UMAP: {skip_umap}")
     
     # 加载配置
     try:
@@ -75,13 +92,13 @@ def main():
     
     # 设置输出目录
     output_dir = args.output_dir or config.get('output_dir', 'results/feature_engineering')
-    output_dir = os.path.join(output_dir, timestamp)
+    output_dir = os.path.join(output_dir, f"{feature_selection_method}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"输出目录: {output_dir}")
     
     # 记录实验开始
     logger_manager.log_experiment_start("阶段二：脑MRI数据特征工程", 
-                                       f"数据文件: {args.data_path}, 时间戳: {timestamp}")
+                                       f"数据文件: {args.data_path}, 时间戳: {timestamp}, 特征选择方法: {feature_selection_method}")
     
     start_time = time.time()
     
@@ -157,12 +174,17 @@ def main():
     logger.info("步骤2: 执行特征重要性分析...")
     try:
         feature_importance_analyzer = FeatureImportanceAnalyzer(
-            config_path=args.config, output_dir=output_dir, logger=logger)
+            config_path=args.config, output_dir=output_dir, logger=logger, use_gpu=use_gpu)
         
-        # 分析全部特征
-        logger.info("分析全部特征的重要性...")
-        importance_scores = feature_importance_analyzer.compute_importance_scores(
-            train_features, train_labels, method='all')
+        # 分析全部特征 - 使用指定的特征选择方法
+        logger.info(f"分析全部特征的重要性 (使用 {feature_selection_method} 方法)...")
+        if feature_selection_method != 'combined':
+            importance_scores = feature_importance_analyzer.compute_importance_scores(
+                train_features, train_labels, method=feature_selection_method)
+        else:
+            importance_scores = feature_importance_analyzer.compute_importance_scores(
+                train_features, train_labels, method='all')
+                
         ranked_features = feature_importance_analyzer.rank_features(importance_scores)
         thresholds = feature_importance_analyzer.generate_importance_thresholds(ranked_features)
         
@@ -173,12 +195,17 @@ def main():
         feature_importance_analyzer.save_results(
             ranked_features, thresholds, output_dir=os.path.join(output_dir, 'importance'), prefix='all')
         
-        # 分析各特征组
+        # 分析各特征组 - 使用指定的特征选择方法
         group_importance_results = {}
         for group_name, group_data in group_features.items():
-            logger.info(f"分析特征组 '{group_name}' 的重要性...")
-            group_importance = feature_importance_analyzer.compute_importance_scores(
-                group_data['train'], train_labels, method='all', feature_group=group_name)
+            logger.info(f"分析特征组 '{group_name}' 的重要性 (使用 {feature_selection_method} 方法)...")
+            if feature_selection_method != 'combined':
+                group_importance = feature_importance_analyzer.compute_importance_scores(
+                    group_data['train'], train_labels, method=feature_selection_method, feature_group=group_name)
+            else:
+                group_importance = feature_importance_analyzer.compute_importance_scores(
+                    group_data['train'], train_labels, method='all', feature_group=group_name)
+                    
             group_ranked = feature_importance_analyzer.rank_features(group_importance)
             group_thresholds = feature_importance_analyzer.generate_importance_thresholds(group_ranked)
             
@@ -278,9 +305,10 @@ def main():
             }
         
         # 保存所选特征集
+        output_filename = f"{feature_selection_method}_selected_features.h5"
         feature_selector.save_feature_subsets(
             all_selected_data, train_labels, val_labels, test_labels,
-            output_path=os.path.join(output_dir, 'selected_features.h5'))
+            output_path=os.path.join(output_dir, output_filename))
         
         # 生成特征选择报告
         feature_selector.generate_summary_report(output_path=os.path.join(output_dir, 'feature_selection_summary.md'))
@@ -292,59 +320,89 @@ def main():
         logger_manager.log_experiment_end("阶段二：脑MRI数据特征工程", 
                                         {"状态": "部分完成", "阶段": "特征选择", "错误": str(e)})
     
-    # 步骤4：降维与特征变换
-    logger.info("步骤4: 执行降维与特征变换...")
-    try:
-        dimension_reducer = DimensionReducer(
-            config_path=args.config, output_dir=output_dir, logger=logger)
-        
-        # 使用PCA降维
-        logger.info("应用PCA降维到全部特征...")
-        pca_features = dimension_reducer.apply_pca(
-            train_features, val_features, test_features, 
-            feature_group='all', variance=0.95)
-        
-        # 使用UMAP降维 (可视化用)
-        logger.info("应用UMAP降维到全部特征 (可视化用)...")
-        umap_features = dimension_reducer.apply_umap(
-            train_features, train_labels, feature_group='all', n_components=2)
-        
-        # 对特征组应用降维
-        group_transformed_features = {}
-        for group_name, group_data in group_features.items():
-            logger.info(f"应用PCA降维到特征组 '{group_name}'...")
-            group_pca = dimension_reducer.apply_pca(
-                group_data['train'], group_data['val'], group_data['test'],
-                feature_group=group_name, variance=0.95)
+    # 步骤4：降维与特征变换 (如果未跳过PCA)
+    if not skip_pca:
+        logger.info("步骤4: 执行降维与特征变换...")
+        try:
+            dimension_reducer = DimensionReducer(
+                config_path=args.config, output_dir=output_dir, logger=logger)
             
-            logger.info(f"应用UMAP降维到特征组 '{group_name}' (可视化用)...")
-            group_umap = dimension_reducer.apply_umap(
-                group_data['train'], train_labels, feature_group=group_name, n_components=2)
+            # 使用PCA降维 (如果未跳过PCA)
+            if not skip_pca:
+                logger.info("应用PCA降维到全部特征...")
+                pca_features = dimension_reducer.apply_pca(
+                    train_features, val_features, test_features, 
+                    feature_group='all', variance=0.95)
+            else:
+                logger.info("根据参数设置跳过PCA降维步骤")
+                pca_features = None
             
-            group_transformed_features[group_name] = {
-                'pca': group_pca,
-                'umap': group_umap
-            }
-        
-        # 保存变换后的特征
-        logger.info("保存变换后的特征...")
-        dimension_reducer.save_transformed_features(
-            pca_features, umap_features, group_transformed_features,
-            train_labels, val_labels, test_labels,
-            output_path=os.path.join(output_dir, 'transformed_features.h5'))
-        
-        # 保存变换器模型
-        dimension_reducer.save_transformers(os.path.join(output_dir, 'transformers'))
-        
-        # 生成降维报告
-        dimension_reducer.generate_summary_report(output_path=os.path.join(output_dir, 'dimensionality_reduction_summary.md'))
-        
-        logger.info("降维与特征变换完成")
-        
-    except Exception as e:
-        logger.error(f"降维与特征变换失败: {e}")
-        logger_manager.log_experiment_end("阶段二：脑MRI数据特征工程", 
-                                        {"状态": "部分完成", "阶段": "降维与特征变换", "错误": str(e)})
+            # 使用UMAP降维 (可视化用) (如果未跳过UMAP)
+            if not skip_umap:
+                logger.info("应用UMAP降维到全部特征 (可视化用)...")
+                umap_features = dimension_reducer.apply_umap(
+                    train_features, train_labels, feature_group='all', n_components=2)
+            else:
+                logger.info("根据参数设置跳过UMAP可视化步骤")
+                umap_features = None
+            
+            # 对特征组应用降维 (如果既不跳过PCA也不跳过UMAP)
+            group_transformed_features = {}
+            if not (skip_pca and skip_umap):
+                for group_name, group_data in group_features.items():
+                    if not skip_pca:
+                        logger.info(f"应用PCA降维到特征组 '{group_name}'...")
+                        group_pca = dimension_reducer.apply_pca(
+                            group_data['train'], group_data['val'], group_data['test'],
+                            feature_group=group_name, variance=0.95)
+                    else:
+                        group_pca = None
+                        
+                    if not skip_umap:
+                        logger.info(f"应用UMAP降维到特征组 '{group_name}' (可视化用)...")
+                        group_umap = dimension_reducer.apply_umap(
+                            group_data['train'], train_labels, feature_group=group_name, n_components=2)
+                    else:
+                        group_umap = None
+                        
+                    if group_pca is not None or group_umap is not None:
+                        group_transformed_features[group_name] = {}
+                        if group_pca is not None:
+                            group_transformed_features[group_name]['pca'] = group_pca
+                        if group_umap is not None:
+                            group_transformed_features[group_name]['umap'] = group_umap
+            
+            # 保存变换后的特征 (如果有)
+            if (pca_features is not None or umap_features is not None) and group_transformed_features:
+                logger.info("保存变换后的特征...")
+                dimension_reducer.save_transformed_features(
+                    pca_features, umap_features, group_transformed_features,
+                    train_labels, val_labels, test_labels,
+                    output_path=os.path.join(output_dir, 'transformed_features.h5'))
+                
+                # 保存变换器模型
+                dimension_reducer.save_transformers(os.path.join(output_dir, 'transformers'))
+                
+                # 生成降维报告
+                dimension_reducer.generate_summary_report(output_path=os.path.join(output_dir, 'dimensionality_reduction_summary.md'))
+                
+                logger.info("降维与特征变换完成")
+            else:
+                logger.info("跳过降维与特征变换结果保存")
+                
+        except Exception as e:
+            logger.error(f"降维与特征变换失败: {e}")
+            logger_manager.log_experiment_end("阶段二：脑MRI数据特征工程", 
+                                            {"状态": "部分完成", "阶段": "降维与特征变换", "错误": str(e)})
+
+
+                                         
+    else:
+        logger.info("根据参数设置跳过PCA降维步骤")
+        # 如果需要，也可以添加一个方法 save_selected_features 到 dimension_reducer 类
+        # 也可以直接使用 feature_selector 的结果
+        pca_features = None
+        group_transformed_features = None
     
     # 生成汇总报告
     logger.info("生成特征工程汇总报告...")
@@ -358,6 +416,7 @@ def main():
         with open(summary_path, 'w') as f:
             f.write("# 脑MRI数据特征工程汇总报告\n\n")
             f.write(f"## 分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"## 特征选择方法: {feature_selection_method}\n\n")
             
             f.write("## 处理概况\n\n")
             f.write(f"- 原始特征数量: {train_features.shape[1]}\n")
@@ -399,11 +458,11 @@ def main():
                     f.write(f"| {group_name} | {original_count} | {selected_count} | {retention_ratio:.1f}% |\n")
                 f.write("\n")
             
-            f.write("## 降维与特征变换\n\n")
-            f.write("详细分析结果请查看 [降维汇总报告](../dimensionality_reduction_summary.md)\n\n")
-            
-            # 添加降维统计
-            if 'pca_features' in locals():
+            # 添加降维统计 (如果未跳过PCA)
+            if not skip_pca and 'pca_features' in locals() and pca_features is not None:
+                f.write("## 降维与特征变换\n\n")
+                f.write("详细分析结果请查看 [降维汇总报告](../dimensionality_reduction_summary.md)\n\n")
+                
                 f.write("### PCA降维统计\n\n")
                 f.write("| 特征集 | 原始维度 | 降维后维度 | 保留方差 |\n")
                 f.write("|--------|----------|------------|----------|\n")
@@ -434,17 +493,19 @@ def main():
             if 'all_selected_data' in locals():
                 all_retention = len(all_selected_data['all']['selected_indices']) / train_features.shape[1] * 100
                 if all_retention < 50:
-                    f.write("1. **特征选择**: 建议使用经过选择的特征子集，可显著减少维度(保留约{:.1f}%的特征)而不损失性能。\n\n".format(all_retention))
+                    f.write(f"1. **特征选择**: 使用{feature_selection_method}方法选择特征可显著减少维度(保留约{all_retention:.1f}%的特征)而不损失性能。\n\n")
                 else:
-                    f.write("1. **特征选择**: 特征选择后仍保留{:.1f}%的特征，可能只能适度提高性能，但有助于模型解释性。\n\n".format(all_retention))
+                    f.write(f"1. **特征选择**: 使用{feature_selection_method}方法选择特征后仍保留{all_retention:.1f}%的特征，可能只能适度提高性能，但有助于模型解释性。\n\n")
             
-            # 2. 降维建议
-            if 'pca_features' in locals():
+            # 2. 降维建议 (如果未跳过PCA)
+            if not skip_pca and 'pca_features' in locals() and pca_features is not None:
                 pca_ratio = pca_features['train'].shape[1] / train_features.shape[1] * 100
                 if pca_ratio < 30:
                     f.write("2. **降维应用**: PCA可将特征维度显著降低至原维度的{:.1f}%，建议在训练中使用，特别是对于深度学习模型。\n\n".format(pca_ratio))
                 else:
                     f.write("2. **降维应用**: PCA降维效果中等(保留约{:.1f}%的维度)，在计算资源受限情况下可考虑使用。\n\n".format(pca_ratio))
+            elif skip_pca:
+                f.write("2. **降维策略**: 本次分析跳过了PCA降维，直接使用{feature_selection_method}方法选择的特征，适合保留非线性关系。\n\n")
             
             # 3. 特征组优先级
             if 'group_importance_results' in locals() and len(group_importance_results) > 1:
@@ -466,9 +527,12 @@ def main():
             
             # 4. 模型训练建议
             f.write("4. **模型训练建议**: 建议在模型训练中采用以下策略：\n")
-            f.write("   - 使用非冗余特征子集训练基线模型\n")
+            f.write(f"   - 使用{feature_selection_method}方法选择并移除冗余的特征子集训练基线模型\n")
             f.write("   - 尝试各特征组单独训练的模型集成\n")
-            f.write("   - 对于深度学习模型，可以先使用PCA降维的特征进行快速测试\n")
+            if not skip_pca:
+                f.write("   - 对于深度学习模型，可以先使用PCA降维的特征进行快速测试\n")
+            else:
+                f.write("   - 对于非线性关系，直接使用特征选择结果而不进行PCA可能保留更多信息\n")
         
         logger.info(f"特征工程汇总报告已保存至: {summary_path}")
         
@@ -486,6 +550,8 @@ def main():
         "处理时间(秒)": processing_time,
         "原始特征数": train_features.shape[1],
         "特征组数": len(group_features),
+        "特征选择方法": feature_selection_method,
+        "跳过PCA": skip_pca,
         "输出目录": output_dir
     }
     
@@ -494,20 +560,27 @@ def main():
         results["selected_features_count"] = len(all_selected_data['all']['selected_indices'])
         results["feature_retention_ratio"] = results["selected_features_count"] / results["原始特征数"] * 100
     
-    # 添加降维结果
-    if 'pca_features' in locals():
+    # 添加降维结果 (如果未跳过PCA)
+    if not skip_pca and 'pca_features' in locals() and pca_features is not None:
         results["pca_dimensions"] = pca_features['train'].shape[1]
         results["pca_dimension_ratio"] = results["pca_dimensions"] / results["原始特征数"] * 100
     
     logger_manager.log_experiment_end("阶段二：脑MRI数据特征工程", results)
     
     # 返回输出路径，方便后续脚本使用
-    return {
+    return_dict = {
         'feature_engineering_output_dir': output_dir,
-        'selected_features_path': os.path.join(output_dir, 'selected_features.h5'),
-        'transformed_features_path': os.path.join(output_dir, 'transformed_features.h5'),
         'timestamp': timestamp
     }
-
+    
+    if 'all_selected_data' in locals():
+        selected_features_filename = f"{feature_selection_method}_selected_features.h5"
+        return_dict['selected_features_path'] = os.path.join(output_dir, selected_features_filename)
+    
+    if not skip_pca and 'pca_features' in locals() and pca_features is not None:
+        return_dict['transformed_features_path'] = os.path.join(output_dir, 'transformed_features.h5')
+    
+    return return_dict
+    
 if __name__ == "__main__":
     main()

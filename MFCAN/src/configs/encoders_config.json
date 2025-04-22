@@ -1,0 +1,21 @@
+{
+    "output_dir": "models/encoders",
+    "num_epochs": 50,
+    "batch_size": 128,
+    "learning_rate": 1e-4,
+    "weight_decay": 1e-5,
+    "early_stopping": 10,
+    "num_classes": 102,
+    
+    "diffusion_hidden_dim": 64,
+    "diffusion_output_dim": 32,
+    "diffusion_dropout": 0.1,
+    
+    "qti_hidden_dims": [512, 256],
+    "qti_output_dim": 128,
+    "qti_dropout": 0.3,
+    
+    "cest_hidden_dim": 256,
+    "cest_output_dim": 128,
+    "cest_dropout": 0.5
+}

@@ -78,12 +78,17 @@ class EncoderTrainer:
         
         self.logger.info(f"初始化 {modality} 编码器预训练器完成")
     
-    def _create_encoder(self):
-        """根据模态创建对应的编码器模型"""
+    def _create_encoder(self, input_dim=None):
+        """根据模态创建对应的编码器模型，可以自动检测输入维度"""
         num_classes = self.config.get('num_classes', 102)
         
+        # 如果外部提供了输入维度，则使用提供的值
+        if input_dim is not None:
+            self.logger.info(f"使用提供的输入维度: {input_dim}")
+        
         if self.modality == 'diffusion':
-            input_dim = self.config.get('diffusion_dim', 15)
+            # 使用配置中的值，如果未提供则使用默认值
+            input_dim = input_dim or self.config.get('diffusion_dim', 15)
             hidden_dim = self.config.get('diffusion_hidden_dim', 64)
             output_dim = self.config.get('diffusion_output_dim', 32)
             dropout = self.config.get('diffusion_dropout', 0.1)
@@ -92,7 +97,7 @@ class EncoderTrainer:
             return DiffusionEncoder(input_dim, hidden_dim, output_dim, dropout)
             
         elif self.modality == 'qti':
-            input_dim = self.config.get('qti_dim', 210)
+            input_dim = input_dim or self.config.get('qti_dim', 210)
             hidden_dims = self.config.get('qti_hidden_dims', [512, 256])
             output_dim = self.config.get('qti_output_dim', 128)
             dropout = self.config.get('qti_dropout', 0.3)
@@ -101,7 +106,7 @@ class EncoderTrainer:
             return QTIEncoder(input_dim, hidden_dims, output_dim, dropout)
             
         elif self.modality == 'cest':
-            input_dim = self.config.get('cest_dim', 116)
+            input_dim = input_dim or self.config.get('cest_dim', 116)
             hidden_dim = self.config.get('cest_hidden_dim', 256)
             output_dim = self.config.get('cest_output_dim', 128)
             dropout = self.config.get('cest_dropout', 0.5)
@@ -114,33 +119,92 @@ class EncoderTrainer:
     
     def load_data(self, data_path):
         """
-        加载特定模态的特征数据
+        加载特定模态的特征数据 - 自动调整特征维度
         
         参数:
             data_path: 数据文件路径
-            
+                
         返回:
             data_loaders: 包含训练集和验证集的数据加载器
         """
         self.logger.info(f"加载 {self.modality} 模态数据: {data_path}")
         
+        # 检查文件是否存在
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"数据文件 {data_path} 不存在")
+        
         try:
             with h5py.File(data_path, 'r') as f:
-                # 尝试不同的数据结构组织
-                if f'grouped/train/{self.modality}/features' in f:
-                    train_features = f[f'grouped/train/{self.modality}/features'][()]
-                    train_labels = f['original/train/labels'][()]
-                    val_features = f[f'grouped/val/{self.modality}/features'][()]
-                    val_labels = f['original/val/labels'][()]
-                elif f'group_{self.modality}/train/features' in f:
-                    train_features = f[f'group_{self.modality}/train/features'][()]
-                    train_labels = f[f'group_{self.modality}/train/labels'][()]
-                    val_features = f[f'group_{self.modality}/val/features'][()]
-                    val_labels = f[f'group_{self.modality}/val/labels'][()]
-                else:
+                # 首先尝试访问所有可能的路径并记录存在的路径
+                possible_paths = [
+                    f'grouped/train/{self.modality}/features',
+                    f'group_{self.modality}/train/features',
+                    f'{self.modality}/train/features',
+                    f'{self.modality}_selected/train/features'
+                ]
+                
+                # 查找特征数据
+                train_features = None
+                for path in possible_paths:
+                    if path in f:
+                        train_features = f[path][()]
+                        train_path = path
+                        val_path = train_path.replace('train', 'val')
+                        if val_path in f:
+                            val_features = f[val_path][()]
+                        else:
+                            raise KeyError(f"在数据文件中未找到验证集路径 {val_path}")
+                        
+                        self.logger.info(f"成功从路径 {train_path} 加载特征数据")
+                        break
+                
+                # 如果没有找到特征数据，抛出错误
+                if train_features is None:
                     raise KeyError(f"在数据文件中未找到 {self.modality} 模态的特征")
                 
+                # 尝试查找对应的标签
+                train_labels_path = None
+                label_candidates = [
+                    'original/train/labels',
+                    f'grouped/train/{self.modality}/labels',
+                    f'group_{self.modality}/train/labels',
+                    f'{self.modality}/train/labels',
+                    'train/labels'
+                ]
+                
+                for path in label_candidates:
+                    if path in f:
+                        train_labels = f[path][()]
+                        train_labels_path = path
+                        val_labels_path = train_labels_path.replace('train', 'val')
+                        if val_labels_path in f:
+                            val_labels = f[val_labels_path][()]
+                        else:
+                            raise KeyError(f"在数据文件中未找到验证集标签路径 {val_labels_path}")
+                        
+                        self.logger.info(f"成功从路径 {train_labels_path} 加载标签数据")
+                        break
+                
+                if train_labels_path is None:
+                    raise KeyError(f"在数据文件中未找到训练标签")
+                    
                 self.logger.info(f"加载数据成功 - 训练集: {train_features.shape}, 验证集: {val_features.shape}")
+                
+                # 获取特征维度并重新创建编码器
+                input_dim = train_features.shape[1]
+                self.logger.info(f"从数据中检测到 {self.modality} 模态特征维度: {input_dim}")
+                
+                # 使用实际维度重新创建编码器
+                self.model = self._create_encoder(input_dim=input_dim)
+                self.model.to(self.device)
+                
+                # 重新初始化优化器 (因为模型参数已更新)
+                self.optimizer = optim.AdamW(
+                    self.model.parameters(), 
+                    lr=self.learning_rate,
+                    weight_decay=self.weight_decay
+                )
+                
         except Exception as e:
             self.logger.error(f"加载数据失败: {e}")
             raise
@@ -149,6 +213,7 @@ class EncoderTrainer:
         if np.min(train_labels) == 1:
             train_labels = train_labels - 1
             val_labels = val_labels - 1
+            self.logger.info("标签已从1开始调整为从0开始")
         
         # 转换为PyTorch张量
         train_features = torch.FloatTensor(train_features)
