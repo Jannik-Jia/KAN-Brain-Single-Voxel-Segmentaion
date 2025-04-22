@@ -257,18 +257,25 @@ class EncoderTrainer:
             model: 训练后的模型
             history: 训练历史
         """
+
         self.logger.info(f"开始训练 {self.modality} 编码器，共 {self.num_epochs} 轮")
         
-        best_val_loss = float('inf')
+        # 改为跟踪最佳F1
+        best_val_f1 = 0.0
         best_epoch = 0
         best_model_path = None
+        
+        # 设置评估间隔
+        eval_interval = max(1, self.num_epochs // 10)  # 默认每10%的轮次评估一次
+        if self.num_epochs <= 10:
+            eval_interval = 1  # 如果总轮次很少，每轮都评估
         
         for epoch in range(self.num_epochs):
             # 训练一个轮次
             train_loss, train_acc = self._train_epoch(data_loaders['train'])
             
             # 验证
-            val_loss, val_acc = self._validate(data_loaders['val'])
+            val_loss, val_acc, val_f1 = self._validate(data_loaders['val'])
             
             # 更新学习率
             self.scheduler.step(val_loss)
@@ -279,41 +286,81 @@ class EncoderTrainer:
             self.history['val_loss'].append(val_loss)
             self.history['train_acc'].append(train_acc)
             self.history['val_acc'].append(val_acc)
+            # 添加F1历史记录
+            if 'val_f1' not in self.history:
+                self.history['val_f1'] = []
+            self.history['val_f1'].append(val_f1)
             self.history['learning_rates'].append(current_lr)
             
-            # 打印进度
+            # 打印进度信息 - 强调宏平均F1
             self.logger.info(f"轮次 {epoch+1}/{self.num_epochs}: "
-                           f"训练损失={train_loss:.4f}, 训练准确率={train_acc:.4f}, "
-                           f"验证损失={val_loss:.4f}, 验证准确率={val_acc:.4f}, "
-                           f"学习率={current_lr:.8f}")
+                            f"训练损失={train_loss:.4f}, 训练准确率={train_acc:.4f}, "
+                            f"验证损失={val_loss:.4f}, 验证准确率={val_acc:.4f}, "
+                            f"验证宏平均F1={val_f1:.4f}, 学习率={current_lr:.8f}")
             
-            # 保存最佳模型
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            # 定期在测试集上评估（如果有测试集）
+            if 'test' in data_loaders and ((epoch + 1) % eval_interval == 0 or epoch == self.num_epochs - 1):
+                self.logger.info(f"在测试集上评估（第 {epoch+1} 轮）...")
+                test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
+                self.logger.info(f"测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
+                
+                # 可以选择将测试指标也添加到历史记录中
+                if 'test_f1' not in self.history:
+                    self.history['test_f1'] = [None] * epoch
+                self.history['test_f1'].append(test_f1)
+            elif 'test' in data_loaders:
+                # 填充空值以保持历史记录长度一致
+                if 'test_f1' in self.history:
+                    self.history['test_f1'].append(None)
+            
+            # 保存最佳模型 - 使用F1作为判断标准
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
                 best_epoch = epoch
                 
                 # 删除之前的最佳模型
                 if best_model_path is not None and os.path.exists(best_model_path):
                     os.remove(best_model_path)
                 
+                # 在最佳模型时评估测试集（如果有）
+                if 'test' in data_loaders:
+                    test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
+                    self.logger.info(f"【新的最佳模型】测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}")
+                
                 # 保存新的最佳模型
                 best_model_path = os.path.join(self.save_dir, f"{self.modality}_encoder_best_epoch_{epoch+1}.pth")
-                torch.save({
+                save_dict = {
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'val_loss': val_loss,
                     'val_acc': val_acc,
-                }, best_model_path)
+                    'val_f1': val_f1,
+                }
                 
-                self.logger.info(f"保存最佳模型: {best_model_path}")
+                # 如果有测试集结果，也保存它们
+                if 'test' in data_loaders:
+                    save_dict.update({
+                        'test_loss': test_loss,
+                        'test_acc': test_acc,
+                        'test_f1': test_f1
+                    })
+                    
+                torch.save(save_dict, best_model_path)
+                
+                self.logger.info(f"已保存最佳模型到第 {epoch+1} 轮，验证集宏平均F1: {val_f1:.4f}")
             
-            # 早停
+            # 早停 - 基于F1
             if epoch - best_epoch >= self.early_stopping:
-                self.logger.info(f"早停: {self.early_stopping} 轮未改善")
+                self.logger.info(f"早停：连续 {self.early_stopping} 轮未提升F1分数，在第 {epoch+1} 轮停止训练")
                 break
         
-        # 可视化训练历史
+        # 训练结束时的总结
+        self.logger.info("训练完成")
+        self.logger.info(f"最佳模型来自第 {best_epoch+1} 轮")
+        self.logger.info(f"最佳验证集宏平均F1: {best_val_f1:.4f}")
+        
+        # 可视化训练历史 - 添加F1曲线
         self._plot_training_history()
         
         # 加载最佳模型
@@ -339,13 +386,17 @@ class EncoderTrainer:
         return self.model, self.history
     
     def _train_epoch(self, train_loader):
-        """训练一个轮次"""
+        """训练一个轮次 - 移除进度条"""
         self.model.train()
         total_loss = 0
         correct = 0
         total = 0
         
-        for inputs, targets in tqdm(train_loader, desc="训练中", leave=False):
+        # 替换进度条为简单的批次计数
+        batch_count = len(train_loader)
+        log_interval = max(1, batch_count // 5)  # 每20%记录一次日志
+        
+        for i, (inputs, targets) in enumerate(train_loader):
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
             # 清除梯度
@@ -364,21 +415,27 @@ class EncoderTrainer:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
+            
+            # 减少日志频率，只在开始、结束和每20%的时候记录
+            if i == 0 or (i+1) % log_interval == 0 or i == batch_count - 1:
+                self.logger.info(f"训练进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
         
         avg_loss = total_loss / total
         accuracy = correct / total
         
         return avg_loss, accuracy
     
+
+    
     def _validate(self, val_loader):
-        """验证模型"""
+        """验证模型 - 移除进度条"""
         self.model.eval()
         total_loss = 0
-        correct = 0
-        total = 0
+        all_targets = []
+        all_predictions = []
         
         with torch.no_grad():
-            for inputs, targets in tqdm(val_loader, desc="验证中", leave=False):
+            for inputs, targets in val_loader:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
                 
                 # 前向传播
@@ -388,20 +445,32 @@ class EncoderTrainer:
                 # 统计
                 total_loss += loss.item() * inputs.size(0)
                 _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                
+                # 收集预测和目标用于计算F1
+                all_targets.extend(targets.cpu().numpy())
+                all_predictions.extend(predicted.cpu().numpy())
         
-        avg_loss = total_loss / total
-        accuracy = correct / total
+        # 计算整体指标
+        all_targets = np.array(all_targets)
+        all_predictions = np.array(all_predictions)
         
-        return avg_loss, accuracy
-    
+        total_samples = len(all_targets)
+        avg_loss = total_loss / total_samples
+        accuracy = np.mean(all_predictions == all_targets)
+        
+        # 计算宏平均F1
+        from sklearn.metrics import f1_score
+        f1_macro = f1_score(all_targets, all_predictions, average='macro')
+        
+        return avg_loss, accuracy, f1_macro
+
+
     def _plot_training_history(self):
-        """可视化训练历史"""
-        plt.figure(figsize=(15, 10))
+        """可视化训练历史 - 添加F1曲线"""
+        plt.figure(figsize=(15, 15))  # 增加图形大小以容纳F1曲线
         
         # Plot loss curve
-        plt.subplot(2, 2, 1)
+        plt.subplot(3, 2, 1)
         plt.plot(self.history['train_loss'], label='Train Loss')
         plt.plot(self.history['val_loss'], label='Val Loss')
         plt.title(f'{self.modality} Encoder Training and Validation Loss')
@@ -411,7 +480,7 @@ class EncoderTrainer:
         plt.grid(True)
         
         # Plot accuracy curve
-        plt.subplot(2, 2, 2)
+        plt.subplot(3, 2, 2)
         plt.plot(self.history['train_acc'], label='Train Accuracy')
         plt.plot(self.history['val_acc'], label='Val Accuracy')
         plt.title(f'{self.modality} Encoder Training and Validation Accuracy')
@@ -420,8 +489,26 @@ class EncoderTrainer:
         plt.legend()
         plt.grid(True)
         
+        # 添加F1曲线
+        if 'val_f1' in self.history:
+            plt.subplot(3, 2, 3)
+            plt.plot(self.history['val_f1'], label='Val Macro F1')
+            if 'test_f1' in self.history:
+                # 过滤掉None值
+                epochs = range(len(self.history['test_f1']))
+                test_f1 = self.history['test_f1']
+                valid_points = [(x, y) for x, y in zip(epochs, test_f1) if y is not None]
+                if valid_points:
+                    x, y = zip(*valid_points)
+                    plt.plot(x, y, 'o-', label='Test Macro F1')
+            plt.title(f'{self.modality} Encoder Validation Macro F1')
+            plt.xlabel('Epoch')
+            plt.ylabel('Macro F1')
+            plt.legend()
+            plt.grid(True)
+        
         # Plot learning rate curve
-        plt.subplot(2, 2, 3)
+        plt.subplot(3, 2, 4)
         plt.plot(self.history['learning_rates'])
         plt.title('Learning Rate')
         plt.xlabel('Epoch')
@@ -434,3 +521,4 @@ class EncoderTrainer:
         plt.close()
         
         self.logger.info(f"保存训练历史图表: {os.path.join(self.save_dir, f'{self.modality}_encoder_training_history.png')}")
+        
