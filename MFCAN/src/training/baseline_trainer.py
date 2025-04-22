@@ -354,6 +354,7 @@ class BaselineTrainer:
         
         return self.history
     
+
     def _train_epoch(self, train_loader):
         """
         训练一个轮次
@@ -371,12 +372,13 @@ class BaselineTrainer:
         all_targets = []
         all_predictions = []
         
-        # 替换tqdm为简单的日志
-        self.logger.info(f"训练批次数: {len(train_loader)}")
+        # 记录批次总数和当前进度
         batch_count = len(train_loader)
         log_interval = max(1, batch_count // 10)  # 每10%记录一次日志
-
-        for inputs, targets in pbar:
+        
+        self.logger.info(f"开始训练，共 {batch_count} 个批次")
+        
+        for i, (inputs, targets) in enumerate(train_loader):
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
             # 添加标签验证和处理
@@ -413,8 +415,7 @@ class BaselineTrainer:
             
             # 减少日志频率，只在开始、结束和每10%的时候记录
             if i == 0 or (i+1) % log_interval == 0 or i == batch_count - 1:
-                self.logger.info(f"训练进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
-        
+                self.logger.info(f"训练进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%), 当前批次损失: {loss.item():.4f}")
         
         # 计算整体指标
         all_targets = np.array(all_targets)
@@ -426,7 +427,8 @@ class BaselineTrainer:
         f1_macro = f1_score(all_targets, all_predictions, average='macro')
         
         return avg_loss, accuracy, f1_macro
-    
+
+
     def _validate(self, val_loader):
         """
         在验证集上评估模型
@@ -444,8 +446,12 @@ class BaselineTrainer:
         all_targets = []
         all_predictions = []
         
+        # 记录批次总数
+        batch_count = len(val_loader)
+        self.logger.debug(f"开始验证，共 {batch_count} 个批次")
+        
         with torch.no_grad():
-            for inputs, targets in val_loader:
+            for i, (inputs, targets) in enumerate(val_loader):
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
                 
                 # 前向传播
@@ -486,8 +492,12 @@ class BaselineTrainer:
         all_predictions = []
         all_probabilities = []
         
+        # 记录批次总数
+        batch_count = len(data_loader)
+        self.logger.info(f"开始评估，共 {batch_count} 个批次")
+        
         with torch.no_grad():
-            for inputs, targets in tqdm(data_loader, desc="Evaluating"):
+            for i, (inputs, targets) in enumerate(data_loader):
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
                 
                 # 前向传播
@@ -499,6 +509,10 @@ class BaselineTrainer:
                 all_targets.extend(targets.cpu().numpy())
                 all_predictions.extend(predicted.cpu().numpy())
                 all_probabilities.extend(probabilities.cpu().numpy())
+                
+                # 可选：记录进度
+                if (i+1) % (max(1, batch_count // 10)) == 0:
+                    self.logger.debug(f"评估进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
         
         # 转换为NumPy数组
         all_targets = np.array(all_targets)
