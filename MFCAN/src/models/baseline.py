@@ -283,90 +283,72 @@ class DeepMLP(nn.Module):
         features = []  # 存储每一层的特征
         
         for i, layer in enumerate(self.layers):
-            if isinstance(layer, ResidualConnection):
-                # 对于残差连接，我们需要确保维度匹配
+            if isinstance(layer, nn.Linear):
+                x = layer(x)
+                features.append(x)  # 只在线性层后记录特征
+                self.logger.debug(f"Layer {i} (Linear): output shape={x.shape}")
+            elif isinstance(layer, ResidualConnection):
+                # 找到上一个特征，确保维度匹配
                 if len(features) > 0:
-                    # 获取前一个特征，这个特征应该与当前层有相同的批量大小
                     prev_feature = features[-1]
-                    
-                    # 打印详细信息
-                    self.logger.info(f"Layer {i} (Residual): x={x.shape}, prev_feature={prev_feature.shape}")
-                    
-                    # 应用残差连接
+                    # 只在调试级别记录详细信息
+                    self.logger.debug(f"Layer {i} (Residual): x={x.shape}, prev_feature={prev_feature.shape}")
                     x = layer(x, prev_feature)
                 else:
                     x = layer(x)
             else:
-                # 对于其他所有层类型
                 x = layer(x)
-                
-                # 如果是线性层，记录其输出
-                if isinstance(layer, nn.Linear):
-                    features.append(x)
-                    self.logger.info(f"Stored feature from layer {i}: {x.shape}")
         
         logits = self.classifier(x)
         return logits
 
 class ResidualConnection(nn.Module):
-    """残差连接模块"""
+    # 类级别的缓存字典，用于存储投影层
+    projection_cache = {}
     
     def __init__(self, dim, input_dim=None):
-        """
-        初始化残差连接
-        
-        参数:
-            dim: 输出维度
-            input_dim: 输入维度，如果与输出维度不同需要投影
-        """
         super(ResidualConnection, self).__init__()
         
-        # 初始化logger
-        log_manager = Logger("ResidualConnection", log_dir="logs/models")
-        self.logger = log_manager.get_logger()
+        # 使用单例模式或共享日志实例
+        global residual_logger
+        if 'residual_logger' not in globals():
+            log_manager = Logger("ResidualConnection", log_dir="logs/models")
+            residual_logger = log_manager.get_logger()
+        self.logger = residual_logger
         
+        # 只在必要时创建投影层
         self.needs_projection = input_dim is not None and input_dim != dim
-        
         if self.needs_projection:
             self.projection = nn.Linear(input_dim, dim)
             self.logger.info(f"Created projection from {input_dim} to {dim}")
-            
-    def forward(self, x, residual=None):
-        """
-        前向传播
         
-        参数:
-            x: 当前特征
-            residual: 残差特征，默认为None（使用x作为残差）
-        """
+    def forward(self, x, residual=None):
         if residual is None:
             residual = x
         
-        self.logger.info(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
+        # 仅在调试级别记录形状信息
+        self.logger.debug(f"ResidualConnection: x shape={x.shape}, residual shape={residual.shape}")
         
         # 判断是否需要投影
         if self.needs_projection:
-            # 检查维度是否匹配
-            out_features = self.projection.weight.size(0)  # 输出特征维度
-            in_features = self.projection.weight.size(1)   # 输入特征维度
+            # 记录更少的日志，只在debug级别显示
+            self.logger.debug(f"Applying projection: {residual.size(-1)} -> {x.size(-1)}")
+            residual = self.projection(residual)
+        elif x.size(-1) != residual.size(-1):
+            # 创建缓存键 - 从输入维度到输出维度
+            cache_key = f"{residual.size(-1)}_{x.size(-1)}"
             
-            # 记录详细日志
-            self.logger.info(f"Projection weight shape: ({out_features}, {in_features})")
-            self.logger.info(f"Residual feature shape: {residual.shape}")
+            # 如果缓存中没有这个维度的投影层，则创建并缓存
+            if cache_key not in ResidualConnection.projection_cache:
+                self.logger.warning(f"Creating and caching projection: {residual.size(-1)} -> {x.size(-1)}")
+                ResidualConnection.projection_cache[cache_key] = nn.Linear(
+                    residual.size(-1), x.size(-1)).to(x.device)
             
-            if residual.size(-1) != in_features:
-                # 如果输入维度不匹配，使用适当尺寸的线性层
-                self.logger.warning(f"Input feature mismatch, creating new projection: {residual.size(-1)} -> {x.size(-1)}")
-                
-                # 创建一个新的投影层，直接从输入维度到输出维度
-                temp_projection = nn.Linear(residual.size(-1), x.size(-1)).to(x.device)
-                residual = temp_projection(residual)
-            else:
-                # 正常执行投影
-                residual = self.projection(residual)
+            # 使用缓存的投影层
+            temp_projection = ResidualConnection.projection_cache[cache_key]
+            residual = temp_projection(residual)
         
         return x + residual
-
 
 class SelfAttention(nn.Module):
     """多头自注意力模块"""
