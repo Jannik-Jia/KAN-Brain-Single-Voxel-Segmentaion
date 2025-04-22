@@ -330,7 +330,7 @@ class ResidualConnection(nn.Module):
         if self.needs_projection:
             self.projection = nn.Linear(input_dim, dim)
             self.logger.info(f"Created projection from {input_dim} to {dim}")
-
+            
     def forward(self, x, residual=None):
         """
         前向传播
@@ -346,13 +346,31 @@ class ResidualConnection(nn.Module):
         if self.needs_projection:
             self.logger.info(f"Applying projection: input={residual.shape}, projection weight shape={self.projection.weight.shape}")
             try:
+                # 检查维度是否匹配
+                in_features = self.projection.weight.size(1)  # 输入特征维度
+                out_features = self.projection.weight.size(0)  # 输出特征维度
+                
+                # 如果residual的最后一维不等于输入特征维度，则交换投影矩阵的维度
+                if residual.size(-1) != in_features and residual.size(-1) == out_features:
+                    self.logger.warning(f"Input feature dimension ({residual.size(-1)}) matches output dimension, transposing weight matrix")
+                    # 创建新的投影层，权重矩阵为原投影矩阵的转置
+                    new_projection = nn.Linear(out_features, in_features, bias=self.projection.bias is not None)
+                    with torch.no_grad():
+                        new_projection.weight.copy_(self.projection.weight.t())
+                        if self.projection.bias is not None:
+                            new_projection.bias.copy_(self.projection.bias)
+                    # 替换原投影层
+                    self.projection = new_projection
+                    self.logger.info(f"New projection weight shape: {self.projection.weight.shape}")
+                
+                # 执行投影
                 residual = self.projection(residual)
                 self.logger.info(f"After projection: residual shape={residual.shape}")
             except Exception as e:
                 self.logger.error(f"Error during projection: {e}")
                 self.logger.error(f"Detailed projection info - weight: {self.projection.weight.shape}, input: {residual.shape}")
                 raise
-            
+                
         return x + residual
 
 
