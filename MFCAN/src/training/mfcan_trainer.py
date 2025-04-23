@@ -14,6 +14,7 @@ import logging
 import sys
 from torch.cuda import amp
 import math
+import torch.nn.functional as F
 
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
