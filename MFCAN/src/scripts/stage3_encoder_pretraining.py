@@ -174,16 +174,18 @@ def main():
             model, history = encoder_trainer.train(data_loaders)
             
             # 记录训练结果
-
             results[modality] = {
                 'final_train_loss': history['train_loss'][-1],
                 'final_val_loss': history['val_loss'][-1],
                 'final_train_acc': history['train_acc'][-1],
                 'final_val_acc': history['val_acc'][-1],
+                'final_train_f1': history['train_f1'][-1],  # 添加final_train_f1
+                'best_train_f1': max(history['train_f1']),  # 添加best_train_f1
                 'best_val_acc': max(history['val_acc']),
-                'best_val_f1': max(history['val_f1']),  # 直接使用val_f1
+                'best_val_f1': max(history['val_f1']),
                 'epochs_trained': len(history['train_loss'])
             }
+                        
 
             # 获取主要评估指标
             primary_metric = modality_config.get('evaluation', {}).get('primary_metric', 'f1_macro')
@@ -294,17 +296,22 @@ def generate_summary_report(output_dir, results, modalities, training_time, logg
                 f.write(f"* 训练失败的模态: {', '.join(failed_modalities)}\n")
             f.write("\n")
             
+
             f.write("## 预训练结果\n\n")
-            f.write("| 模态 | 训练轮次 | 最佳验证准确率 | 最佳宏平均F1 | 最终训练损失 | 最终验证损失 |\n")
-            f.write("|------|---------|--------------|------------|------------|------------|\n")
+            f.write("| 模态 | 训练轮次 | 最佳验证准确率 | 最佳验证F1 | 最佳训练F1 | 最终训练损失 | 最终验证损失 |\n")
+            f.write("|------|---------|--------------|------------|------------|------------|------------|\n")
+
+
             
             for modality, result in results.items():
                 if 'status' in result and result['status'] == 'failed':
                     f.write(f"| {modality} | 失败 | - | - | - | - |\n")
                 else:
                     f.write(f"| {modality} | {result['epochs_trained']} | {result['best_val_acc']:.4f} | " 
-                           f"{result.get('best_val_f1', 0):.4f} | "
-                           f"{result['final_train_loss']:.4f} | {result['final_val_loss']:.4f} |\n")
+                            f"{result.get('best_val_f1', 0):.4f} | "
+                            f"{result.get('best_train_f1', 0):.4f} | "  # 添加最佳训练F1
+                            f"{result['final_train_loss']:.4f} | {result['final_val_loss']:.4f} |\n")
+                    
             
             f.write("\n## 编码器结构\n\n")
             f.write("每个编码器被预训练用于从特定模态特征中提取有意义的表示，具有以下结构:\n\n")

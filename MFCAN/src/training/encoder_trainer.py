@@ -89,12 +89,253 @@ class EncoderTrainer:
             'val_loss': [],
             'train_acc': [],
             'val_acc': [],
-            'val_f1': [],  # 添加F1历史记录
+            'train_f1': [],  # 添加训练F1历史记录
+            'val_f1': [],
             'learning_rates': []
         }
         
         self.logger.info(f"初始化 {modality} 编码器预训练器完成")
 
+    def _train_epoch(self, train_loader):
+        """训练一个轮次 - 移除进度条，并添加计算训练集F1"""
+        self.model.train()
+        total_loss = 0
+        correct = 0
+        total = 0
+        all_predictions = []  # 添加收集预测
+        all_targets = []      # 添加收集目标
+        
+        # 替换进度条为简单的批次计数
+        batch_count = len(train_loader)
+        log_interval = max(1, batch_count // 5)  # 每20%记录一次日志
+        
+        for i, (inputs, targets) in enumerate(train_loader):
+            inputs, targets = inputs.to(self.device), targets.to(self.device)
+            
+            # 清除梯度
+            self.optimizer.zero_grad()
+            
+            # 前向传播
+            outputs = self.model(inputs)
+            loss = self.criterion(outputs, targets)
+            
+            # 反向传播和优化
+            loss.backward()
+            self.optimizer.step()
+            
+            # 统计
+            total_loss += loss.item() * inputs.size(0)
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+            
+            # 收集预测和目标用于计算F1
+            all_predictions.extend(predicted.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+            
+            # 减少日志频率，只在开始、结束和每20%的时候记录
+            if i == 0 or (i+1) % log_interval == 0 or i == batch_count - 1:
+                self.logger.info(f"训练进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
+        
+        avg_loss = total_loss / total
+        accuracy = correct / total
+        
+        # 计算训练集F1分数
+        f1 = f1_score(all_targets, all_predictions, average='macro', zero_division=0)
+        
+        return avg_loss, accuracy, f1
+
+    def train(self, data_loaders):
+        """
+        训练编码器
+        
+        参数:
+            data_loaders: 包含训练集和验证集的数据加载器
+                
+        返回:
+            model: 训练后的模型
+            history: 训练历史
+        """
+        # 引入ModelIO工具类
+        from utils.model_io import ModelIO
+        model_io = ModelIO(logger=self.logger)
+
+        self.logger.info(f"开始训练 {self.modality} 编码器，共 {self.num_epochs} 轮")
+        
+        # 改为跟踪最佳F1
+        best_val_f1 = 0.0
+        best_epoch = 0
+        best_model_path = None
+        
+        eval_interval = self.eval_interval
+        
+        for epoch in range(self.num_epochs):
+            # 训练一个轮次
+            train_loss, train_acc, train_f1 = self._train_epoch(data_loaders['train'])
+            
+            # 验证 - 只使用验证集
+            val_loss, val_acc, val_f1 = self._validate(data_loaders['val'])
+            
+            # 更新学习率
+            self.scheduler.step(val_loss)
+            current_lr = self.optimizer.param_groups[0]['lr']
+            
+            # 记录历史
+            self.history['train_loss'].append(train_loss)
+            self.history['val_loss'].append(val_loss)
+            self.history['train_acc'].append(train_acc)
+            self.history['val_acc'].append(val_acc)
+            self.history['train_f1'].append(train_f1)  # 记录训练F1
+            self.history['val_f1'].append(val_f1)
+            self.history['learning_rates'].append(current_lr)
+            
+            # 打印进度信息 - 同时显示训练和验证的宏平均F1
+            self.logger.info(f"轮次 {epoch+1}/{self.num_epochs}: "
+                            f"训练损失={train_loss:.4f}, 训练准确率={train_acc:.4f}, 训练宏平均F1={train_f1:.4f}, "
+                            f"验证损失={val_loss:.4f}, 验证准确率={val_acc:.4f}, "
+                            f"验证宏平均F1={val_f1:.4f}, 学习率={current_lr:.8f}")
+            
+            # 保存最佳模型 - 使用F1作为判断标准
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
+                best_epoch = epoch
+                
+                # 删除之前的最佳模型文件（如果存在）
+                if best_model_path is not None:
+                    for ext in ['', '.ckpt', '.full']:
+                        path = best_model_path + ext
+                        if os.path.exists(path):
+                            os.remove(path)
+                    # 也删除配置文件
+                    config_path = best_model_path.replace('.pth', '_config.json')
+                    if os.path.exists(config_path):
+                        os.remove(config_path)
+                
+                # 保存新的最佳模型
+                best_model_path = os.path.join(self.save_dir, f"{self.modality}_encoder_best_epoch_{epoch+1}.pth")
+                
+                # 准备元数据
+                metadata = {
+                    'epoch': epoch,
+                    'train_loss': train_loss,
+                    'train_acc': train_acc,
+                    'train_f1': train_f1,  # 添加训练F1到元数据
+                    'val_loss': val_loss,
+                    'val_acc': val_acc,
+                    'val_f1': val_f1,
+                    'learning_rate': current_lr,
+                    'date_saved': time.strftime('%Y-%m-%d %H:%M:%S')
+                }
+                
+                # 使用ModelIO保存模型
+                model_io.save_encoder(self.model, best_model_path, self.modality, self.config, metadata)
+                
+                self.logger.info(f"已保存最佳模型到第 {epoch+1} 轮，验证集宏平均F1: {val_f1:.4f}")
+            
+            # 早停 - 基于F1
+            if epoch - best_epoch >= self.early_stopping:
+                self.logger.info(f"早停：连续 {self.early_stopping} 轮未提升F1分数，在第 {epoch+1} 轮停止训练")
+                break
+        
+        # 训练结束时的总结
+        self.logger.info("训练完成")
+        self.logger.info(f"最佳模型来自第 {best_epoch+1} 轮")
+        self.logger.info(f"最佳验证集宏平均F1: {best_val_f1:.4f}")
+        
+        # 可视化训练历史 - 更新以包含训练F1曲线
+        self._plot_training_history()
+        
+        # 加载最佳模型
+        if best_model_path is not None:
+            try:
+                # 使用ModelIO加载模型
+                loaded_model, config = model_io.load_encoder(best_model_path, device=self.device)
+                if loaded_model is not None:
+                    self.model = loaded_model
+                    self.logger.info(f"加载最佳模型 (轮次 {config.get('epoch', '?')+1})")
+                else:
+                    self.logger.warning("无法加载最佳模型，将使用当前模型")
+            except Exception as e:
+                self.logger.error(f"加载最佳模型失败: {e}")
+                self.logger.warning("将使用最后一轮的模型状态")
+        
+        # 保存最终模型
+        final_model_path = os.path.join(self.save_dir, f"{self.modality}_encoder_final.pth")
+        metadata = {
+            'total_epochs': self.num_epochs,
+            'best_epoch': best_epoch,
+            'best_val_f1': best_val_f1,
+            'date_saved': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'is_final_model': True
+        }
+        model_io.save_encoder(self.model, final_model_path, self.modality, self.config, metadata)
+        self.logger.info(f"保存最终模型: {final_model_path}")
+        
+        # 如果有测试集，在训练完成后使用最佳模型进行一次性评估
+        if 'test' in data_loaders:
+            self.logger.info("使用最佳模型在测试集上进行最终评估...")
+            test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
+            self.logger.info(f"测试集最终性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
+            
+            # 更新元数据并再次保存最终模型
+            metadata.update({
+                'test_loss': test_loss,
+                'test_acc': test_acc,
+                'test_f1': test_f1
+            })
+            model_io.save_encoder(self.model, final_model_path, self.modality, self.config, metadata)
+            self.logger.info(f"更新包含测试结果的最终模型: {final_model_path}")
+        
+        return self.model, self.history
+
+    def _plot_training_history(self):
+        """可视化训练历史 - 更新以包含训练F1曲线"""
+        plt.figure(figsize=(15, 12))
+        
+        # Plot loss curve
+        plt.subplot(3, 2, 1)
+        plt.plot(self.history['train_loss'], label='Train Loss')
+        plt.plot(self.history['val_loss'], label='Val Loss')
+        plt.title(f'{self.modality} Encoder Training and Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        
+        # Plot accuracy curve
+        plt.subplot(3, 2, 2)
+        plt.plot(self.history['train_acc'], label='Train Accuracy')
+        plt.plot(self.history['val_acc'], label='Val Accuracy')
+        plt.title(f'{self.modality} Encoder Training and Validation Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        plt.grid(True)
+        
+        # Plot F1 curve - 更新为同时显示训练和验证F1
+        plt.subplot(3, 2, 3)
+        plt.plot(self.history['train_f1'], label='Train F1')  # 添加训练F1曲线
+        plt.plot(self.history['val_f1'], label='Val F1')
+        plt.title(f'{self.modality} Encoder F1 Scores')
+        plt.xlabel('Epoch')
+        plt.ylabel('F1 Score')
+        plt.legend()
+        plt.grid(True)
+        
+        # Plot learning rate curve
+        plt.subplot(3, 2, 4)
+        plt.plot(self.history['learning_rates'])
+        plt.title('Learning Rate')
+        plt.xlabel('Epoch')
+        plt.ylabel('Learning Rate')
+        plt.grid(True)
+        
+        # Save figure
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_dir, f"{self.modality}_encoder_training_history.png"))
+        plt.close()
+        
+        self.logger.info(f"保存训练历史图表: {os.path.join(self.save_dir, f'{self.modality}_encoder_training_history.png')}")
 
     def _create_encoder(self, input_dim=None):
         """根据模态创建对应的编码器模型，可以自动检测输入维度"""
@@ -265,191 +506,6 @@ class EncoderTrainer:
         }
         
 
-
-    def train(self, data_loaders):
-        """
-        训练编码器
-        
-        参数:
-            data_loaders: 包含训练集和验证集的数据加载器
-                
-        返回:
-            model: 训练后的模型
-            history: 训练历史
-        """
-        # 引入ModelIO工具类
-        from utils.model_io import ModelIO
-        model_io = ModelIO(logger=self.logger)
-
-        self.logger.info(f"开始训练 {self.modality} 编码器，共 {self.num_epochs} 轮")
-        
-        # 改为跟踪最佳F1
-        best_val_f1 = 0.0
-        best_epoch = 0
-        best_model_path = None
-        
-        eval_interval = self.eval_interval
-        
-        for epoch in range(self.num_epochs):
-            # 训练一个轮次
-            train_loss, train_acc = self._train_epoch(data_loaders['train'])
-            
-            # 验证 - 只使用验证集
-            val_loss, val_acc, val_f1 = self._validate(data_loaders['val'])
-            
-            # 更新学习率
-            self.scheduler.step(val_loss)
-            current_lr = self.optimizer.param_groups[0]['lr']
-            
-            # 记录历史
-            self.history['train_loss'].append(train_loss)
-            self.history['val_loss'].append(val_loss)
-            self.history['train_acc'].append(train_acc)
-            self.history['val_acc'].append(val_acc)
-            self.history['val_f1'].append(val_f1)
-            self.history['learning_rates'].append(current_lr)
-            
-            # 打印进度信息 - 强调宏平均F1
-            self.logger.info(f"轮次 {epoch+1}/{self.num_epochs}: "
-                            f"训练损失={train_loss:.4f}, 训练准确率={train_acc:.4f}, "
-                            f"验证损失={val_loss:.4f}, 验证准确率={val_acc:.4f}, "
-                            f"验证宏平均F1={val_f1:.4f}, 学习率={current_lr:.8f}")
-            
-            # 保存最佳模型 - 使用F1作为判断标准
-            if val_f1 > best_val_f1:
-                best_val_f1 = val_f1
-                best_epoch = epoch
-                
-                # 删除之前的最佳模型文件（如果存在）
-                if best_model_path is not None:
-                    for ext in ['', '.ckpt', '.full']:
-                        path = best_model_path + ext
-                        if os.path.exists(path):
-                            os.remove(path)
-                    # 也删除配置文件
-                    config_path = best_model_path.replace('.pth', '_config.json')
-                    if os.path.exists(config_path):
-                        os.remove(config_path)
-                
-                # 保存新的最佳模型
-                best_model_path = os.path.join(self.save_dir, f"{self.modality}_encoder_best_epoch_{epoch+1}.pth")
-                
-                # 准备元数据
-                metadata = {
-                    'epoch': epoch,
-                    'train_loss': train_loss,
-                    'train_acc': train_acc,
-                    'val_loss': val_loss,
-                    'val_acc': val_acc,
-                    'val_f1': val_f1,
-                    'learning_rate': current_lr,
-                    'date_saved': time.strftime('%Y-%m-%d %H:%M:%S')
-                }
-                
-                # 使用ModelIO保存模型
-                model_io.save_encoder(self.model, best_model_path, self.modality, self.config, metadata)
-                
-                self.logger.info(f"已保存最佳模型到第 {epoch+1} 轮，验证集宏平均F1: {val_f1:.4f}")
-            
-            # 早停 - 基于F1
-            if epoch - best_epoch >= self.early_stopping:
-                self.logger.info(f"早停：连续 {self.early_stopping} 轮未提升F1分数，在第 {epoch+1} 轮停止训练")
-                break
-        
-        # 训练结束时的总结
-        self.logger.info("训练完成")
-        self.logger.info(f"最佳模型来自第 {best_epoch+1} 轮")
-        self.logger.info(f"最佳验证集宏平均F1: {best_val_f1:.4f}")
-        
-        # 可视化训练历史 - 添加F1曲线
-        self._plot_training_history()
-        
-        # 加载最佳模型
-        if best_model_path is not None:
-            try:
-                # 使用ModelIO加载模型
-                loaded_model, config = model_io.load_encoder(best_model_path, device=self.device)
-                if loaded_model is not None:
-                    self.model = loaded_model
-                    self.logger.info(f"加载最佳模型 (轮次 {config.get('epoch', '?')+1})")
-                else:
-                    self.logger.warning("无法加载最佳模型，将使用当前模型")
-            except Exception as e:
-                self.logger.error(f"加载最佳模型失败: {e}")
-                self.logger.warning("将使用最后一轮的模型状态")
-        
-        # 保存最终模型
-        final_model_path = os.path.join(self.save_dir, f"{self.modality}_encoder_final.pth")
-        metadata = {
-            'total_epochs': self.num_epochs,
-            'best_epoch': best_epoch,
-            'best_val_f1': best_val_f1,
-            'date_saved': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'is_final_model': True
-        }
-        model_io.save_encoder(self.model, final_model_path, self.modality, self.config, metadata)
-        self.logger.info(f"保存最终模型: {final_model_path}")
-        
-        # 如果有测试集，在训练完成后使用最佳模型进行一次性评估
-        if 'test' in data_loaders:
-            self.logger.info("使用最佳模型在测试集上进行最终评估...")
-            test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
-            self.logger.info(f"测试集最终性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
-            
-            # 更新元数据并再次保存最终模型
-            metadata.update({
-                'test_loss': test_loss,
-                'test_acc': test_acc,
-                'test_f1': test_f1
-            })
-            model_io.save_encoder(self.model, final_model_path, self.modality, self.config, metadata)
-            self.logger.info(f"更新包含测试结果的最终模型: {final_model_path}")
-        
-        return self.model, self.history
-
-    
-    def _train_epoch(self, train_loader):
-        """训练一个轮次 - 移除进度条"""
-        self.model.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-        
-        # 替换进度条为简单的批次计数
-        batch_count = len(train_loader)
-        log_interval = max(1, batch_count // 5)  # 每20%记录一次日志
-        
-        for i, (inputs, targets) in enumerate(train_loader):
-            inputs, targets = inputs.to(self.device), targets.to(self.device)
-            
-            # 清除梯度
-            self.optimizer.zero_grad()
-            
-            # 前向传播
-            outputs = self.model(inputs)
-            loss = self.criterion(outputs, targets)
-            
-            # 反向传播和优化
-            loss.backward()
-            self.optimizer.step()
-            
-            # 统计
-            total_loss += loss.item() * inputs.size(0)
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-            
-            # 减少日志频率，只在开始、结束和每20%的时候记录
-            if i == 0 or (i+1) % log_interval == 0 or i == batch_count - 1:
-                self.logger.info(f"训练进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
-        
-        avg_loss = total_loss / total
-        accuracy = correct / total
-        
-        return avg_loss, accuracy
-
-
-
     def _validate(self, data_loader):
         """验证模型并计算F1分数 - 使用日志代替进度条"""
         self.model.eval()
@@ -493,51 +549,3 @@ class EncoderTrainer:
         f1 = f1_score(all_targets, all_predictions, average='macro', zero_division=0)
         
         return avg_loss, accuracy, f1
-
-    def _plot_training_history(self):
-        """可视化训练历史"""
-        plt.figure(figsize=(15, 12))
-        
-        # Plot loss curve
-        plt.subplot(3, 2, 1)
-        plt.plot(self.history['train_loss'], label='Train Loss')
-        plt.plot(self.history['val_loss'], label='Val Loss')
-        plt.title(f'{self.modality} Encoder Training and Validation Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.legend()
-        plt.grid(True)
-        
-        # Plot accuracy curve
-        plt.subplot(3, 2, 2)
-        plt.plot(self.history['train_acc'], label='Train Accuracy')
-        plt.plot(self.history['val_acc'], label='Val Accuracy')
-        plt.title(f'{self.modality} Encoder Training and Validation Accuracy')
-        plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        plt.grid(True)
-        
-        # Plot F1 curve
-        plt.subplot(3, 2, 3)
-        plt.plot(self.history['val_f1'], label='Val F1')
-        plt.title(f'{self.modality} Encoder Validation F1 Score')
-        plt.xlabel('Epoch')
-        plt.ylabel('F1 Score')
-        plt.legend()
-        plt.grid(True)
-        
-        # Plot learning rate curve
-        plt.subplot(3, 2, 4)
-        plt.plot(self.history['learning_rates'])
-        plt.title('Learning Rate')
-        plt.xlabel('Epoch')
-        plt.ylabel('Learning Rate')
-        plt.grid(True)
-        
-        # Save figure
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, f"{self.modality}_encoder_training_history.png"))
-        plt.close()
-        
-        self.logger.info(f"保存训练历史图表: {os.path.join(self.save_dir, f'{self.modality}_encoder_training_history.png')}")
