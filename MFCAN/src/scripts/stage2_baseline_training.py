@@ -480,6 +480,7 @@ def main():
     print(f"Model structure:\n{model}")
     print(f"Input shape: {train_features.shape}")
     print(f"Expected first layer input: {model.layers[0].in_features if hasattr(model.layers[0], 'in_features') else 'Unknown'}")
+    
     # 步骤3：训练模型
     logger.info("步骤3: 训练模型...")
     try:
@@ -587,6 +588,7 @@ def main():
 
             # 从history中获取测试集指标
             test_metrics = history['test_metrics']
+            metrics = test_metrics
 
             # 修改日志输出，突出显示宏平均F1分数
             logger.info(f"训练完成 - 测试集宏平均F1分数: {test_metrics['f1_macro']:.4f}, 测试集准确率: {test_metrics['accuracy']:.4f}, 测试集加权F1分数: {test_metrics['f1_weighted']:.4f}")
