@@ -174,26 +174,27 @@ def main():
             model, history = encoder_trainer.train(data_loaders)
             
             # 记录训练结果
+
             results[modality] = {
                 'final_train_loss': history['train_loss'][-1],
                 'final_val_loss': history['val_loss'][-1],
                 'final_train_acc': history['train_acc'][-1],
                 'final_val_acc': history['val_acc'][-1],
                 'best_val_acc': max(history['val_acc']),
+                'best_val_f1': max(history['val_f1']),  # 直接使用val_f1
                 'epochs_trained': len(history['train_loss'])
             }
-            
-            # 添加F1分数（如果存在）
-            if 'val_f1' in history:
-                results[modality]['best_val_f1'] = max(history['val_f1'])
-            
+
             # 获取主要评估指标
             primary_metric = modality_config.get('evaluation', {}).get('primary_metric', 'f1_macro')
-            primary_metric_key = f'best_val_{primary_metric.split("_")[-1]}' if primary_metric.startswith('f1_') else f'best_val_{primary_metric}'
-            primary_value = results[modality].get(primary_metric_key, results[modality]['best_val_acc'])
-            
+            if primary_metric.startswith('f1_'):
+                primary_value = results[modality]['best_val_f1']
+            else:
+                primary_value = results[modality]['best_val_acc']
+
             logger.info(f"{modality} 编码器预训练完成 - 验证准确率: {results[modality]['best_val_acc']:.4f}, 主要指标({primary_metric}): {primary_value:.4f}")
-            
+
+
         except Exception as e:
             logger.error(f"{modality} 编码器预训练失败: {e}")
             logger.error(traceback.format_exc())

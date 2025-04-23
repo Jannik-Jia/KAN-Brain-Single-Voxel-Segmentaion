@@ -264,13 +264,15 @@ class EncoderTrainer:
             'val': val_loader
         }
         
+
+
     def train(self, data_loaders):
         """
         训练编码器
         
         参数:
             data_loaders: 包含训练集和验证集的数据加载器
-            
+                
         返回:
             model: 训练后的模型
             history: 训练历史
@@ -292,7 +294,7 @@ class EncoderTrainer:
             # 训练一个轮次
             train_loss, train_acc = self._train_epoch(data_loaders['train'])
             
-            # 验证
+            # 验证 - 只使用验证集
             val_loss, val_acc, val_f1 = self._validate(data_loaders['val'])
             
             # 更新学习率
@@ -304,9 +306,6 @@ class EncoderTrainer:
             self.history['val_loss'].append(val_loss)
             self.history['train_acc'].append(train_acc)
             self.history['val_acc'].append(val_acc)
-            # 添加F1历史记录
-            if 'val_f1' not in self.history:
-                self.history['val_f1'] = []
             self.history['val_f1'].append(val_f1)
             self.history['learning_rates'].append(current_lr)
             
@@ -315,27 +314,6 @@ class EncoderTrainer:
                             f"训练损失={train_loss:.4f}, 训练准确率={train_acc:.4f}, "
                             f"验证损失={val_loss:.4f}, 验证准确率={val_acc:.4f}, "
                             f"验证宏平均F1={val_f1:.4f}, 学习率={current_lr:.8f}")
-            
-            # 定期在测试集上评估（如果有测试集）
-            test_metrics = {}
-            if 'test' in data_loaders and ((epoch + 1) % eval_interval == 0 or epoch == self.num_epochs - 1):
-                self.logger.info(f"在测试集上评估（第 {epoch+1} 轮）...")
-                test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
-                test_metrics = {
-                    'test_loss': test_loss,
-                    'test_acc': test_acc,
-                    'test_f1': test_f1
-                }
-                self.logger.info(f"测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
-                
-                # 可以选择将测试指标也添加到历史记录中
-                if 'test_f1' not in self.history:
-                    self.history['test_f1'] = [None] * epoch
-                self.history['test_f1'].append(test_f1)
-            elif 'test' in data_loaders:
-                # 填充空值以保持历史记录长度一致
-                if 'test_f1' in self.history:
-                    self.history['test_f1'].append(None)
             
             # 保存最佳模型 - 使用F1作为判断标准
             if val_f1 > best_val_f1:
@@ -353,16 +331,6 @@ class EncoderTrainer:
                     if os.path.exists(config_path):
                         os.remove(config_path)
                 
-                # 在最佳模型时评估测试集（如果有）
-                if 'test' in data_loaders and not test_metrics:
-                    test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
-                    test_metrics = {
-                        'test_loss': test_loss,
-                        'test_acc': test_acc,
-                        'test_f1': test_f1
-                    }
-                    self.logger.info(f"【新的最佳模型】测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}")
-                
                 # 保存新的最佳模型
                 best_model_path = os.path.join(self.save_dir, f"{self.modality}_encoder_best_epoch_{epoch+1}.pth")
                 
@@ -377,10 +345,6 @@ class EncoderTrainer:
                     'learning_rate': current_lr,
                     'date_saved': time.strftime('%Y-%m-%d %H:%M:%S')
                 }
-                
-                # 添加测试集指标（如果有）
-                if test_metrics:
-                    metadata.update(test_metrics)
                 
                 # 使用ModelIO保存模型
                 model_io.save_encoder(self.model, best_model_path, self.modality, self.config, metadata)
@@ -426,7 +390,23 @@ class EncoderTrainer:
         model_io.save_encoder(self.model, final_model_path, self.modality, self.config, metadata)
         self.logger.info(f"保存最终模型: {final_model_path}")
         
+        # 如果有测试集，在训练完成后使用最佳模型进行一次性评估
+        if 'test' in data_loaders:
+            self.logger.info("使用最佳模型在测试集上进行最终评估...")
+            test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
+            self.logger.info(f"测试集最终性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
+            
+            # 更新元数据并再次保存最终模型
+            metadata.update({
+                'test_loss': test_loss,
+                'test_acc': test_acc,
+                'test_f1': test_f1
+            })
+            model_io.save_encoder(self.model, final_model_path, self.modality, self.config, metadata)
+            self.logger.info(f"更新包含测试结果的最终模型: {final_model_path}")
+        
         return self.model, self.history
+
     
     def _train_epoch(self, train_loader):
         """训练一个轮次 - 移除进度条"""
@@ -467,11 +447,11 @@ class EncoderTrainer:
         accuracy = correct / total
         
         return avg_loss, accuracy
-    
 
-    
+
+
     def _validate(self, data_loader):
-        """验证模型并计算F1分数"""
+        """验证模型并计算F1分数 - 使用日志代替进度条"""
         self.model.eval()
         total_loss = 0
         correct = 0
@@ -479,8 +459,12 @@ class EncoderTrainer:
         all_predictions = []
         all_targets = []
         
+        # 替换进度条为简单的批次计数
+        batch_count = len(data_loader)
+        log_interval = max(1, batch_count // 5)  # 每20%记录一次日志
+        
         with torch.no_grad():
-            for inputs, targets in tqdm(data_loader, desc="验证中", leave=False):
+            for i, (inputs, targets) in enumerate(data_loader):
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
                 
                 # 前向传播
@@ -496,6 +480,10 @@ class EncoderTrainer:
                 # 收集预测和真实标签用于计算F1分数
                 all_predictions.extend(predicted.cpu().numpy())
                 all_targets.extend(targets.cpu().numpy())
+                
+                # 减少日志频率，只在开始、结束和每20%的时候记录
+                if i == 0 or (i+1) % log_interval == 0 or i == batch_count - 1:
+                    self.logger.info(f"验证进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
         
         # 计算准确率和损失
         avg_loss = total_loss / total
@@ -505,7 +493,6 @@ class EncoderTrainer:
         f1 = f1_score(all_targets, all_predictions, average='macro', zero_division=0)
         
         return avg_loss, accuracy, f1
-
 
     def _plot_training_history(self):
         """可视化训练历史"""
@@ -533,13 +520,7 @@ class EncoderTrainer:
         
         # Plot F1 curve
         plt.subplot(3, 2, 3)
-        plt.plot(self.history.get('val_f1', []), label='Val F1')
-        if 'test_f1' in self.history:
-            # 过滤掉None值
-            epochs = range(len(self.history['test_f1']))
-            test_f1 = [f1 for f1 in self.history['test_f1'] if f1 is not None]
-            epochs_with_test = [e for e, f1 in zip(epochs, self.history['test_f1']) if f1 is not None]
-            plt.plot(epochs_with_test, test_f1, 'o-', label='Test F1')
+        plt.plot(self.history['val_f1'], label='Val F1')
         plt.title(f'{self.modality} Encoder Validation F1 Score')
         plt.xlabel('Epoch')
         plt.ylabel('F1 Score')
