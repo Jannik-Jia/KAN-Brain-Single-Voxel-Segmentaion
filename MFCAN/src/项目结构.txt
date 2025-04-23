@@ -114,3 +114,32 @@ group_evaluator.py - 特征组评估工具
 base_config.json - 基础配置
 baseline_config.json - 基线模型配置
 data_config.json - 数据配置
+
+
+
+
+
+
+
+
+stage4
+已完成的文件:
+
+模型组件:
+
+models/attention/class_conditioned_attention.py - 类别条件注意力机制
+models/fusion/cross_modal_fusion.py - 交叉模态融合层
+models/classifiers/classification_head.py - 分类头
+models/mfcan.py - 完整的MFCAN模型架构
+
+
+训练功能:
+
+training/mfcan_trainer.py - MFCAN训练器，实现了完整的训练流程
+loss/mfcan_loss.py - 多任务损失函数和类别平衡损失
+
+
+配置和脚本:
+
+configs/mfcan_config.json - 所有参数的配置文件
+scripts/train_mfcan.py - 训练入口脚本

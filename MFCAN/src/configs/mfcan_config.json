@@ -1,0 +1,60 @@
+{
+    "diffusion_encoder": {
+        "input_dim": 15,
+        "hidden_dim": 64,
+        "output_dim": 32,
+        "dropout": 0.1
+    },
+    "qti_encoder": {
+        "input_dim": 210,
+        "hidden_dims": [512, 256],
+        "output_dim": 128,
+        "dropout": 0.3
+    },
+    "cest_encoder": {
+        "input_dim": 116,
+        "hidden_dim": 256,
+        "output_dim": 128,
+        "dropout": 0.5
+    },
+    "attention": {
+        "feature_dim": 320,
+        "num_classes": 102
+    },
+    "fusion": {
+        "modal_dims": [32, 128, 128],
+        "fusion_dim": 384
+    },
+    "main_classifier": {
+        "input_dim": 384,
+        "hidden_dim": 512,
+        "num_classes": 102
+    },
+    "pretrained_encoders": {
+        "diffusion": "models/encoders/20250423_094758/20250423_094806/diffusion/diffusion_encoder_final.pth",
+        "qti": "models/encoders/20250423_094758/20250423_094806/qti/qti_encoder_final.pth",
+        "cest": "models/encoders/20250423_094758/20250423_094806/cest/cest_encoder_final.pth"
+    },
+    "training": {
+        "initial_lr": 1e-4,
+        "finetune_lr": 5e-5,
+        "aux_loss_weight": 0.3,
+        "weight_decay": 1e-4,
+        "dropout": 0.4,
+        "batch_size": 256,
+        "num_epochs": 100,
+        "pretrain_epochs": 30,
+        "finetune_epochs": 70,
+        "early_stopping": 10
+    },
+
+    "loss": {
+    "aux_weight": 0.3,
+    "attn_reg_weight": 0.01,
+    "class_balance_method": "effective_samples",
+    "focal_gamma": 2.0,
+    "cb_beta": 0.9999
+    },
+
+    "save_dir": "results/mfcan"
+}
