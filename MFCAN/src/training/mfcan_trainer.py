@@ -1050,8 +1050,10 @@ class MFCANTrainer:
                     num_classes = self.model.auxiliary_classifiers['diffusion'].classifier[-1].out_features
                     votes = torch.zeros(batch_size, num_classes, device=self.device)
                     for preds in aux_predictions:
-                        votes.scatter_add_(1, preds.unsqueeze(1), torch.ones_like(preds, device=self.device).unsqueeze(1))
-                    
+                        votes = votes.to(torch.float)
+                        index_tensor = preds.unsqueeze(1).to(torch.long)  # 索引必须是整数类型
+                        value_tensor = torch.ones_like(preds, dtype=torch.float, device=self.device).unsqueeze(1)
+                        votes.scatter_add_(1, index_tensor, value_tensor)
                     # 找出得票最多的类别
                     max_votes, modal_votes = torch.max(votes, dim=1)
                     
