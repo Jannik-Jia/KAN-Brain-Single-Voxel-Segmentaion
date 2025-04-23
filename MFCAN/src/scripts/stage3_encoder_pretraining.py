@@ -19,7 +19,6 @@ sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from training.encoder_trainer import EncoderTrainer
 from utils.logging_utils import Logger
-from utils.model_io import ModelIO
 
 def main():
     """编码器预训练主函数 - 增强版"""
@@ -31,8 +30,6 @@ def main():
                        help='要训练的特征模态，"all"表示全部模态')
     parser.add_argument('--output_dir', type=str, default=None, help='输出目录，若不指定则使用配置文件中的设置')
     parser.add_argument('--continue_training', action='store_true', help='是否在训练失败后继续训练其他模态')
-    # 添加加载预训练模型的参数
-    parser.add_argument('--pretrained_model', type=str, default=None, help='预训练模型路径，用于继续训练')
     args = parser.parse_args()
     
     # 检查文件是否存在
@@ -57,18 +54,6 @@ def main():
     logger.info(f"数据路径: {args.data_path}")
     logger.info(f"模态: {args.modality}")
     
-    # 加载配置
-    try:
-        with open(args.config, 'r') as f:
-            config = json.load(f)
-        logger.info("成功加载配置文件")
-    except Exception as e:
-        logger.error(f"加载配置文件失败: {e}")
-        return
-    
-    # 初始化ModelIO工具 - 传递配置信息
-    model_io = ModelIO(logger=logger, config=config)
-    
     # 分析数据文件，获取可用的模态
     try:
         available_modalities = analyze_data_file(args.data_path, logger)
@@ -86,6 +71,15 @@ def main():
             modalities = [args.modality]  # 仍然使用请求的模态
         else:
             modalities = [args.modality]
+    
+    # 加载配置
+    try:
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+        logger.info("成功加载配置文件")
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}")
+        return
     
     # 设置输出目录
     base_output_dir = args.output_dir or config.get('output_dir', 'models/encoders')
@@ -128,44 +122,12 @@ def main():
             json.dump(modality_config, f, indent=4)
         
         try:
-            # 创建编码器训练器 - 使用模态特定配置
+            # 创建编码器训练器
             encoder_trainer = EncoderTrainer(
                 modality=modality,
                 config_path=modality_config_path,
                 logger=logger
             )
-            
-            # 如果提供了预训练模型，则加载它
-            if args.pretrained_model:
-                pretrained_model_path = args.pretrained_model
-                # 检查是否为模态特定路径，否则构建通用路径
-                if modality not in pretrained_model_path:
-                    pretrained_model_path = os.path.join(
-                        os.path.dirname(pretrained_model_path), 
-                        f"{modality}_encoder_final.pth"
-                    )
-                
-                if os.path.exists(pretrained_model_path) or os.path.exists(pretrained_model_path + ".ckpt") or os.path.exists(pretrained_model_path + ".full"):
-                    logger.info(f"尝试加载预训练模型: {pretrained_model_path}")
-                    try:
-                        # 使用当前模态配置创建专用的ModelIO实例
-                        modality_model_io = ModelIO(logger=logger, config=modality_config)
-                        # 使用ModelIO加载模型
-                        loaded_model, loaded_config = modality_model_io.load_encoder(pretrained_model_path, device=encoder_trainer.device)
-                        if loaded_model is not None:
-                            # 更新编码器模型
-                            encoder_trainer.model = loaded_model
-                            logger.info(f"成功加载预训练模型: {pretrained_model_path}")
-                            # 可选：记录加载的配置信息
-                            if loaded_config:
-                                logger.info(f"加载的模型配置: {loaded_config}")
-                        else:
-                            logger.warning(f"无法加载预训练模型，将使用随机初始化的模型")
-                    except Exception as e:
-                        logger.error(f"加载预训练模型失败: {e}")
-                        logger.warning("将使用随机初始化的模型")
-                else:
-                    logger.warning(f"预训练模型文件不存在: {pretrained_model_path}")
             
             # 加载数据
             data_loaders = encoder_trainer.load_data(args.data_path)
@@ -183,16 +145,7 @@ def main():
                 'epochs_trained': len(history['train_loss'])
             }
             
-            # 添加F1分数（如果存在）
-            if 'val_f1' in history:
-                results[modality]['best_val_f1'] = max(history['val_f1'])
-            
-            # 获取主要评估指标
-            primary_metric = modality_config.get('evaluation', {}).get('primary_metric', 'f1_macro')
-            primary_metric_key = f'best_val_{primary_metric.split("_")[-1]}' if primary_metric.startswith('f1_') else f'best_val_{primary_metric}'
-            primary_value = results[modality].get(primary_metric_key, results[modality]['best_val_acc'])
-            
-            logger.info(f"{modality} 编码器预训练完成 - 验证准确率: {results[modality]['best_val_acc']:.4f}, 主要指标({primary_metric}): {primary_value:.4f}")
+            logger.info(f"{modality} 编码器预训练完成 - 验证准确率: {results[modality]['best_val_acc']:.4f}")
             
         except Exception as e:
             logger.error(f"{modality} 编码器预训练失败: {e}")
@@ -220,7 +173,6 @@ def main():
     for modality, result in results.items():
         if 'status' not in result:
             results_summary[f"{modality}_准确率"] = result['best_val_acc']
-            results_summary[f"{modality}_F1"] = result.get('best_val_f1', 0)
     
     logger_manager.log_experiment_end(experiment_name, results_summary)
     
@@ -231,7 +183,6 @@ def main():
         'results': results,
         'timestamp': timestamp
     }
-
 
 def analyze_data_file(data_path, logger):
     """分析数据文件，获取可用的模态"""
@@ -294,15 +245,14 @@ def generate_summary_report(output_dir, results, modalities, training_time, logg
             f.write("\n")
             
             f.write("## 预训练结果\n\n")
-            f.write("| 模态 | 训练轮次 | 最佳验证准确率 | 最佳宏平均F1 | 最终训练损失 | 最终验证损失 |\n")
-            f.write("|------|---------|--------------|------------|------------|------------|\n")
+            f.write("| 模态 | 训练轮次 | 最佳验证准确率 | 最终训练损失 | 最终验证损失 |\n")
+            f.write("|------|---------|--------------|------------|------------|\n")
             
             for modality, result in results.items():
                 if 'status' in result and result['status'] == 'failed':
-                    f.write(f"| {modality} | 失败 | - | - | - | - |\n")
+                    f.write(f"| {modality} | 失败 | - | - | - |\n")
                 else:
-                    f.write(f"| {modality} | {result['epochs_trained']} | {result['best_val_acc']:.4f} | " 
-                           f"{result.get('best_val_f1', 0):.4f} | "
+                    f.write(f"| {modality} | {result['epochs_trained']} | {result['best_val_acc']:.4f} | "
                            f"{result['final_train_loss']:.4f} | {result['final_val_loss']:.4f} |\n")
             
             f.write("\n## 编码器结构\n\n")
