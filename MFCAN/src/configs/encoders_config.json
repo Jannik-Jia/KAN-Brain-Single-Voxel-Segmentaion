@@ -7,15 +7,31 @@
     "early_stopping": 10,
     "num_classes": 102,
     
+    "diffusion_dim": 15,
     "diffusion_hidden_dim": 64,
     "diffusion_output_dim": 32,
     "diffusion_dropout": 0.1,
     
+    "qti_dim": 210,
     "qti_hidden_dims": [512, 256],
     "qti_output_dim": 128,
     "qti_dropout": 0.3,
     
+    "cest_dim": 116,
     "cest_hidden_dim": 256,
     "cest_output_dim": 128,
-    "cest_dropout": 0.5
+    "cest_dropout": 0.5,
+    
+    "model_io": {
+        "save_full_model": true,
+        "save_checkpoint": true,
+        "save_weights_only": true,
+        "version_compatible": true
+    },
+    
+    "evaluation": {
+        "metrics": ["accuracy", "f1_macro"],
+        "primary_metric": "f1_macro",
+        "eval_interval": 5
+    }
 }
