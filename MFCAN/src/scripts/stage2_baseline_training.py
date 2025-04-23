@@ -65,6 +65,85 @@ def load_h5_data(file_path):
     print_dict_structure(data_dict)
     return data_dict
 
+
+
+# 修改train_baseline_model函数，添加更明确的日志说明训练和测试过程
+def train_baseline_model(model, data_path, output_dir, config):
+    """
+    训练基线模型
+    
+    参数:
+        model: 待训练的模型
+        data_path: 数据文件路径
+        output_dir: 输出目录
+        config: 配置字典
+    
+    返回:
+        训练好的模型和性能指标
+    """
+    logger.info(f"开始训练基线模型: {model.__class__.__name__}")
+    logger.info(f"使用数据: {data_path}")
+    
+    # 初始化训练器
+    trainer = BaselineTrainer(model, config_path=args.config, device=device)
+    
+    # 准备数据
+    data_loaders = trainer.prepare_data(data_path)
+    
+    # 训练模型
+    logger.info("=" * 60)
+    logger.info("开始模型训练（仅使用训练集和验证集）...")
+    logger.info("模型将在训练完成后，仅使用测试集进行一次最终评估")
+    logger.info("=" * 60)
+    
+    history = trainer.train(data_loaders)
+    
+    # 训练结束，记录性能指标
+    if 'test_metrics' in history:
+        test_metrics = history['test_metrics']
+        logger.info("=" * 60)
+        logger.info("【最终测试集评估结果】")
+        logger.info("-" * 60)
+        logger.info(f"宏平均F1: {test_metrics['f1_macro']:.4f}  (主要评估指标)")
+        logger.info(f"准确率: {test_metrics['accuracy']:.4f}")
+        logger.info(f"加权平均F1: {test_metrics['f1_weighted']:.4f}")
+        
+        if 'top_k_accuracies' in test_metrics:
+            for k, acc in test_metrics['top_k_accuracies'].items():
+                logger.info(f"{k}: {acc:.4f}")
+                
+        logger.info("=" * 60)
+        
+        # 保存性能摘要
+        performance_summary = {
+            'model_type': model.__class__.__name__,
+            'accuracy': float(test_metrics['accuracy']),
+            'f1_macro': float(test_metrics['f1_macro']),
+            'f1_weighted': float(test_metrics['f1_weighted']),
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        # 将Top-K准确率添加到摘要
+        if 'top_k_accuracies' in test_metrics:
+            for k, acc in test_metrics['top_k_accuracies'].items():
+                performance_summary[k] = float(acc)
+        
+        # 保存性能摘要
+        with open(os.path.join(output_dir, 'performance_summary.json'), 'w') as f:
+            json.dump(performance_summary, f, indent=4)
+            
+        logger.info(f"性能摘要已保存至 {os.path.join(output_dir, 'performance_summary.json')}")
+        
+        # 提供关于如何查看详细评估结果的指导
+        logger.info("\n【提示】详细的评估报告和可视化位于:")
+        logger.info(f"  - 评估报告: {os.path.join(output_dir, 'evaluation', 'evaluation_report.md')}")
+        logger.info(f"  - 性能图表: {os.path.join(output_dir, 'evaluation', 'class_performance.png')}")
+        logger.info(f"  - 混淆矩阵: {os.path.join(output_dir, 'evaluation', 'confusion_matrix_top_classes.png')}")
+    else:
+        logger.warning("训练结束，但未找到测试集评估结果。请检查训练过程。")
+    
+    return model, history
+
 def main():
     """基线模型训练主函数"""
     # 解析命令行参数
@@ -689,18 +768,19 @@ def main():
     if args.feature_type != 'original':
         logger.info("步骤4: 评估特征工程有效性...")
         try:
-            # 创建评估结果总结
+
             evaluation_summary = {
                 "model_type": args.model_type,
                 "feature_type": args.feature_type,
                 "feature_selection": args.feature_selection,
                 "feature_subset": args.feature_subset,
+                "f1_macro": float(metrics['f1_macro']),  # 将宏平均F1放在前面，强调其重要性
                 "accuracy": float(metrics['accuracy']),
                 "f1_weighted": float(metrics['f1_weighted']),
-                "f1_macro": float(metrics.get('f1_macro', 0)),
                 "params_count": total_params,
                 "feature_dims": train_features.shape[1]
             }
+
             
             # 保存评估结果
             summary_path = os.path.join(output_dir, 'evaluation_summary.json')
@@ -708,7 +788,7 @@ def main():
                 json.dump(evaluation_summary, f, indent=4)
                 
             logger.info(f"特征工程评估摘要已保存至 {summary_path}")
-            
+
             # 创建可读性报告
             report_path = os.path.join(output_dir, 'feature_effectiveness_report.md')
             with open(report_path, 'w') as f:
@@ -721,13 +801,14 @@ def main():
                 f.write(f"分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 
                 f.write("## 模型性能\n\n")
-                f.write(f"- 宏平均F1分数: {metrics['f1_macro']:.4f}\n")
-                f.write(f"- 加权F1分数: {metrics['f1_weighted']:.4f}\n")
+                f.write(f"- **宏平均F1分数**: {metrics['f1_macro']:.4f} (主要评估指标)\n")
                 f.write(f"- 准确率: {metrics['accuracy']:.4f}\n")
+                f.write(f"- 加权F1分数: {metrics['f1_weighted']:.4f}\n")
                 f.write(f"- 特征维度: {train_features.shape[1]}\n")
                 f.write(f"- 模型参数数量: {total_params:,}\n\n")
                 
                 f.write("## 特征有效性分析\n\n")
+
                 
                 if args.feature_type == 'selected':
                     # 特征选择有效性分析

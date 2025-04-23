@@ -57,7 +57,7 @@ class BaselineTrainer:
         self.optimizer = self._create_optimizer()
         self.scheduler = None  # 将在prepare_data后初始化，因为可能需要知道数据集大小
         
-        # 记录训练历史
+        # 记录训练历史 - 移除测试集相关的历史记录项
         self.history = {
             'train_loss': [],
             'val_loss': [],
@@ -65,13 +65,17 @@ class BaselineTrainer:
             'val_acc': [],
             'train_f1_macro': [],
             'val_f1_macro': [],
-            # 添加测试集指标记录
-            'test_loss': [],
-            'test_acc': [],
-            'test_f1_macro': [],
             'learning_rates': []
+            # 测试集指标将在最终评估后添加为单一条目，而不是每个epoch都记录
         }
-    
+        
+        # 训练状态
+        self.best_val_f1 = 0.0
+        self.best_epoch = -1
+        self.best_model_path = None
+        
+        self.logger.info(f"BaselineTrainer初始化完成，模型将保存在 {self.save_dir}")
+        
     def _create_optimizer(self):
         """创建优化器"""
         if self.optimizer_type.lower() == 'adam':
@@ -219,6 +223,7 @@ class BaselineTrainer:
         weights = weights / weights.sum() * len(weights)
         
         return weights
+
     
     def train(self, data_loaders):
         """
@@ -240,12 +245,6 @@ class BaselineTrainer:
         best_val_f1 = 0.0  # 初始化为最小值，因为我们想要最大化F1
         best_epoch = 0
         best_model_path = None
-        best_test_f1 = 0.0  # 记录最佳测试集性能
-        
-        # 设置评估间隔
-        eval_interval = max(1, self.num_epochs // 10)  # 默认每10%的轮次评估一次
-        if self.num_epochs <= 10:
-            eval_interval = 1  # 如果总轮次很少，每轮都评估
         
         for epoch in range(self.num_epochs):
             # 训练一个轮次
@@ -274,28 +273,6 @@ class BaselineTrainer:
             self.history['train_f1_macro'].append(train_f1)
             self.history['val_f1_macro'].append(val_f1)
             
-            # 定期在测试集上评估
-            if (epoch + 1) % eval_interval == 0 or epoch == self.num_epochs - 1:
-                self.logger.info(f"在测试集上评估（第 {epoch+1} 轮）...")
-                test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
-                self.logger.info(f"测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}, 损失: {test_loss:.4f}")
-                
-                # 如果您想保存测试集指标历史
-                if 'test_loss' not in self.history:
-                    self.history['test_loss'] = [None] * epoch
-                    self.history['test_acc'] = [None] * epoch
-                    self.history['test_f1_macro'] = [None] * epoch
-                
-                self.history['test_loss'].append(test_loss)
-                self.history['test_acc'].append(test_acc)
-                self.history['test_f1_macro'].append(test_f1)
-            else:
-                # 填充空值保持历史记录长度一致
-                if 'test_loss' in self.history:
-                    self.history['test_loss'].append(None)
-                    self.history['test_acc'].append(None)
-                    self.history['test_f1_macro'].append(None)
-            
             # 打印进度 - 强调宏平均F1
             self.logger.info(f"第 {epoch+1}/{self.num_epochs} 轮 - "
                             f"训练: 宏平均F1={train_f1:.4f}, 准确率={train_acc:.4f}, 损失={train_loss:.4f}, "
@@ -306,11 +283,6 @@ class BaselineTrainer:
             if val_f1 > best_val_f1:
                 best_val_f1 = val_f1
                 best_epoch = epoch
-                
-                # 在最佳验证集性能时评估测试集
-                test_loss, test_acc, test_f1 = self._validate(data_loaders['test'])
-                self.logger.info(f"【新的最佳模型】测试集性能 - 宏平均F1: {test_f1:.4f}, 准确率: {test_acc:.4f}")
-                best_test_f1 = test_f1  # 记录最佳测试集性能
                 
                 # 删除之前的最佳模型
                 if best_model_path is not None and os.path.exists(best_model_path):
@@ -324,10 +296,7 @@ class BaselineTrainer:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'val_loss': val_loss,
                     'val_acc': val_acc,
-                    'val_f1_macro': val_f1,
-                    'test_f1_macro': test_f1,
-                    'test_acc': test_acc,
-                    'test_loss': test_loss
+                    'val_f1_macro': val_f1
                 }, best_model_path)
                 
                 self.logger.info(f"已保存最佳模型到第 {epoch+1} 轮，验证集宏平均F1: {val_f1:.4f}")
@@ -341,7 +310,6 @@ class BaselineTrainer:
         self.logger.info("训练完成")
         self.logger.info(f"最佳模型来自第 {best_epoch+1} 轮")
         self.logger.info(f"最佳验证集宏平均F1: {best_val_f1:.4f}")
-        self.logger.info(f"最佳模型测试集宏平均F1: {best_test_f1:.4f}")
         
         # 可视化训练历史
         self._plot_training_history()
@@ -352,8 +320,18 @@ class BaselineTrainer:
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.logger.info(f"已加载最佳模型（第 {best_epoch+1} 轮）")
         
+        # 在最佳模型上进行测试集评估
+        self.logger.info("在测试集上进行最终评估...")
+        test_metrics = self.evaluate(data_loaders['test'])
+        
+        # 记录测试集性能
+        self.logger.info(f"测试集性能 - 宏平均F1: {test_metrics['f1_macro']:.4f}, 准确率: {test_metrics['accuracy']:.4f}")
+        
+        # 将测试集指标添加到历史记录中
+        self.history['test_metrics'] = test_metrics
+        
         return self.history
-    
+
 
     def _train_epoch(self, train_loader):
         """
@@ -477,6 +455,7 @@ class BaselineTrainer:
         
         return avg_loss, accuracy, f1_macro
     
+
     def evaluate(self, data_loader):
         """
         在测试集上全面评估模型
@@ -491,10 +470,11 @@ class BaselineTrainer:
         all_targets = []
         all_predictions = []
         all_probabilities = []
+        total_loss = 0
         
         # 记录批次总数
         batch_count = len(data_loader)
-        self.logger.info(f"开始评估，共 {batch_count} 个批次")
+        self.logger.info(f"开始最终评估，共 {batch_count} 个批次")
         
         with torch.no_grad():
             for i, (inputs, targets) in enumerate(data_loader):
@@ -502,6 +482,9 @@ class BaselineTrainer:
                 
                 # 前向传播
                 outputs = self.model(inputs)
+                loss = self.criterion(outputs, targets)
+                total_loss += loss.item() * inputs.size(0)
+                
                 probabilities = torch.softmax(outputs, dim=1)
                 
                 # 收集预测结果
@@ -510,16 +493,19 @@ class BaselineTrainer:
                 all_predictions.extend(predicted.cpu().numpy())
                 all_probabilities.extend(probabilities.cpu().numpy())
                 
-                # 可选：记录进度
-                if (i+1) % (max(1, batch_count // 10)) == 0:
-                    self.logger.debug(f"评估进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
+                # 记录进度
+                if (i+1) % max(1, batch_count // 5) == 0:
+                    self.logger.info(f"评估进度: {i+1}/{batch_count} 批次 ({(i+1)/batch_count*100:.1f}%)")
         
         # 转换为NumPy数组
         all_targets = np.array(all_targets)
         all_predictions = np.array(all_predictions)
         all_probabilities = np.array(all_probabilities)
         
-        # 计算指标
+        # 计算损失
+        avg_loss = total_loss / len(all_targets)
+        
+        # 计算性能指标
         accuracy = accuracy_score(all_targets, all_predictions)
         f1_macro = f1_score(all_targets, all_predictions, average='macro')
         f1_weighted = f1_score(all_targets, all_predictions, average='weighted')
@@ -529,36 +515,77 @@ class BaselineTrainer:
         unique_classes = np.unique(np.concatenate([all_targets, all_predictions]))
         num_classes = len(unique_classes)
         
-        # 类别别名 - 修改这里，确保类别名称数量与实际类别数量一致
-        class_names = [f"Class {i}" for i in range(np.max(unique_classes) + 1)]
+        # 类别别名
+        class_names = [f"Class {i}" for i in range(num_classes)]
         
-        # 明确指定标签参数
+        # 计算每个类别的精确率、召回率、F1分数
         classification_rep = classification_report(
             all_targets, 
             all_predictions, 
-            labels=range(len(class_names)),  # 显式指定标签范围
+            labels=range(num_classes),
             target_names=class_names, 
-            output_dict=True
+            output_dict=True,
+            zero_division=0
         )
         
-        # 可视化混淆矩阵(只显示部分类别，避免过于复杂)
-        self._plot_confusion_matrix(conf_matrix, class_names[:10], "Top 10 Classes Confusion Matrix")
+        # 计算每个类别的准确率
+        class_accuracies = {}
+        for i in range(num_classes):
+            if i in unique_classes:
+                # 计算第i类的准确率
+                mask = (all_targets == i)
+                if np.sum(mask) > 0:  # 确保有这个类别的样本
+                    class_accuracies[f"Class {i}"] = accuracy_score(
+                        all_targets[mask] == i, 
+                        all_predictions[mask] == i
+                    )
+                else:
+                    class_accuracies[f"Class {i}"] = 0.0
         
-        # 返回评估指标
+        # 可视化混淆矩阵
+        self._plot_confusion_matrix(conf_matrix, class_names[:min(20, num_classes)], "Confusion Matrix")
+        
+        # 计算前k个准确率（如果有概率输出）
+        top_k_accuracies = {}
+        if len(all_probabilities) > 0:
+            for k in [1, 3, 5]:
+                if k <= num_classes:
+                    # 获取前k个预测
+                    top_k_indices = np.argsort(-all_probabilities, axis=1)[:, :k]
+                    # 计算每个样本的真实标签是否在前k个预测中
+                    top_k_correct = [target in predictions for target, predictions in zip(all_targets, top_k_indices)]
+                    top_k_accuracies[f"top_{k}_accuracy"] = np.mean(top_k_correct)
+        
+        # 返回完整的评估指标
         metrics = {
+            'loss': avg_loss,
             'accuracy': accuracy,
             'f1_macro': f1_macro,
             'f1_weighted': f1_weighted,
             'confusion_matrix': conf_matrix,
-            'classification_report': classification_rep
+            'classification_report': classification_rep,
+            'class_accuracies': class_accuracies,
+            'top_k_accuracies': top_k_accuracies
         }
         
         # 保存评估结果
         self._save_evaluation_results(metrics)
         
+        # 打印主要指标
+        self.logger.info("=" * 50)
+        self.logger.info("最终测试集评估结果:")
+        self.logger.info(f"损失: {avg_loss:.4f}")
+        self.logger.info(f"准确率: {accuracy:.4f}")
+        self.logger.info(f"宏平均F1: {f1_macro:.4f}")
+        self.logger.info(f"加权平均F1: {f1_weighted:.4f}")
+        if top_k_accuracies:
+            for k, acc in top_k_accuracies.items():
+                self.logger.info(f"{k}: {acc:.4f}")
+        self.logger.info("=" * 50)
+        
         return metrics
 
-    
+
     def _plot_training_history(self):
         """可视化训练历史"""
         plt.figure(figsize=(15, 15))  # 增加图形大小以容纳额外的F1曲线图
@@ -601,6 +628,24 @@ class BaselineTrainer:
         plt.ylabel('Learning Rate')
         plt.grid(True)
         
+        # Early stopping visualization
+        plt.subplot(3, 2, 5)
+        best_epoch = self.history['val_f1_macro'].index(max(self.history['val_f1_macro']))
+        plt.axvline(x=best_epoch, color='r', linestyle='--', label=f'Best Epoch ({best_epoch+1})')
+        
+        # 绘制验证集F1曲线（重复）以便标记最佳点
+        plt.plot(self.history['val_f1_macro'], label='Val Macro F1')
+        
+        # 标记最佳F1
+        plt.plot(best_epoch, self.history['val_f1_macro'][best_epoch], 'ro', 
+                label=f'Best F1 ({self.history["val_f1_macro"][best_epoch]:.4f})')
+        
+        plt.title('Best Model Selection')
+        plt.xlabel('Epoch')
+        plt.ylabel('Validation Macro F1')
+        plt.legend()
+        plt.grid(True)
+        
         # Save figure
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, 'training_history.png'))
@@ -641,6 +686,8 @@ class BaselineTrainer:
         plt.savefig(os.path.join(self.save_dir, f"confusion_matrix_{title.replace(' ', '_')}.png"))
         plt.close()
 
+
+
     def _save_evaluation_results(self, metrics):
         """
         保存评估结果
@@ -648,47 +695,170 @@ class BaselineTrainer:
         参数:
             metrics: 评估指标字典
         """
-        # 提取需要保存的指标
-        results = {
-            'accuracy': metrics['accuracy'],
-            'f1_macro': metrics['f1_macro'],
-            'f1_weighted': metrics['f1_weighted'],
-            'classification_report': metrics['classification_report']
-        }
-        
-        # 保存为JSON文件
-        with open(os.path.join(self.save_dir, 'evaluation_results.json'), 'w') as f:
-            json.dump(results, f, indent=4)
-        
-        # 生成可读性报告 - 突出显示宏平均F1分数
-        report = f"""
-# 模型评估报告
+        try:
+            # 创建评估结果目录
+            eval_dir = os.path.join(self.save_dir, 'evaluation')
+            os.makedirs(eval_dir, exist_ok=True)
+            
+            # 保存可序列化的指标
+            serializable_metrics = metrics.copy()
+            # 移除不可序列化的NumPy数组
+            if 'confusion_matrix' in serializable_metrics:
+                serializable_metrics['confusion_matrix'] = serializable_metrics['confusion_matrix'].tolist()
+            
+            # 保存为JSON文件
+            with open(os.path.join(eval_dir, 'evaluation_results.json'), 'w') as f:
+                json.dump(serializable_metrics, f, indent=4)
+            
+            # 生成可读性报告 - 突出显示宏平均F1分数
+            report = f"""
+    # 模型评估报告
 
-## 基本信息
-- 模型名称: {self.model.__class__.__name__}
-- 评估时间: {time.strftime('%Y-%m-%d %H:%M:%S')}
+    ## 基本信息
+    - 模型名称: {self.model.__class__.__name__}
+    - 评估时间: {time.strftime('%Y-%m-%d %H:%M:%S')}
 
-## 整体性能
-- **宏平均F1分数**: {metrics['f1_macro']:.4f}  <!-- 主要指标 -->
-- 加权F1分数: {metrics['f1_weighted']:.4f}
-- 准确率: {metrics['accuracy']:.4f}
+    ## 整体性能
+    - **宏平均F1分数**: {metrics['f1_macro']:.4f}  <!-- 主要指标 -->
+    - 加权F1分数: {metrics['f1_weighted']:.4f}
+    - 准确率: {metrics['accuracy']:.4f}
 
-## 每类性能
-| 类别 | 精确率 | 召回率 | F1分数 | 支持度 |
-|------|--------|--------|--------|--------|
-"""
-        # 添加每个类别的性能指标
-        for class_name, metrics_dict in metrics['classification_report'].items():
-            if class_name not in ['accuracy', 'macro avg', 'weighted avg']:
-                report += f"| {class_name} | {metrics_dict['precision']:.4f} | {metrics_dict['recall']:.4f} | {metrics_dict['f1-score']:.4f} | {metrics_dict['support']} |\n"
+    ## Top-K 准确率
+    """
+            # 添加Top-K准确率（如果存在）
+            if 'top_k_accuracies' in metrics and metrics['top_k_accuracies']:
+                for k, acc in metrics['top_k_accuracies'].items():
+                    report += f"- {k}: {acc:.4f}\n"
+            else:
+                report += "- 未计算Top-K准确率\n"
+                
+            report += "\n## 每类性能\n| 类别 | 精确率 | 召回率 | F1分数 | 支持度 |\n|------|--------|--------|--------|--------|\n"
+            
+            # 添加每个类别的性能指标
+            for class_name, metrics_dict in metrics['classification_report'].items():
+                if class_name not in ['accuracy', 'macro avg', 'weighted avg']:
+                    report += f"| {class_name} | {metrics_dict['precision']:.4f} | {metrics_dict['recall']:.4f} | {metrics_dict['f1-score']:.4f} | {metrics_dict['support']} |\n"
+            
+            # 添加总结 - 突出显示宏平均F1
+            report += f"""
+    ## 摘要
+    - **Macro Avg**: 精确率={metrics['classification_report']['macro avg']['precision']:.4f}, 召回率={metrics['classification_report']['macro avg']['recall']:.4f}, F1={metrics['classification_report']['macro avg']['f1-score']:.4f}
+    - Weighted Avg: 精确率={metrics['classification_report']['weighted avg']['precision']:.4f}, 召回率={metrics['classification_report']['weighted avg']['recall']:.4f}, F1={metrics['classification_report']['weighted avg']['f1-score']:.4f}
+
+    ## 注意事项
+    - 报告基于测试集生成，该测试集在训练过程中未被使用
+    - 宏平均F1是主要评估指标，因为它对每个类别赋予相同的权重，适合类别不平衡的数据集
+    - 混淆矩阵图表已保存在evaluation目录下
+    """
+            
+            # 保存报告
+            with open(os.path.join(eval_dir, 'evaluation_report.md'), 'w') as f:
+                f.write(report)
+            
+            # 保存更详细的类别性能分析
+            self._save_detailed_class_performance(metrics, eval_dir)
+            
+            self.logger.info(f"评估结果已保存至 {eval_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"保存评估结果失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
+    def _save_detailed_class_performance(self, metrics, eval_dir):
+        """
+        保存详细的类别性能分析
         
-        # 添加总结 - 突出显示宏平均F1
-        report += f"""
-## 摘要
-- **Macro Avg**: 精确率={metrics['classification_report']['macro avg']['precision']:.4f}, 召回率={metrics['classification_report']['macro avg']['recall']:.4f}, F1={metrics['classification_report']['macro avg']['f1-score']:.4f}
-- Weighted Avg: 精确率={metrics['classification_report']['weighted avg']['precision']:.4f}, 召回率={metrics['classification_report']['weighted avg']['recall']:.4f}, F1={metrics['classification_report']['weighted avg']['f1-score']:.4f}
-"""
-        
-        # 保存报告
-        with open(os.path.join(self.save_dir, 'evaluation_report.md'), 'w') as f:
-            f.write(report)
+        参数:
+            metrics: 评估指标字典
+            eval_dir: 评估结果目录
+        """
+        try:
+            # 提取分类报告
+            class_report = metrics['classification_report']
+            
+            # 创建类别性能图表
+            plt.figure(figsize=(15, 10))
+            
+            # 提取类别名称和性能指标（排除汇总行）
+            classes = []
+            precision = []
+            recall = []
+            f1 = []
+            support = []
+            
+            for class_name, values in class_report.items():
+                if class_name not in ['accuracy', 'macro avg', 'weighted avg']:
+                    classes.append(class_name)
+                    precision.append(values['precision'])
+                    recall.append(values['recall'])
+                    f1.append(values['f1-score'])
+                    support.append(values['support'])
+            
+            # 限制显示的类别数量，避免图表过于拥挤
+            max_classes = 20
+            if len(classes) > max_classes:
+                # 根据支持度选择前N个类别
+                indices = np.argsort(support)[-max_classes:]
+                classes = [classes[i] for i in indices]
+                precision = [precision[i] for i in indices]
+                recall = [recall[i] for i in indices]
+                f1 = [f1[i] for i in indices]
+                support = [support[i] for i in indices]
+            
+            # 创建图表
+            x = np.arange(len(classes))
+            width = 0.2
+            
+            fig, ax1 = plt.subplots(figsize=(15, 8))
+            ax2 = ax1.twinx()
+            
+            # 绘制性能指标
+            ax1.bar(x - width, precision, width, label='Precision', color='blue', alpha=0.7)
+            ax1.bar(x, recall, width, label='Recall', color='green', alpha=0.7)
+            ax1.bar(x + width, f1, width, label='F1', color='red', alpha=0.7)
+            
+            # 绘制支持度
+            ax2.plot(x, support, 'o-', color='purple', label='Support')
+            
+            # 设置标签和标题
+            ax1.set_xlabel('Class')
+            ax1.set_ylabel('Score')
+            ax2.set_ylabel('Support (Number of Samples)')
+            plt.title('Performance Metrics by Class')
+            
+            ax1.set_xticks(x)
+            ax1.set_xticklabels(classes, rotation=45, ha='right')
+            
+            # 添加图例
+            ax1.legend(loc='upper left')
+            ax2.legend(loc='upper right')
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(eval_dir, 'class_performance.png'))
+            plt.close()
+            
+            # 创建混淆矩阵热图（限制类别数量）
+            if 'confusion_matrix' in metrics:
+                conf_matrix = metrics['confusion_matrix']
+                # 如果类别太多，选择支持度最高的N个类别
+                if len(classes) > max_classes:
+                    top_indices = np.argsort(support)[-max_classes:]
+                    conf_matrix_subset = conf_matrix[top_indices][:, top_indices]
+                    classes_subset = [classes[i] for i in top_indices]
+                    plt.figure(figsize=(12, 10))
+                    sns.heatmap(conf_matrix_subset, annot=True, fmt='d', cmap='Blues',
+                            xticklabels=classes_subset, yticklabels=classes_subset)
+                    plt.title('Confusion Matrix (Top Classes by Support)')
+                    plt.ylabel('True Label')
+                    plt.xlabel('Predicted Label')
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(eval_dir, 'confusion_matrix_top_classes.png'))
+                    plt.close()
+                
+            self.logger.info(f"详细类别性能分析已保存至 {eval_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"保存详细类别性能分析失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
