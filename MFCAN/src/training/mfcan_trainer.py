@@ -24,6 +24,7 @@ from models.mfcan import MFCAN
 class MFCANTrainer:
     """MFCAN模型训练器"""
     
+
     def __init__(self, config_path, data_path=None, output_dir=None, device=None, logger=None):
         """
         初始化MFCAN训练器
@@ -48,9 +49,30 @@ class MFCANTrainer:
             log_manager = Logger("MFCANTrainer", log_dir="logs/training")
             self.logger = log_manager.get_logger()
         
-        # 加载配置
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
+        # 加载配置 - 添加健壮的错误处理
+        try:
+            # 检查文件是否存在
+            if not os.path.exists(config_path):
+                self.logger.error(f"配置文件不存在: {config_path}")
+                raise FileNotFoundError(f"配置文件不存在: {config_path}")
+                
+            # 读取配置文件
+            with open(config_path, 'r') as f:
+                self.config = json.load(f)
+                
+            # 验证配置是否为空
+            if not self.config:
+                self.logger.error(f"配置文件为空或格式错误: {config_path}")
+                raise ValueError(f"配置文件为空或格式错误: {config_path}")
+                
+            self.logger.info(f"成功加载配置文件: {config_path}")
+            
+        except json.JSONDecodeError as e:
+            self.logger.error(f"配置文件JSON格式错误: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"加载配置文件失败: {e}")
+            raise
         
         # 设置输出目录
         self.output_dir = output_dir or self.config.get('save_dir', 'results/mfcan')
@@ -58,8 +80,12 @@ class MFCANTrainer:
         
         # 保存配置到输出目录
         output_config_path = os.path.join(self.output_dir, 'config.json')
-        with open(output_config_path, 'w') as f:
-            json.dump(self.config, f, indent=4)
+        try:
+            with open(output_config_path, 'w') as f:
+                json.dump(self.config, f, indent=4)
+            self.logger.info(f"配置已保存到: {output_config_path}")
+        except Exception as e:
+            self.logger.warning(f"保存配置文件失败: {e}")
         
         # 训练参数
         training_config = self.config.get('training', {})
@@ -96,6 +122,7 @@ class MFCANTrainer:
         self.data_loaders = None
         if data_path:
             self.load_data(data_path)
+
     
     def _build_model(self):
         """创建MFCAN模型"""
@@ -111,13 +138,13 @@ class MFCANTrainer:
                 if not os.path.exists(path) and not (os.path.exists(path + ".ckpt") or os.path.exists(path + ".full")):
                     self.logger.warning(f"Pretrained encoder path for {modality} does not exist: {path}")
         
-        # 创建模型
-        model = MFCAN(self.config, pretrained_encoders)
+        # 创建模型，传递logger参数
+        model = MFCAN(self.config, pretrained_encoders, logger=self.logger)
         model = model.to(self.device)
         self.logger.info(f"MFCAN model created with config: {self.config}")
         
         return model
-    
+
     def load_data(self, data_path):
         """
         加载数据

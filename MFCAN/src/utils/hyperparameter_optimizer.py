@@ -5,6 +5,8 @@ import numpy as np
 from sklearn.model_selection import ParameterGrid, ParameterSampler
 from copy import deepcopy
 import matplotlib.pyplot as plt
+from utils.logging_utils import Logger
+
 
 class HyperparameterOptimizer:
     """超参数优化工具"""

@@ -19,7 +19,7 @@ class MFCAN(nn.Module):
     整合所有组件为一个端到端的网络，带有类别自适应机制
     """
     
-    def __init__(self, config, pretrained_encoders=None):
+    def __init__(self, config, pretrained_encoders=None, logger=None):
         """
         初始化MFCAN架构
         
@@ -31,7 +31,7 @@ class MFCAN(nn.Module):
         self.config = config
         
 
-
+        from utils.logging_utils import Logger
         # 使用已有的Logger类创建日志记录器
         log_manager = Logger("MFCAN", log_dir="logs/model")
         self.logger = log_manager.get_logger()
@@ -136,8 +136,13 @@ class MFCAN(nn.Module):
             path: 权重文件路径
             name: 编码器名称
         """
-        # 获取logger，如果没有则使用默认logger
-        logger = getattr(self, 'logger', logging.getLogger(__name__))
+        # 获取logger，如果没有则创建一个简单的logger
+        logger = getattr(self, 'logger', None)
+        if logger is None:
+            # 导入Logger类
+            from utils.logging_utils import Logger
+            log_manager = Logger("MFCAN", log_dir="logs/model")
+            logger = log_manager.get_logger()
         
         # 尝试直接加载权重
         try:
@@ -146,6 +151,7 @@ class MFCAN(nn.Module):
             return
         except Exception as e:
             logger.warning(f"直接加载{name}编码器权重失败，尝试其他方法: {e}")
+
         
         # 尝试加载检查点
         try:
