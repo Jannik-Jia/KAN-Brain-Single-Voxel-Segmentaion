@@ -10,7 +10,6 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classifi
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import h5py
-import logging
 import sys
 from torch.cuda import amp
 import math
