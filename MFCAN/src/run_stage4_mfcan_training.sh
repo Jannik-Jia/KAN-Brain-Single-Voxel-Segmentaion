@@ -9,13 +9,25 @@ CONFIG_PATH="configs/mfcan_config.json"
 DATA_PATH="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/MFCAN/src/data/processed/reorganized_encoder_data.h5"
 MODEL_PATH=""  # 可选的预训练模型路径
 OUTPUT_DIR=""  # 默认使用配置文件中的设置
-DO_HYPEROPT="false"  # 是否进行超参数优化
+DO_HYPEROPT="true"  # 是否进行超参数优化
 SEARCH_METHOD="grid"  # 超参数搜索方法
 N_ITER="10"  # 迭代次数
+USE_BALANCED_SAMPLER="false"  # 是否使用平衡采样
+SAMPLES_PER_CLASS="1000"      # 每个类别采样数量
+ANALYZE_GROUPS="false"        # 是否分析特征组贡献
+MAX_GROUP_SIZE="3"            # 特征组分析的最大组合大小
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --balanced_sampling)
+      USE_BALANCED_SAMPLER="true"
+      shift
+      ;;
+    --samples_per_class)
+      SAMPLES_PER_CLASS="$2"
+      shift 2
+      ;;
     --mode)
       MODE="$2"
       shift 2
@@ -48,9 +60,17 @@ while [[ $# -gt 0 ]]; do
       N_ITER="$2"
       shift 2
       ;;
+    --analyze_groups)
+      ANALYZE_GROUPS="true"
+      shift
+      ;;
+    --max_group_size)
+      MAX_GROUP_SIZE="$2"
+      shift 2
+      ;;
     *)
       echo "未知选项: $1"
-      echo "可用选项: --mode, --config, --data_path, --model_path, --output_dir, --hyperopt, --search_method, --n_iter"
+      echo "可用选项: --mode, --config, --data_path, --model_path, --output_dir, --hyperopt, --search_method, --n_iter, --balanced_sampling, --samples_per_class, --analyze_groups, --max_group_size"
       exit 1
       ;;
   esac
@@ -77,14 +97,17 @@ if [ "$DO_HYPEROPT" = "true" ]; then
         HYPEROPT_OUTPUT_DIR="${OUTPUT_DIR}/hyperopt"
     fi
     
+    # 构建超参数优化命令
+    HYPEROPT_CMD="python scripts/hyperparameter_search.py --config ${CONFIG_PATH} --data_path ${DATA_PATH} --output_dir ${HYPEROPT_OUTPUT_DIR} --search_method ${SEARCH_METHOD} --n_iter ${N_ITER}"
+    
+    # 添加平衡采样参数（如果启用）
+    if [ "$USE_BALANCED_SAMPLER" = "true" ]; then
+        HYPEROPT_CMD="${HYPEROPT_CMD} --balanced_sampling --samples_per_class ${SAMPLES_PER_CLASS}"
+    fi
+    
     # 运行超参数优化脚本
-    echo "运行超参数优化..."
-    python scripts/hyperparameter_search.py \
-        --config ${CONFIG_PATH} \
-        --data_path ${DATA_PATH} \
-        --output_dir ${HYPEROPT_OUTPUT_DIR} \
-        --search_method ${SEARCH_METHOD} \
-        --n_iter ${N_ITER} > ${HYPEROPT_LOG_FILE} 2>&1
+    echo "运行超参数优化命令: ${HYPEROPT_CMD}"
+    eval "${HYPEROPT_CMD} > ${HYPEROPT_LOG_FILE} 2>&1"
     
     # 检查是否成功
     if [ $? -ne 0 ]; then
@@ -161,6 +184,17 @@ fi
 
 # 添加输出目录
 CMD="${CMD} --output_dir ${OUTPUT_DIR}"
+
+# 添加平衡采样参数（如果启用）
+if [ "$USE_BALANCED_SAMPLER" = "true" ]; then
+    CMD="${CMD} --balanced_sampling --samples_per_class ${SAMPLES_PER_CLASS}"
+fi
+
+# 添加特征组分析参数（如果启用）
+if [ "$ANALYZE_GROUPS" = "true" ]; then
+    CMD="${CMD} --analyze_groups --max_group_size ${MAX_GROUP_SIZE}"
+    echo "将进行特征组贡献分析，最大组合大小: ${MAX_GROUP_SIZE}"
+fi
 
 echo "运行命令: ${CMD}"
 

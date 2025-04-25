@@ -15,6 +15,7 @@ sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from training.mfcan_trainer import MFCANTrainer
 from utils.logging_utils import Logger
+from models.loss.mfcan_loss import MFCANLoss
 
 def main():
     """MFCAN训练主函数"""
@@ -26,7 +27,11 @@ def main():
     parser.add_argument('--mode', type=str, default='full', choices=['full', 'encoders', 'fusion', 'finetune'], 
                         help='训练模式：full-完整训练流程，encoders-只训练编码器，fusion-只训练融合机制，finetune-只微调完整模型')
     parser.add_argument('--model_path', type=str, default=None, help='预训练模型路径，用于继续训练')
-    
+    parser.add_argument('--balanced_sampling', action='store_true', help='是否使用平衡采样')
+    parser.add_argument('--samples_per_class', type=int, default=1000, help='每个类别采样数量')
+    parser.add_argument('--analyze_groups', action='store_true', help='是否分析特征组贡献')
+    parser.add_argument('--max_group_size', type=int, default=3, help='特征组分析的最大组合大小')
+
     args = parser.parse_args()
     
     # 检查文件是否存在
@@ -56,6 +61,12 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"输出目录: {output_dir}")
     
+    # 记录平衡采样设置
+    if args.balanced_sampling:
+        logger.info(f"启用平衡采样，每个类别采样 {args.samples_per_class} 个样本")
+    else:
+        logger.info("使用原始数据分布（未启用平衡采样）")
+    
     # 记录实验开始
     logger_manager.log_experiment_start("MFCAN训练", f"模式: {args.mode}, 时间戳: {timestamp}")
     
@@ -65,10 +76,23 @@ def main():
         # 初始化训练器
         trainer = MFCANTrainer(
             config_path=args.config,
-            data_path=args.data_path,
+            data_path=None,  # 暂不加载数据，下面会手动加载
             output_dir=output_dir,
             logger=logger
         )
+        
+        # 加载数据 - 根据是否启用平衡采样选择加载方法
+        if args.data_path:
+            if args.balanced_sampling:
+                trainer.load_data_with_balanced_sampling(
+                    args.data_path, 
+                    samples_per_class=args.samples_per_class,
+                    use_balanced_sampler=True
+                )
+                logger.info(f"使用平衡采样加载数据，每个类别采样 {args.samples_per_class} 个样本")
+            else:
+                trainer.load_data(args.data_path)
+                logger.info("使用原始数据分布加载数据")
         
         # 如果提供了预训练模型路径，则加载模型
         if args.model_path and os.path.exists(args.model_path):
@@ -112,10 +136,22 @@ def main():
             "宏平均F1": metrics['f1_macro'],
             "加权F1": metrics['f1_weighted'],
             "训练模式": args.mode,
-            "模型路径": model_path
+            "模型路径": model_path,
+            "平衡采样": args.balanced_sampling,
+            "每类样本数": args.samples_per_class if args.balanced_sampling else "原始分布"
         }
         logger_manager.log_experiment_end("MFCAN训练", results)
         
+        if args.analyze_groups:
+            logger.info("开始分析特征组贡献...")
+            group_analysis_dir = os.path.join(output_dir, "feature_groups")
+            trainer.analyze_feature_group_contributions(
+                data_path=args.data_path,
+                max_combination_size=args.max_group_size,
+                output_dir=group_analysis_dir
+            )
+            logger.info(f"特征组分析完成，结果保存在 {group_analysis_dir}")
+
         return {
             'output_dir': output_dir,
             'model_path': model_path,

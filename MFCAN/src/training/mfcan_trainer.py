@@ -14,12 +14,88 @@ import sys
 from torch.cuda import amp
 import math
 import torch.nn.functional as F
+from src.evaluation.group_evaluator import GroupEvaluator
+from torch.utils.data import Sampler
+from collections import defaultdict
+import random
 
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.logging_utils import Logger
 from models.mfcan import MFCAN
+class BalancedBatchSampler(Sampler):
+    """
+    按类别平衡的批次采样器
+    每个epoch从每个类别中采样指定数量的样本
+    """
+    
+    def __init__(self, dataset, labels, samples_per_class=1000, shuffle=True):
+        """
+        初始化平衡批次采样器
+        
+        参数:
+            dataset: PyTorch数据集
+            labels: 样本标签数组 [num_samples]
+            samples_per_class: 每个类别每个epoch采样的样本数量
+            shuffle: 是否打乱样本顺序
+        """
+        self.dataset = dataset
+        self.shuffle = shuffle
+        self.samples_per_class = samples_per_class
+        
+        # 按类别索引样本
+        self.label_indices = defaultdict(list)
+        for idx, (_, label) in enumerate(dataset):
+            self.label_indices[label.item()].append(idx)
+        
+        # 计算类别数和每个类别的样本数
+        self.num_classes = len(self.label_indices)
+        self.class_sizes = {label: len(indices) for label, indices in self.label_indices.items()}
+        
+        # 确定每个类别的实际采样数量
+        self.actual_samples_per_class = {
+            label: min(samples_per_class, size) 
+            for label, size in self.class_sizes.items()
+        }
+        
+        # 计算一个epoch的总样本数
+        self.total_samples = sum(self.actual_samples_per_class.values())
+    
+    def __iter__(self):
+        # 每个epoch重新采样
+        indices = []
+        
+        for label, label_indices in self.label_indices.items():
+            # 确定要采样的数量
+            n_samples = self.actual_samples_per_class[label]
+            
+            # 如果类别样本数超过要采样的数量，随机采样
+            if len(label_indices) > n_samples:
+                sampled_indices = random.sample(label_indices, n_samples)
+            else:
+                # 否则全部使用，并可能重复采样以达到要求的数量
+                if n_samples > len(label_indices):
+                    # 完整使用所有样本
+                    sampled_indices = label_indices.copy()
+                    # 添加额外样本以达到要求的数量
+                    extra_samples = random.choices(label_indices, k=n_samples-len(label_indices))
+                    sampled_indices.extend(extra_samples)
+                else:
+                    sampled_indices = label_indices.copy()
+            
+            indices.extend(sampled_indices)
+        
+        # 打乱所有采样的索引
+        if self.shuffle:
+            random.shuffle(indices)
+        
+        return iter(indices)
+    
+    def __len__(self):
+        return self.total_samples
+
+
 
 class MFCANTrainer:
     """MFCAN模型训练器"""
@@ -103,6 +179,18 @@ class MFCANTrainer:
         
         # 创建模型
         self.model = self._build_model()
+
+        loss_config = self.config.get('loss', {})
+        self.criterion = MFCANLoss(
+        num_classes=self.config.get('main_classifier', {}).get('num_classes', 102),
+        aux_weight=loss_config.get('aux_weight', 0.3),
+        attn_reg_weight=loss_config.get('attn_reg_weight', 0.01),
+        modal_balance_weight=loss_config.get('modal_balance_weight', 0.01),
+        class_balance_method=loss_config.get('class_balance_method', 'effective_samples'),
+        focal_gamma=loss_config.get('focal_gamma', 2.0),
+        cb_beta=loss_config.get('cb_beta', 0.9999),
+        cb_samples_per_class=None  # 初始为None，稍后计算
+    )
         
         # 记录训练历史
         self.history = {
@@ -242,6 +330,11 @@ class MFCANTrainer:
             # 保存类别数量
             self.num_classes = len(np.unique(train_labels))
             self.logger.info(f"Number of classes: {self.num_classes}")
+        
+            class_counts = self.compute_class_counts(self.data_loaders['train'])
+            if class_counts is not None and hasattr(self, 'criterion') and isinstance(self.criterion, MFCANLoss):
+                self.criterion.update_class_counts(class_counts)
+                self.logger.info("已更新损失函数中的类别样本计数")
             
             return self.data_loaders
             
@@ -249,6 +342,199 @@ class MFCANTrainer:
             self.logger.error(f"Error loading data: {e}")
             raise
     
+
+    def analyze_feature_group_contributions(self, data_path=None, max_combination_size=3, output_dir=None):
+        """
+        分析不同特征组对模型性能的贡献
+        
+        参数:
+            data_path: 数据文件路径，若不指定则使用当前加载的数据
+            max_combination_size: 最大组合大小，默认为3以减少计算量
+            output_dir: 输出目录，若不指定则使用默认目录
+            
+        返回:
+            evaluation_results: 特征组评估结果
+        """
+
+        
+        self.logger.info("开始分析特征组贡献...")
+        
+        # 设置输出目录
+        if output_dir is None:
+            output_dir = os.path.join(self.output_dir, "feature_groups")
+        
+        # 创建模型模板 - 使用与MFCAN相似的更简单模型作为模板
+        model_template = self._create_group_evaluator_model_template()
+        
+        # 创建评估器
+        evaluator = GroupEvaluator(
+            model_template=model_template,
+            config_path=None,  # 使用内部配置
+            output_dir=output_dir,
+            logger=self.logger,
+            device=self.device
+        )
+        
+        # 设置评估参数
+        evaluator.num_epochs = 20  # 减少训练轮次以加快评估
+        evaluator.batch_size = self.batch_size
+        evaluator.learning_rate = self.initial_lr
+        evaluator.weight_decay = self.weight_decay
+        evaluator.early_stopping = 5
+        
+        # 使用提供的数据路径或当前数据
+        if data_path is None:
+            if hasattr(self, 'data_path') and self.data_path:
+                data_path = self.data_path
+            else:
+                self.logger.error("未提供数据路径且当前未加载数据")
+                return None
+        
+        # 运行评估
+        evaluation_results = evaluator.evaluate_all_group_combinations(
+            data_path=data_path,
+            max_combination_size=max_combination_size
+        )
+        
+        self.logger.info("特征组贡献分析完成")
+        return evaluation_results
+
+    def _create_group_evaluator_model_template(self):
+        """创建用于特征组评估的简化模型模板"""
+        # 这里我们创建一个简化版的MFCAN，只包含必要组件
+        # 可以是一个简单的MLP或者类似结构
+        
+        # 导入必要组件
+        from models.classifiers.classification_head import ClassificationHead
+        
+        class GroupEvaluationModel(nn.Module):
+            """特征组评估专用的简化模型"""
+            
+            def __init__(self):
+                super(GroupEvaluationModel, self).__init__()
+                # 初始为空，稍后动态填充
+                self.input_dims = {}
+                self.group_projections = nn.ModuleDict()
+                self.main_classifier = None
+                self.num_classes = 102  # 默认值，会在创建时更新
+            
+            def forward(self, features):
+                """前向传播，输入为特征字典"""
+                if not self.group_projections:
+                    self._initialize_layers()
+                
+                # 处理每个特征组
+                projected_features = []
+                for group_name, feature in features.items():
+                    if group_name in self.group_projections:
+                        proj = self.group_projections[group_name](feature)
+                        projected_features.append(proj)
+                
+                # 如果没有有效特征，返回空
+                if not projected_features:
+                    raise ValueError("没有匹配的特征组")
+                
+                # 连接所有特征
+                concatenated = torch.cat(projected_features, dim=1)
+                
+                # 通过分类器
+                output = self.main_classifier(concatenated)
+                return output
+            
+            def _initialize_layers(self):
+                """根据输入维度初始化层"""
+                total_dim = 0
+                projection_dim = 64  # 每个组的投影维度
+                
+                # 为每个特征组创建投影层
+                for group_name, dim in self.input_dims.items():
+                    self.group_projections[group_name] = nn.Sequential(
+                        nn.Linear(dim, projection_dim),
+                        nn.ReLU(),
+                        nn.Dropout(0.3)
+                    )
+                    total_dim += projection_dim
+                
+                # 创建主分类器
+                self.main_classifier = ClassificationHead(
+                    input_dim=total_dim,
+                    hidden_dim=512,
+                    num_classes=self.num_classes,
+                    dropout=0.4
+                )
+        
+        # 创建模型实例
+        model_template = GroupEvaluationModel()
+        model_template.num_classes = self.config.get('main_classifier', {}).get('num_classes', 102)
+        
+        return model_template
+
+
+    def load_data_with_balanced_sampling(self, data_path, samples_per_class=1000, use_balanced_sampler=False):
+        """
+        加载数据，可选择使用平衡采样
+        
+        参数:
+            data_path: 数据文件路径
+            samples_per_class: 每个类别每个epoch采样的样本数量
+            use_balanced_sampler: 是否使用平衡采样器
+        """
+        # 首先加载原始数据
+        data_loaders = self.load_data(data_path)
+        
+        # 如果不使用平衡采样器，直接返回标准数据加载器
+        if not use_balanced_sampler:
+            return data_loaders
+        
+        self.logger.info(f"创建平衡采样器，每个类别采样 {samples_per_class} 个样本")
+        
+        # 获取训练集
+        train_dataset = self.data_loaders['train'].dataset
+        
+        # 收集所有标签
+        all_labels = []
+        for _, label in train_dataset:
+            all_labels.append(label.item())
+        
+        # 创建平衡采样器
+        balanced_sampler = BalancedBatchSampler(
+            train_dataset, 
+            all_labels, 
+            samples_per_class=samples_per_class,
+            shuffle=True
+        )
+        
+        # 创建使用平衡采样器的数据加载器
+        balanced_train_loader = DataLoader(
+            train_dataset,
+            batch_size=self.batch_size,
+            sampler=balanced_sampler,
+            num_workers=4,
+            pin_memory=True
+        )
+        
+        # 替换训练数据加载器
+        self.data_loaders['train'] = balanced_train_loader
+        
+        # 记录平衡采样信息
+        class_counts = np.zeros(self.num_classes, dtype=np.int32)
+        for label in all_labels:
+            class_counts[label] += 1
+        
+        # 记录原始样本数和平衡后样本数
+        self.logger.info("类别分布情况:")
+        for c in range(self.num_classes):
+            actual_samples = min(samples_per_class, class_counts[c])
+            self.logger.info(f"类别 {c}: 原始 {class_counts[c]} 个样本，平衡后 {actual_samples} 个样本")
+        
+        # 更新损失函数中的类别样本计数（使用平衡后的计数）
+        balanced_counts = np.array([min(samples_per_class, count) for count in class_counts])
+        if hasattr(self, 'criterion') and isinstance(self.criterion, MFCANLoss):
+            self.criterion.update_class_counts(balanced_counts)
+            self.logger.info("已更新损失函数中的类别样本计数为平衡后的数量")
+        
+        return self.data_loaders
+
 
     def _create_lr_scheduler(self, optimizer, num_epochs, num_training_steps=None):
         """
@@ -310,6 +596,47 @@ class MFCANTrainer:
             return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
         
 
+
+    def compute_class_counts(self, data_loader=None):
+        """
+        计算数据集中每个类别的样本数量
+        
+        参数:
+            data_loader: 数据加载器，若不指定则使用训练集
+            
+        返回:
+            class_counts: 每个类别的样本计数列表
+        """
+        if data_loader is None:
+            if self.data_loaders is None or 'train' not in self.data_loaders:
+                self.logger.error("训练数据加载器不可用")
+                return None
+            data_loader = self.data_loaders['train']
+        
+        self.logger.info("计算类别样本数量...")
+        
+        # 类别数量
+        num_classes = self.config.get('main_classifier', {}).get('num_classes', 102)
+        class_counts = np.zeros(num_classes, dtype=np.int32)
+        
+        # 遍历数据集计算每个类别的样本数
+        for _, labels in data_loader:
+            for label in labels.cpu().numpy():
+                class_counts[label] += 1
+        
+        # 记录类别分布情况
+        for c in range(num_classes):
+            self.logger.info(f"类别 {c}: {class_counts[c]} 个样本")
+        
+        # 统计信息
+        min_count = np.min(class_counts)
+        max_count = np.max(class_counts)
+        imbalance_ratio = max_count / max(min_count, 1)
+        self.logger.info(f"类别分布: 最少 {min_count}, 最多 {max_count}, 不平衡比例 {imbalance_ratio:.2f}:1")
+        
+        return class_counts
+
+
     def compute_loss(self, outputs, targets, aux_weight=None):
         """
         计算多任务损失函数
@@ -318,67 +645,70 @@ class MFCANTrainer:
             outputs: 模型输出字典
             targets: 目标类别标签
             aux_weight: 辅助损失的权重，若不指定则使用self.aux_weight
-            
+                
         返回:
             total_loss: 总损失
             loss_info: 各组件损失的字典
         """
-        aux_weight = aux_weight or self.aux_weight
-        
-        # 主分类损失
-        criterion = nn.CrossEntropyLoss()
-        
-        # 如果只有辅助输出
-        if 'main_output' not in outputs:
-            aux_losses = {}
-            for modal, aux_output in outputs['aux_outputs'].items():
-                aux_losses[modal] = criterion(aux_output, targets)
+        # 使用MFCANLoss计算损失
+        if hasattr(self, 'criterion') and isinstance(self.criterion, MFCANLoss):
+            return self.criterion(outputs, targets)
+        else:
+            # 后备方案：使用简单的交叉熵损失
+            self.logger.warning("未找到MFCANLoss实例，使用简单交叉熵损失")
+            aux_weight = aux_weight or self.aux_weight
             
-            # 计算平均辅助损失
-            avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
+            # 主分类损失
+            criterion = nn.CrossEntropyLoss()
+            
+            # 如果只有辅助输出
+            if 'main_output' not in outputs:
+                aux_losses = {}
+                for modal, aux_output in outputs['aux_outputs'].items():
+                    aux_losses[modal] = criterion(aux_output, targets)
+                
+                # 计算平均辅助损失
+                avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
+                
+                # 返回损失信息
+                loss_info = {
+                    'total_loss': avg_aux_loss.item(),
+                    'avg_aux_loss': avg_aux_loss.item(),
+                    'aux_losses': {k: v.item() for k, v in aux_losses.items()}
+                }
+                
+                return avg_aux_loss, loss_info
+            
+            # 主分类损失
+            main_loss = criterion(outputs['main_output'], targets)
+            
+            # 辅助分类损失
+            aux_losses = {}
+            if 'aux_outputs' in outputs:
+                for modal, aux_output in outputs['aux_outputs'].items():
+                    aux_losses[modal] = criterion(aux_output, targets)
+                
+                # 计算平均辅助损失
+                avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
+                
+                # 计算总损失
+                total_loss = main_loss + aux_weight * avg_aux_loss
+            else:
+                # 如果没有辅助输出，只使用主损失
+                total_loss = main_loss
+                avg_aux_loss = torch.tensor(0.0, device=main_loss.device)
             
             # 返回损失信息
             loss_info = {
-                'total_loss': avg_aux_loss.item(),
-                'avg_aux_loss': avg_aux_loss.item(),
-                'aux_losses': {k: v.item() for k, v in aux_losses.items()}
+                'total_loss': total_loss.item(),
+                'main_loss': main_loss.item(),
+                'avg_aux_loss': avg_aux_loss.item() if isinstance(avg_aux_loss, torch.Tensor) else avg_aux_loss,
+                'aux_losses': {k: v.item() for k, v in aux_losses.items()} if aux_losses else {}
             }
             
-            return avg_aux_loss, loss_info
+            return total_loss, loss_info
         
-        # 主分类损失
-        main_loss = criterion(outputs['main_output'], targets)
-        
-        # 辅助分类损失
-        aux_losses = {}
-        if 'aux_outputs' in outputs:
-            for modal, aux_output in outputs['aux_outputs'].items():
-                aux_losses[modal] = criterion(aux_output, targets)
-            
-            # 计算平均辅助损失
-            if aux_losses:  # 添加检查确保aux_losses非空
-                avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
-            else:
-                avg_aux_loss = torch.tensor(0.0, device=main_loss.device)
 
-            
-            # 计算总损失
-            total_loss = main_loss + aux_weight * avg_aux_loss
-        else:
-            # 如果没有辅助输出，只使用主损失
-            total_loss = main_loss
-            avg_aux_loss = torch.tensor(0.0, device=main_loss.device)
-        
-        # 返回损失信息
-        loss_info = {
-            'total_loss': total_loss.item(),
-            'main_loss': main_loss.item(),
-            'avg_aux_loss': avg_aux_loss.item() if isinstance(avg_aux_loss, torch.Tensor) else avg_aux_loss,
-            'aux_losses': {k: v.item() for k, v in aux_losses.items()} if aux_losses else {}
-        }
-        
-        return total_loss, loss_info
-    
     def pretrain_encoders(self):
         """
         预训练各模态编码器，只训练辅助分类器

@@ -38,6 +38,22 @@ class HyperparameterOptimizer:
         self.logger.info(f"Loaded base config from {base_config_path}")
         self.results = []
     
+
+    # 在HyperparameterOptimizer类中添加专用方法
+    def get_next_bayesian_config(self, iteration):
+        """获取贝叶斯优化的下一个配置"""
+        if not hasattr(self, 'optimizer'):
+            raise RuntimeError("贝叶斯优化器未初始化")
+            
+        suggested_params_list = self.optimizer.ask(n_points=1)
+        suggested_params = suggested_params_list[0]
+        
+        # 将参数列表转换为字典
+        params = {name: value for name, value in zip(self.dimension_names, suggested_params)}
+        
+        # 创建配置
+        return self._create_config(params, iteration)
+
     def grid_search(self, param_grid, max_combinations=None):
         """
         执行网格搜索
@@ -94,13 +110,15 @@ class HyperparameterOptimizer:
         self.logger.info(f"Generated {len(configs)} configurations for random search")
         return configs
     
-    def bayesian_optimization(self, param_space, n_iter=10):
+    def bayesian_optimization(self, param_space, n_iter=10, early_stopping=5, improvement_threshold=0.001):
         """
         执行贝叶斯优化
         
         参数:
             param_space: 参数空间，格式为 {'param_name': (low, high, 'prior')} 或 {'param_name': [choice1, choice2, ...]}
             n_iter: 迭代次数
+            early_stopping: 连续多少次无改进后停止
+            improvement_threshold: 改进阈值，小于此值视为无改进
             
         返回:
             configs: 生成的配置列表
@@ -112,7 +130,7 @@ class HyperparameterOptimizer:
             self.logger.error("scikit-optimize未安装，请使用'pip install scikit-optimize'安装")
             return []
         
-        self.logger.info(f"执行贝叶斯优化，迭代次数: {n_iter}")
+        self.logger.info(f"执行贝叶斯优化，迭代次数: {n_iter}，早停阈值: {early_stopping}")
         
         # 转换参数空间为skopt空间
         dimensions = []
@@ -170,6 +188,10 @@ class HyperparameterOptimizer:
         default_config = self._create_config(default_params, 0)
         configs.append(default_config)
         
+        # 添加早停相关变量
+        best_score = float('inf')  # 因为我们在最小化负的F1
+        no_improvement_count = 0
+        
         # 然后生成n_iter-1个优化建议
         for i in range(1, n_iter):
             # 让贝叶斯优化器建议下一组参数
@@ -189,38 +211,52 @@ class HyperparameterOptimizer:
         def update_optimizer(config_id, metrics):
             """更新贝叶斯优化器"""
             # 找到配置
+            nonlocal optimizer, dimension_names, best_score, no_improvement_count
             config = next((c for c in configs if c['id'] == config_id), None)
             if not config:
                 self.logger.warning(f"无法找到配置 {config_id} 以更新优化器")
-                return
+                return False
             
             # 获取参数值
             params = [config['params'].get(name) for name in dimension_names]
             
             # 获取指标值（最大化F1分数）
-            f1_score = -metrics.get('f1_macro', 0)  # 负号因为optimizer最小化目标函数
+            current_score = -metrics.get('f1_macro', 0)  # 负号因为optimizer最小化目标函数
             
             # 告诉优化器结果
-            optimizer.tell(params, f1_score)
-            self.logger.info(f"更新贝叶斯优化器: config_id={config_id}, f1_macro={-f1_score}")
+            optimizer.tell(params, current_score)
+            self.logger.info(f"更新贝叶斯优化器: config_id={config_id}, f1_macro={-current_score}")
+            
+            # 检查是否有改进
+            if current_score < best_score - improvement_threshold:  # 比最佳分数更好
+                improvement = best_score - current_score
+                best_score = current_score
+                no_improvement_count = 0
+                self.logger.info(f"发现新的最佳分数: {-best_score:.6f}, 改进了: {improvement:.6f}")
+                return False  # 不需要早停
+            else:
+                no_improvement_count += 1
+                self.logger.info(f"未发现显著改进，当前无改进次数: {no_improvement_count}/{early_stopping}")
+                
+                # 检查是否需要早停
+                if no_improvement_count >= early_stopping:
+                    self.logger.info(f"触发早停条件: 连续{early_stopping}次迭代无显著改进")
+                    return True  # 建议早停
+                return False
         
         # 保存更新方法以供外部使用
         self.update_bayesian_optimizer = update_optimizer
         
+        # 添加检查是否应该早停的方法
+        self.should_stop_early = lambda: no_improvement_count >= early_stopping
+        
         return configs
 
 
+    
+
     def _create_config(self, params, index):
-        """
-        创建具体配置
-        
-        参数:
-            params: 参数字典
-            index: 配置索引
-            
-        返回:
-            config: 配置字典
-        """
+        """创建具体配置"""
         # 复制基础配置
         config = deepcopy(self.base_config)
         
@@ -238,6 +274,16 @@ class HyperparameterOptimizer:
             else:
                 config[key] = value
         
+        # 确保loss配置部分存在
+        if 'loss' not in config:
+            config['loss'] = {
+                'aux_weight': 0.3,
+                'attn_reg_weight': 0.01,
+                'class_balance_method': 'effective_samples',
+                'focal_gamma': 2.0,
+                'cb_beta': 0.9999
+            }
+        
         # 设置配置路径和ID
         config_id = f"config_{index:03d}"
         config_path = os.path.join(self.output_dir, f"{config_id}.json")
@@ -254,10 +300,12 @@ class HyperparameterOptimizer:
             'params': params,
             'config': config
         }
+
+
     
     def record_result(self, config_id, metrics):
         """
-        记录训练结果
+        记录训练结果，并在贝叶斯优化时更新优化器
         
         参数:
             config_id: 配置ID
@@ -276,6 +324,15 @@ class HyperparameterOptimizer:
             json.dump(self.results, f, indent=4)
         
         self.logger.info(f"Recorded result for {config_id}: {metrics}")
+        
+        # 如果正在进行贝叶斯优化，更新优化器
+        if hasattr(self, 'update_bayesian_optimizer') and callable(self.update_bayesian_optimizer):
+            try:
+                self.update_bayesian_optimizer(config_id, metrics)
+                self.logger.info(f"已更新贝叶斯优化器，配置 {config_id}")
+            except Exception as e:
+                self.logger.error(f"更新贝叶斯优化器时出错: {e}")
+
     
     def get_best_config(self, metric='f1_macro', higher_is_better=True):
         """
@@ -370,3 +427,35 @@ class HyperparameterOptimizer:
             plt.close()
             
             self.logger.info(f"Parameter space heatmap saved to {heatmap_path}")
+
+
+    def generate_initial_config(self, param_space):
+        """生成初始配置"""
+        # 使用默认参数
+        default_params = {}
+        for name, space in param_space.items():
+            if isinstance(space, tuple) and len(space) >= 2:
+                # 对于连续参数，使用范围中点
+                low, high = space[:2]
+                default_params[name] = (low + high) / 2
+            elif isinstance(space, list):
+                # 对于分类参数，使用第一个值
+                default_params[name] = space[0]
+        
+        return self._create_config(default_params, 0)
+
+    def generate_next_config_bayesian(self, index):
+        """基于贝叶斯优化器生成下一个配置"""
+        if not hasattr(self, 'optimizer') or not hasattr(self, 'dimension_names'):
+            self.logger.error("贝叶斯优化器未初始化")
+            raise RuntimeError("贝叶斯优化器未初始化")
+        
+        # 让优化器建议下一组参数
+        suggested_params_list = self.optimizer.ask(n_points=1)
+        suggested_params = suggested_params_list[0]
+        
+        # 将参数列表转换为字典
+        params = {name: value for name, value in zip(self.dimension_names, suggested_params)}
+        
+        # 创建配置
+        return self._create_config(params, index)

@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Any, Optional
 import time
 from itertools import combinations
 from copy import deepcopy
-
+from models.classifiers.classification_head import ClassificationHead
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
@@ -287,10 +287,11 @@ class GroupEvaluator:
         # 复制模板模型
         model = deepcopy(self.model_template)
         
-        # 模型特定的初始化逻辑（需要根据实际模型结构调整）
+        # 设置活跃特征组的维度
+        active_dims = {group: feature_dims[group] for group in active_groups}
+        
+        # 模型特定的初始化逻辑
         if hasattr(model, 'input_dims'):
-            # 设置活跃特征组的维度
-            active_dims = {group: feature_dims[group] for group in active_groups}
             model.input_dims = active_dims
         
         # 确保模型在正确的设备上
