@@ -356,7 +356,11 @@ class MFCANTrainer:
                 aux_losses[modal] = criterion(aux_output, targets)
             
             # 计算平均辅助损失
-            avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
+            if aux_losses:  # 添加检查确保aux_losses非空
+                avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
+            else:
+                avg_aux_loss = torch.tensor(0.0, device=main_loss.device)
+
             
             # 计算总损失
             total_loss = main_loss + aux_weight * avg_aux_loss

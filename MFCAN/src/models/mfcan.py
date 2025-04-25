@@ -231,6 +231,7 @@ class MFCAN(nn.Module):
                 'qti': self.auxiliary_classifiers['qti'](features['qti']),
                 'cest': self.auxiliary_classifiers['cest'](features['cest'])
             }
+
         
         # 如果只训练编码器，则不需要执行后续步骤
         if training_stage == 'encoders_only':
