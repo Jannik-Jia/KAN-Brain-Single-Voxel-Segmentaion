@@ -18,6 +18,7 @@ from evaluation.group_evaluator import GroupEvaluator
 from torch.utils.data import Sampler
 from collections import defaultdict
 import random
+from loss.mfcan_loss import MFCANLoss
 
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
