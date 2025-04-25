@@ -263,8 +263,12 @@ class MFCAN(nn.Module):
     
     def freeze_encoders(self):
         """冻结所有编码器参数"""
-        from utils.logging_utils import get_logger
-        logger = getattr(self, 'logger', get_logger(__name__))
+        logger = getattr(self, 'logger', None)
+        if logger is None:
+            from utils.logging_utils import Logger
+            log_manager = Logger("MFCAN", log_dir="logs/model")
+            logger = log_manager.get_logger()
+        
         for param in self.diffusion_encoder.parameters():
             param.requires_grad = False
         for param in self.qti_encoder.parameters():
@@ -275,8 +279,12 @@ class MFCAN(nn.Module):
 
     def unfreeze_encoders(self):
         """解冻所有编码器参数"""
-        from utils.logging_utils import get_logger
-        logger = getattr(self, 'logger', get_logger(__name__))
+        logger = getattr(self, 'logger', None)
+        if logger is None:
+            from utils.logging_utils import Logger
+            log_manager = Logger("MFCAN", log_dir="logs/model")
+            logger = log_manager.get_logger()
+        
         for param in self.diffusion_encoder.parameters():
             param.requires_grad = True
         for param in self.qti_encoder.parameters():
@@ -284,7 +292,8 @@ class MFCAN(nn.Module):
         for param in self.cest_encoder.parameters():
             param.requires_grad = True
         logger.info("已解冻所有编码器参数")
-    
+
+
     def get_parameter_groups(self):
         """
         获取参数分组，用于设置不同的学习率
