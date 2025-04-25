@@ -14,7 +14,7 @@ import sys
 from torch.cuda import amp
 import math
 import torch.nn.functional as F
-from src.evaluation.group_evaluator import GroupEvaluator
+from evaluation.group_evaluator import GroupEvaluator
 from torch.utils.data import Sampler
 from collections import defaultdict
 import random
