@@ -26,7 +26,8 @@ def main():
     parser.add_argument('--mode', type=str, default='full', choices=['full', 'encoders', 'fusion', 'finetune'], 
                         help='训练模式：full-完整训练流程，encoders-只训练编码器，fusion-只训练融合机制，finetune-只微调完整模型')
     parser.add_argument('--model_path', type=str, default=None, help='预训练模型路径，用于继续训练')
-    
+    parser.add_argument('--max_samples_per_class', type=int, default=2000, 
+                    help='Maximum number of samples per class for balanced sampling')
     args = parser.parse_args()
     
     # 检查文件是否存在
@@ -63,13 +64,15 @@ def main():
     
     try:
         # 初始化训练器
+
         trainer = MFCANTrainer(
             config_path=args.config,
             data_path=args.data_path,
             output_dir=output_dir,
-            logger=logger
+            logger=logger,
+            max_samples_per_class=args.max_samples_per_class
         )
-        
+
         # 如果提供了预训练模型路径，则加载模型
         if args.model_path and os.path.exists(args.model_path):
             logger.info(f"加载预训练模型: {args.model_path}")

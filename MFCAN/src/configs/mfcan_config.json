@@ -36,6 +36,7 @@
         "cest": "models/encoders/20250423_094758/20250423_094806/cest/cest_encoder_final.pth"
     },
     "training": {
+        "max_samples_per_class": 2000,
         "initial_lr": 1e-4,
         "finetune_lr": 5e-5,
         "aux_loss_weight": 0.3,
@@ -47,6 +48,7 @@
         "finetune_epochs": 70,
         "early_stopping": 10
     },
+
 
     "loss": {
     "aux_weight": 0.3,

@@ -123,7 +123,79 @@ class MFCANTrainer:
         if data_path:
             self.load_data(data_path)
 
+                # 保存均衡采样参数
+        self.max_samples_per_class = max_samples_per_class
+        
+        # 数据加载器
+        self.data_loaders = None
+        if data_path:
+            self.load_data(data_path, max_samples_per_class=max_samples_per_class)
+            
+
     
+    # 在MFCANTrainer类中添加可视化方法
+
+    def _visualize_class_distribution(self, original_counts, balanced_counts):
+        """
+        可视化类别分布，比较原始分布和均衡后的分布
+        
+        参数:
+            original_counts: 原始类别计数字典
+            balanced_counts: 均衡后类别计数字典
+        """
+        try:
+            import matplotlib.pyplot as plt
+            
+            # 准备数据
+            classes = sorted(original_counts.keys())
+            original_values = [original_counts.get(cls, 0) for cls in classes]
+            balanced_values = [balanced_counts.get(cls, 0) for cls in classes]
+            
+            # 创建图表
+            plt.figure(figsize=(15, 8))
+            
+            # 绘制柱状图
+            bar_width = 0.35
+            index = np.arange(len(classes))
+            
+            plt.bar(index, original_values, bar_width, alpha=0.8, color='b', label='Original')
+            plt.bar(index + bar_width, balanced_values, bar_width, alpha=0.8, color='g', label='Balanced')
+            
+            plt.xlabel('Class')
+            plt.ylabel('Number of Samples')
+            plt.title('Class Distribution: Original vs Balanced')
+            plt.xticks(index + bar_width/2, classes, rotation=90)
+            plt.legend()
+            
+            plt.tight_layout()
+            
+            # 保存图表
+            output_dir = os.path.join(self.output_dir, 'analysis')
+            os.makedirs(output_dir, exist_ok=True)
+            plt.savefig(os.path.join(output_dir, 'class_distribution.png'))
+            plt.close()
+            
+            # 对非常大的类别进行对数视图
+            plt.figure(figsize=(15, 8))
+            plt.bar(index, np.log1p(original_values), bar_width, alpha=0.8, color='b', label='Original (log)')
+            plt.bar(index + bar_width, np.log1p(balanced_values), bar_width, alpha=0.8, color='g', label='Balanced (log)')
+            
+            plt.xlabel('Class')
+            plt.ylabel('Log(Number of Samples + 1)')
+            plt.title('Class Distribution (Log Scale): Original vs Balanced')
+            plt.xticks(index + bar_width/2, classes, rotation=90)
+            plt.legend()
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, 'class_distribution_log.png'))
+            plt.close()
+            
+            self.logger.info(f"Class distribution visualizations saved to {output_dir}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to visualize class distribution: {e}")
+
+            
     def _build_model(self):
         """创建MFCAN模型"""
         self.logger.info("Building MFCAN model...")
@@ -145,14 +217,18 @@ class MFCANTrainer:
         
         return model
 
-    def load_data(self, data_path):
+
+    # 在mfcan_trainer.py文件中修改load_data方法
+
+    def load_data(self, data_path, max_samples_per_class=2000):
         """
-        加载数据
+        加载数据，并对训练集进行均衡采样
         
         参数:
             data_path: 数据文件路径
+            max_samples_per_class: 每个类别的最大样本数，默认2000
         """
-        self.logger.info(f"Loading data from {data_path}...")
+        self.logger.info(f"Loading data from {data_path} with max {max_samples_per_class} samples per class for training set only...")
         
         try:
             with h5py.File(data_path, 'r') as f:
@@ -160,22 +236,18 @@ class MFCANTrainer:
                 keys = list(f.keys())
                 self.logger.info(f"Data file structure: {keys}")
                 
-                # 提取每个模态的数据
-                # 这里假设数据文件的结构为 group_modality/split/features 和 /split/labels
-                # 实际使用时可能需要根据数据文件结构进行调整
-                
-                # 提取标签
+                # 提取标签 - 先获取原始标签
                 if 'train' in f and 'labels' in f['train']:
-                    train_labels = f['train/labels'][()]
+                    train_labels_full = f['train/labels'][()]
                     val_labels = f['val/labels'][()]
                     test_labels = f['test/labels'][()]
-                    self.logger.info(f"Labels loaded: train={train_labels.shape}, val={val_labels.shape}, test={test_labels.shape}")
+                    self.logger.info(f"Labels loaded: train={train_labels_full.shape}, val={val_labels.shape}, test={test_labels.shape}")
                 else:
                     raise KeyError("Cannot find labels in the data file")
                 
-                # 提取各模态特征
+                # 提取各模态特征 - 先获取所有原始特征
                 modalities = ['diffusion', 'qti', 'cest']
-                train_features = {}
+                train_features_full = {}
                 val_features = {}
                 test_features = {}
                 
@@ -190,7 +262,9 @@ class MFCANTrainer:
                     found = False
                     for path in possible_paths:
                         if path in f:
-                            train_features[modality] = f[path][()]
+                            # 提取完整的训练特征
+                            train_features_full[modality] = f[path][()]
+                            
                             val_path = path.replace('train', 'val')
                             test_path = path.replace('train', 'test')
                             
@@ -199,15 +273,68 @@ class MFCANTrainer:
                             if test_path in f:
                                 test_features[modality] = f[test_path][()]
                                 
-                            self.logger.info(f"{modality} features loaded from {path}: train={train_features[modality].shape}")
+                            self.logger.info(f"{modality} features loaded from {path}: train={train_features_full[modality].shape}")
                             found = True
                             break
                     
                     if not found:
                         raise KeyError(f"Cannot find {modality} features in the data file")
-            
-            # 创建张量数据集
-            self.logger.info("Creating tensor datasets...")
+                
+                # 仅对训练集进行均衡采样
+                self.logger.info("Performing balanced sampling on training set only...")
+                
+                # 1. 计算每个类别的样本数
+                classes, counts = np.unique(train_labels_full, return_counts=True)
+                class_counts = dict(zip(classes, counts))
+                
+                # 2. 记录原始类别分布
+                self.logger.info("Original class distribution in training set:")
+                for cls, count in class_counts.items():
+                    self.logger.info(f"Class {cls}: {count} samples")
+                
+                # 3. 为每个类别创建均衡样本索引
+                balanced_indices = []
+                sampled_class_counts = {}
+                
+                for cls in classes:
+                    # 获取当前类别的所有索引
+                    cls_indices = np.where(train_labels_full == cls)[0]
+                    count = len(cls_indices)
+                    
+                    if count == 0:
+                        # 跳过空类别
+                        self.logger.warning(f"Class {cls} has 0 samples, skipping.")
+                        sampled_class_counts[cls] = 0
+                        continue
+                    
+                    # 确定采样数量
+                    sample_count = min(count, max_samples_per_class)
+                    sampled_class_counts[cls] = sample_count
+                    
+                    # 随机采样
+                    if sample_count < count:
+                        # 需要下采样
+                        sampled_indices = np.random.choice(cls_indices, sample_count, replace=False)
+                    else:
+                        # 使用全部样本
+                        sampled_indices = cls_indices
+                    
+                    balanced_indices.extend(sampled_indices)
+                
+                # 4. 打乱训练集索引
+                np.random.shuffle(balanced_indices)
+                self.logger.info(f"After balancing: {len(balanced_indices)} training samples (original: {len(train_labels_full)})")
+                
+                # 5. 使用均衡索引提取训练数据
+                train_labels = train_labels_full[balanced_indices]
+                train_features = {}
+                for modality in modalities:
+                    train_features[modality] = train_features_full[modality][balanced_indices]
+                
+                # 6. 记录采样后的类别分布
+                self.logger.info("Balanced class distribution in training set:")
+                for cls, count in sampled_class_counts.items():
+                    self.logger.info(f"Class {cls}: {count} samples")
             
             # 处理标签（如果需要从1开始调整为从0开始）
             if np.min(train_labels) == 1:
@@ -237,18 +364,41 @@ class MFCANTrainer:
                 'test': DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=4, pin_memory=True)
             }
             
-            self.logger.info(f"Data loaders created: train={len(train_dataset)}, val={len(val_dataset)}, test={len(test_dataset)}")
+            self.logger.info(f"Data loaders created: train={len(train_dataset)} (balanced), val={len(val_dataset)} (original), test={len(test_dataset)} (original)")
+            
+            # 保存原始和均衡后的类别分布，用于后续分析
+            self.original_class_distribution = class_counts
+            self.balanced_class_distribution = sampled_class_counts
             
             # 保存类别数量
-            self.num_classes = len(np.unique(train_labels))
+            self.num_classes = len(np.unique(np.concatenate([train_labels, val_labels, test_labels])))
             self.logger.info(f"Number of classes: {self.num_classes}")
             
-            return self.data_loaders
+            # 保存均衡采样信息到配置
+            sampling_info = {
+                "balanced_sampling": True,
+                "max_samples_per_class": max_samples_per_class,
+                "original_train_samples": len(train_labels_full),
+                "balanced_train_samples": len(train_labels),
+                "val_samples": len(val_labels),
+                "test_samples": len(test_labels)
+            }
             
+            # 将采样信息添加到训练配置中
+            if 'training' not in self.config:
+                self.config['training'] = {}
+            self.config['training']['sampling'] = sampling_info
+            
+            # 可视化类别分布
+            self._visualize_class_distribution(class_counts, sampled_class_counts)
+            
+            return self.data_loaders
+                
         except Exception as e:
             self.logger.error(f"Error loading data: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             raise
-    
 
     def _create_lr_scheduler(self, optimizer, num_epochs, num_training_steps=None):
         """
