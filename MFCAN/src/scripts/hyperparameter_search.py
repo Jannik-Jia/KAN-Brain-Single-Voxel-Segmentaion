@@ -29,6 +29,7 @@ def main():
                         help='搜索方法: grid-网格搜索, random-随机搜索, bayesian-贝叶斯优化')
     parser.add_argument('--n_iter', type=int, default=10, help='迭代次数（对于随机搜索和贝叶斯优化）')
     parser.add_argument('--max_combinations', type=int, default=None, help='最大组合数（对于网格搜索）')
+    parser.add_argument('--max_samples_per_class', type=int, default=2000, help='每个类别的最大样本数，用于均衡采样')
     
     args = parser.parse_args()
     
@@ -46,6 +47,7 @@ def main():
     logger.info(f"基础配置: {args.config}")
     logger.info(f"数据路径: {args.data_path}")
     logger.info(f"输出目录: {output_dir}")
+    logger.info(f"每类最大样本数: {args.max_samples_per_class}")
     
     # 记录实验开始
     logger_manager.log_experiment_start(f"MFCAN超参数优化 ({args.search_method})", 
@@ -93,31 +95,102 @@ def main():
             }
             configs = optimizer.bayesian_optimization(param_space, args.n_iter)
         
-        # 训练每个配置
-        for config in configs:
-            logger.info(f"Training with config {config['id']}")
+        # 训练与评估配置
+        if args.search_method == 'bayesian':
+            # 贝叶斯优化需要顺序执行
+            total_configs = args.n_iter
+            processed_configs = 0
+
+            # 训练初始配置
+            for config in configs:
+                logger.info(f"训练初始配置 {processed_configs+1}/{total_configs}: {config['id']}")
+                
+                # 创建训练器
+                trainer = MFCANTrainer(
+                    config_path=config['path'],
+                    data_path=args.data_path,
+                    output_dir=os.path.join(output_dir, config['id']),
+                    logger=logger,
+                    max_samples_per_class=args.max_samples_per_class
+                )
+                
+                # 训练模型（使用较短的轮次进行快速评估）
+                trainer.pretrain_epochs = min(10, trainer.pretrain_epochs)
+                trainer.finetune_epochs = min(20, trainer.finetune_epochs)
+                
+                # 执行训练
+                trainer.train_full_pipeline()
+                
+                # 评估性能
+                metrics = trainer.evaluate()
+                
+                # 记录结果
+                optimizer.record_result(config['id'], metrics)
+                
+                # 更新优化器
+                optimizer.update_optimizer(config['id'], metrics)
+                
+                processed_configs += 1
             
-            # 创建训练器
-            trainer = MFCANTrainer(
-                config_path=config['path'],
-                data_path=args.data_path,
-                output_dir=os.path.join(output_dir, config['id']),
-                logger=logger
-            )
-            
-            # 训练模型（使用较短的轮次进行快速评估）
-            # 修改轮次数以加速超参数搜索
-            trainer.pretrain_epochs = min(10, trainer.pretrain_epochs)
-            trainer.finetune_epochs = min(20, trainer.finetune_epochs)
-            
-            # 执行训练
-            trainer.train_full_pipeline()
-            
-            # 评估性能
-            metrics = trainer.evaluate()
-            
-            # 记录结果
-            optimizer.record_result(config['id'], metrics)
+            # 然后基于结果生成和训练新配置
+            while processed_configs < total_configs:
+                # 生成下一个配置
+                config = optimizer.generate_next_config()
+                
+                logger.info(f"训练动态生成的配置 {processed_configs+1}/{total_configs}: {config['id']}")
+                
+                # 创建训练器
+                trainer = MFCANTrainer(
+                    config_path=config['path'],
+                    data_path=args.data_path,
+                    output_dir=os.path.join(output_dir, config['id']),
+                    logger=logger,
+                    max_samples_per_class=args.max_samples_per_class
+                )
+                
+                # 训练模型（使用较短的轮次进行快速评估）
+                trainer.pretrain_epochs = min(10, trainer.pretrain_epochs)
+                trainer.finetune_epochs = min(20, trainer.finetune_epochs)
+                
+                # 执行训练
+                trainer.train_full_pipeline()
+                
+                # 评估性能
+                metrics = trainer.evaluate()
+                
+                # 记录结果
+                optimizer.record_result(config['id'], metrics)
+                
+                # 更新优化器
+                optimizer.update_optimizer(config['id'], metrics)
+                
+                processed_configs += 1
+        else:
+            # 网格搜索和随机搜索可以并行执行
+            for config in configs:
+                logger.info(f"Training with config {config['id']}")
+                
+                # 创建训练器
+                trainer = MFCANTrainer(
+                    config_path=config['path'],
+                    data_path=args.data_path,
+                    output_dir=os.path.join(output_dir, config['id']),
+                    logger=logger,
+                    max_samples_per_class=args.max_samples_per_class
+                )
+                
+                # 训练模型（使用较短的轮次进行快速评估）
+                trainer.pretrain_epochs = min(10, trainer.pretrain_epochs)
+                trainer.finetune_epochs = min(20, trainer.finetune_epochs)
+                
+                # 执行训练
+                trainer.train_full_pipeline()
+                
+                # 评估性能
+                metrics = trainer.evaluate()
+                
+                # 记录结果
+                optimizer.record_result(config['id'], metrics)
         
         # 可视化结果
         optimizer.visualize_results()
@@ -141,7 +214,7 @@ def main():
             "状态": "成功",
             "运行时间(秒)": total_time,
             "优化方法": args.search_method,
-            "配置数量": len(configs),
+            "配置数量": processed_configs if args.search_method == 'bayesian' else len(configs),
             "最佳配置": best_config_path
         }
         logger_manager.log_experiment_end(f"MFCAN超参数优化 ({args.search_method})", results)

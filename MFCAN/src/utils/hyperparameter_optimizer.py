@@ -144,36 +144,32 @@ class HyperparameterOptimizer:
         
         self.logger.info(f"参数空间: {dimension_names}")
         
-        # 创建贝叶斯优化器
+        # 创建贝叶斯优化器 - 注意设置不同的随机种子
         optimizer = Optimizer(
             dimensions=dimensions,
             base_estimator="GP",  # 高斯过程
             acq_func="EI",        # 期望改进
             acq_optimizer="auto",
-            random_state=42
+            random_state=np.random.randint(0, 10000)  # 使用随机种子
         )
         
-        # 创建初始配置（随机采样1个）
+        # 创建初始配置
         configs = []
         
-        # 首先尝试使用默认配置
-        default_params = {}
-        for name, space in param_space.items():
-            if isinstance(space, tuple) and len(space) >= 2:
-                # 对于连续参数，使用范围中点
-                low, high = space[:2]
-                default_params[name] = (low + high) / 2
-            elif isinstance(space, list):
-                # 对于分类参数，使用第一个值
-                default_params[name] = space[0]
+        # 只生成初始随机点，后续配置会在评估后动态生成
+        initial_points = min(3, n_iter)  # 最多初始生成3个点，或根据n_iter调整
         
-        default_config = self._create_config(default_params, 0)
-        configs.append(default_config)
+        # 记录操作日志
+        self.logger.info(f"生成{initial_points}个初始随机配置")
         
-        # 然后生成n_iter-1个优化建议
-        for i in range(1, n_iter):
-            # 让贝叶斯优化器建议下一组参数
-            suggested_params_list = optimizer.ask(n_points=1)  # 要求1个点
+        # 生成初始随机配置
+        for i in range(initial_points):
+            # 对每个点使用一个不同的随机种子以确保多样性
+            random_seed = np.random.randint(0, 10000)
+            np.random.seed(random_seed)
+            
+            # 让贝叶斯优化器建议一个点
+            suggested_params_list = optimizer.ask(n_points=1)
             suggested_params = suggested_params_list[0]
             
             # 将参数列表转换为字典
@@ -182,32 +178,97 @@ class HyperparameterOptimizer:
             # 创建配置
             config = self._create_config(params, i)
             configs.append(config)
-        
-        self.logger.info(f"生成了{len(configs)}个配置用于贝叶斯优化")
-        
-        # 注册更新优化器的方法（当获得评估结果后调用）
-        def update_optimizer(config_id, metrics):
-            """更新贝叶斯优化器"""
-            # 找到配置
-            config = next((c for c in configs if c['id'] == config_id), None)
-            if not config:
-                self.logger.warning(f"无法找到配置 {config_id} 以更新优化器")
-                return
             
-            # 获取参数值
-            params = [config['params'].get(name) for name in dimension_names]
-            
-            # 获取指标值（最大化F1分数）
-            f1_score = -metrics.get('f1_macro', 0)  # 负号因为optimizer最小化目标函数
-            
-            # 告诉优化器结果
-            optimizer.tell(params, f1_score)
-            self.logger.info(f"更新贝叶斯优化器: config_id={config_id}, f1_macro={-f1_score}")
+            # 记录生成的配置
+            self.logger.info(f"初始配置 {i+1}/{initial_points}: {params}")
         
-        # 保存更新方法以供外部使用
-        self.update_bayesian_optimizer = update_optimizer
+        # 保存优化器和必要的上下文供外部使用
+        self.optimizer = optimizer
+        self.dimension_names = dimension_names
+        self.next_config_index = initial_points
+        self.total_configs_needed = n_iter
+        
+        self.logger.info(f"初始阶段生成了{len(configs)}个配置，剩余{n_iter - len(configs)}个将在评估后动态生成")
         
         return configs
+
+
+    def generate_next_config(self):
+        """生成下一个配置，基于之前的评估结果"""
+        if not hasattr(self, 'optimizer') or not hasattr(self, 'dimension_names'):
+            self.logger.error("贝叶斯优化器未初始化，无法生成下一个配置")
+            return None
+        
+        if not hasattr(self, 'next_config_index'):
+            self.next_config_index = 0
+        
+        # 使用不同的随机种子
+        np.random.seed(np.random.randint(0, 10000))
+        
+        # 获取下一个建议参数
+        suggested_params = self.optimizer.ask()[0]
+        params = {name: value for name, value in zip(self.dimension_names, suggested_params)}
+        
+        # 创建配置
+        config = self._create_config(params, self.next_config_index)
+        self.next_config_index += 1
+        
+        return config
+
+    def update_optimizer(self, config_id, metrics):
+        """更新贝叶斯优化器"""
+        if not hasattr(self, 'optimizer') or not hasattr(self, 'dimension_names'):
+            self.logger.error("贝叶斯优化器未初始化，无法更新")
+            return
+        
+        # 找到配置
+        config = next((r for r in self.results if r['config_id'] == config_id), None)
+        if not config:
+            self.logger.warning(f"无法找到配置结果 {config_id} 以更新优化器")
+            return
+        
+        # 从结果中获取参数
+        params_dict = config.get('params', {})
+        if not params_dict:
+            # 尝试从配置文件中加载参数
+            config_path = os.path.join(self.output_dir, f"{config_id}.json")
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    try:
+                        full_config = json.load(f)
+                        params = []
+                        for name in self.dimension_names:
+                            parts = name.split('.')
+                            value = full_config
+                            for part in parts:
+                                if part in value:
+                                    value = value[part]
+                                else:
+                                    value = None
+                                    break
+                            params.append(value)
+                    except Exception as e:
+                        self.logger.error(f"无法从配置文件加载参数: {e}")
+                        return
+            else:
+                self.logger.error(f"找不到配置文件 {config_path}")
+                return
+        else:
+            # 使用结果中记录的参数
+            params = []
+            for name in self.dimension_names:
+                params.append(params_dict.get(name))
+        
+        # 获取指标值（最大化F1分数）
+        f1_score = -metrics.get('f1_macro', 0)  # 负号因为optimizer最小化目标函数
+        
+        # 告诉优化器结果
+        try:
+            self.optimizer.tell(params, f1_score)
+            self.logger.info(f"更新贝叶斯优化器: config_id={config_id}, f1_macro={-f1_score}")
+        except Exception as e:
+            self.logger.error(f"更新优化器失败: {e}")
+
 
 
     def _create_config(self, params, index):
@@ -263,9 +324,35 @@ class HyperparameterOptimizer:
             config_id: 配置ID
             metrics: 性能指标
         """
+        # 加载配置文件，获取参数信息
+        config_path = os.path.join(self.output_dir, f"{config_id}.json")
+        params = {}
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    
+                # 如果存在dimension_names，提取相关参数
+                if hasattr(self, 'dimension_names'):
+                    for name in self.dimension_names:
+                        parts = name.split('.')
+                        value = config
+                        for part in parts:
+                            if part in value:
+                                value = value[part]
+                            else:
+                                value = None
+                                break
+                        params[name] = value
+            except Exception as e:
+                self.logger.warning(f"无法从配置文件加载参数: {e}")
+        
+        # 组合结果
         result = {
             'config_id': config_id,
-            'metrics': metrics
+            'metrics': metrics,
+            'params': params  # 保存参数信息
         }
         
         self.results.append(result)
@@ -276,7 +363,7 @@ class HyperparameterOptimizer:
             json.dump(self.results, f, indent=4)
         
         self.logger.info(f"Recorded result for {config_id}: {metrics}")
-    
+
     def get_best_config(self, metric='f1_macro', higher_is_better=True):
         """
         获取最佳配置
