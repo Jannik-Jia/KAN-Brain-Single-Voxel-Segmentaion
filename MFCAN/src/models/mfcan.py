@@ -203,9 +203,9 @@ class MFCAN(nn.Module):
         
         # 根据训练阶段设置梯度状态
         if training_stage == 'fusion_only':
-            self.diffusion_encoder.eval()  # 添加这行
-            self.qti_encoder.eval()        # 添加这行
-            self.cest_encoder.eval()       # 添加这行
+            self.diffusion_encoder.eval()
+            self.qti_encoder.eval()
+            self.cest_encoder.eval()
             with torch.no_grad():  # 冻结编码器
                 features = {
                     'diffusion': self.diffusion_encoder(x['diffusion'], return_features=True),
@@ -213,9 +213,9 @@ class MFCAN(nn.Module):
                     'cest': self.cest_encoder(x['cest'], return_features=True)
                 }
             # 恢复训练模式
-            self.diffusion_encoder.train()  # 添加这行
-            self.qti_encoder.train()        # 添加这行
-            self.cest_encoder.train()       # 添加这行 
+            self.diffusion_encoder.train()
+            self.qti_encoder.train()
+            self.cest_encoder.train()
         else:
             features = {
                 'diffusion': self.diffusion_encoder(x['diffusion'], return_features=True),
@@ -223,7 +223,7 @@ class MFCAN(nn.Module):
                 'cest': self.cest_encoder(x['cest'], return_features=True)
             }
         
-        # 计算各辅助分类器的输出
+        # 计算各辅助分类器的输出，但在fusion_only阶段不计算
         aux_outputs = {}
         if training_stage != 'fusion_only':
             aux_outputs = {
@@ -231,7 +231,6 @@ class MFCAN(nn.Module):
                 'qti': self.auxiliary_classifiers['qti'](features['qti']),
                 'cest': self.auxiliary_classifiers['cest'](features['cest'])
             }
-
         
         # 如果只训练编码器，则不需要执行后续步骤
         if training_stage == 'encoders_only':
@@ -249,12 +248,20 @@ class MFCAN(nn.Module):
         # 主分类器
         main_output = self.main_classifier(fused_features)
         
-        # 返回结果
-        result = {
-            'main_output': main_output,
-            'aux_outputs': aux_outputs,
-            'attention_weights': attention_weights
-        }
+        # 返回结果，对fusion_only阶段特殊处理
+        if training_stage == 'fusion_only':
+            # 在融合阶段，我们不包含辅助输出
+            result = {
+                'main_output': main_output,
+                'attention_weights': attention_weights
+                # 不包含aux_outputs
+            }
+        else:
+            result = {
+                'main_output': main_output,
+                'aux_outputs': aux_outputs,
+                'attention_weights': attention_weights
+            }
         
         return result
     

@@ -15,8 +15,7 @@ sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from training.mfcan_trainer import MFCANTrainer
 from utils.logging_utils import Logger
-from models.loss.mfcan_loss import MFCANLoss
-
+from loss.mfcan_loss import MFCANLoss
 def main():
     """MFCAN训练主函数"""
     # 解析命令行参数

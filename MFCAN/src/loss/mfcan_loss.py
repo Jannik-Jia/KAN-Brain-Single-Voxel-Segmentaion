@@ -100,23 +100,25 @@ class MFCANLoss(nn.Module):
             self.class_weights = self.class_weights.to(device)
         
         # 主分类损失
+        main_loss = torch.tensor(0.0, device=device)
         if 'main_output' in outputs:
             main_loss = self._compute_classification_loss(
                 outputs['main_output'], targets, self.class_weights)
-        else:
-            main_loss = torch.tensor(0.0, device=device)
         
         # 辅助分类损失
         aux_losses = {}
-        if 'aux_outputs' in outputs:
+        avg_aux_loss = torch.tensor(0.0, device=device)  # 默认为0
+        
+        if 'aux_outputs' in outputs and outputs['aux_outputs']:
             for modal, aux_output in outputs['aux_outputs'].items():
-                aux_losses[modal] = self._compute_classification_loss(
-                    aux_output, targets, self.class_weights)
+                # 检查是否有有效的aux_output
+                if aux_output is not None and aux_output.size(0) > 0:
+                    aux_losses[modal] = self._compute_classification_loss(
+                        aux_output, targets, self.class_weights)
             
-            # 计算平均辅助损失
-            avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
-        else:
-            avg_aux_loss = torch.tensor(0.0, device=device)
+            # 只有当有有效的辅助损失时才计算平均值
+            if aux_losses:
+                avg_aux_loss = sum(aux_losses.values()) / len(aux_losses)
         
         # 注意力正则化损失
         attn_reg_loss = torch.tensor(0.0, device=device)
@@ -139,9 +141,9 @@ class MFCANLoss(nn.Module):
                 attn_balance_loss = self.modal_balance_weight * modal_balance_loss
         
         # 计算总损失
-        if 'main_output' in outputs and 'aux_outputs' in outputs:
+        if 'main_output' in outputs and 'aux_outputs' in outputs and aux_losses:
             total_loss = main_loss + self.aux_weight * avg_aux_loss + attn_reg_loss + attn_balance_loss  
-        elif 'aux_outputs' in outputs:
+        elif 'aux_outputs' in outputs and aux_losses:
             # 如果只有辅助输出（编码器预训练阶段）
             total_loss = avg_aux_loss
         else:
@@ -158,6 +160,8 @@ class MFCANLoss(nn.Module):
         }
         
         return total_loss, loss_info
+
+
     
     def _compute_classification_loss(self, outputs, targets, class_weights=None):
         """

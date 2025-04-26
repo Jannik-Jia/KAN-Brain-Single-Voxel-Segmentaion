@@ -2048,7 +2048,23 @@ class TensorMultiModalDataset(Dataset):
             label: 标签
         """
         # 返回特征字典和标签
-        features = {modality: tensor[idx] for modality, tensor in self.features.items()}
+        features = {}
+        for modality, tensor in self.features.items():
+            if idx < len(tensor):
+                features[modality] = tensor[idx]
+            else:
+                # 记录错误或使用默认值
+                # 这种情况不应该发生，因为我们在__init__中检查了所有张量长度是否一致
+                # 但为了增强健壮性，我们还是处理这种边缘情况
+                features[modality] = torch.zeros_like(tensor[0])
+                print(f"警告: 索引 {idx} 超出了模态 {modality} 的范围 ({len(tensor)})")
+        
         label = self.labels[idx]
+        
+        # 确保所有必需的模态都存在
+        required_modalities = ['diffusion', 'qti', 'cest']
+        for modality in required_modalities:
+            if modality not in features:
+                raise ValueError(f"缺少必要的模态特征: {modality}")
         
         return features, label
