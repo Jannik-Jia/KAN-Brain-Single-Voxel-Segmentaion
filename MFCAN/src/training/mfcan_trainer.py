@@ -24,8 +24,7 @@ from models.mfcan import MFCAN
 class MFCANTrainer:
     """MFCAN模型训练器"""
     
-
-    def __init__(self, config_path, data_path=None, output_dir=None, device=None, logger=None):
+    def __init__(self, config_path, data_path=None, output_dir=None, device=None, logger=None, max_samples_per_class=2000):
         """
         初始化MFCAN训练器
         
@@ -35,6 +34,7 @@ class MFCANTrainer:
             output_dir: 输出目录，若不指定则使用配置文件中的设置
             device: 训练设备
             logger: 日志记录器
+            max_samples_per_class: 每个类别的最大样本数，用于均衡采样
         """
         # 设置设备
         if device is None:
@@ -99,6 +99,9 @@ class MFCANTrainer:
         self.finetune_epochs = training_config.get('finetune_epochs', 70)
         self.early_stopping = training_config.get('early_stopping', 10)
         
+        # 保存均衡采样参数
+        self.max_samples_per_class = max_samples_per_class
+        
         self.logger.info(f"MFCAN Trainer initialized: device={self.device}, output_dir={self.output_dir}")
         
         # 创建模型
@@ -121,18 +124,9 @@ class MFCANTrainer:
         # 数据加载器
         self.data_loaders = None
         if data_path:
-            self.load_data(data_path)
-
-                # 保存均衡采样参数
-        self.max_samples_per_class = max_samples_per_class
-        
-        # 数据加载器
-        self.data_loaders = None
-        if data_path:
             self.load_data(data_path, max_samples_per_class=max_samples_per_class)
-            
 
-    
+            
     # 在MFCANTrainer类中添加可视化方法
 
     def _visualize_class_distribution(self, original_counts, balanced_counts):
