@@ -12,6 +12,8 @@ OUTPUT_DIR=""  # 默认使用配置文件中的设置
 DO_HYPEROPT="false"  # 是否进行超参数优化
 SEARCH_METHOD="grid"  # 超参数搜索方法
 N_ITER="10"  # 迭代次数
+USE_BASELINE_DATA="false"  # 是否使用基线模型的数据
+BASELINE_DATA_PATH=""  # 基线模型数据路径
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -48,9 +50,18 @@ while [[ $# -gt 0 ]]; do
       N_ITER="$2"
       shift 2
       ;;
+    --use_baseline_data)
+      USE_BASELINE_DATA="true"
+      shift
+      ;;
+    --baseline_data_path)
+      BASELINE_DATA_PATH="$2"
+      USE_BASELINE_DATA="true"
+      shift 2
+      ;;
     *)
       echo "未知选项: $1"
-      echo "可用选项: --mode, --config, --data_path, --model_path, --output_dir, --hyperopt, --search_method, --n_iter"
+      echo "可用选项: --mode, --config, --data_path, --model_path, --output_dir, --hyperopt, --search_method, --n_iter, --use_baseline_data, --baseline_data_path"
       exit 1
       ;;
   esac
@@ -60,12 +71,39 @@ done
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="logs/shell/stage4_mfcan_${MODE}_${TIMESTAMP}.log"
 
+# 如果启用了使用基线数据但未指定路径，尝试自动查找
+if [ "$USE_BASELINE_DATA" = "true" ] && [ -z "$BASELINE_DATA_PATH" ]; then
+  # 查找最新的特征选择结果
+  FEATURE_PATH_PATTERN="results/feature_engineering/*/*selected_features*.h5"
+  BASELINE_DATA_PATH=$(ls -td ${FEATURE_PATH_PATTERN} 2>/dev/null | head -1)
+  
+  if [ ! -z "$BASELINE_DATA_PATH" ]; then
+    echo "自动选择基线数据文件: $BASELINE_DATA_PATH"
+  else
+    echo "警告: 无法找到基线数据文件"
+    # 尝试找到任意特征选择结果
+    BASELINE_DATA_PATH=$(ls -td results/feature_engineering/*/feature_selection*.h5 2>/dev/null | head -1)
+    
+    if [ ! -z "$BASELINE_DATA_PATH" ]; then
+      echo "使用备选基线数据文件: $BASELINE_DATA_PATH"
+    else
+      echo "错误: 找不到基线数据文件，将使用默认数据路径"
+      USE_BASELINE_DATA="false"
+    fi
+  fi
+fi
+
 # 如果指定了超参数优化，运行优化脚本
 if [ "$DO_HYPEROPT" = "true" ]; then
     echo "开始阶段4: MFCAN超参数优化..."
     echo "搜索方法: $SEARCH_METHOD"
     echo "配置文件: $CONFIG_PATH"
-    echo "数据路径: $DATA_PATH"
+    
+    if [ "$USE_BASELINE_DATA" = "true" ]; then
+      echo "数据路径(基线): $BASELINE_DATA_PATH"
+    else
+      echo "数据路径: $DATA_PATH"
+    fi
     
     HYPEROPT_LOG_FILE="logs/shell/stage4_hyperopt_${SEARCH_METHOD}_${TIMESTAMP}.log"
     echo "日志文件: $HYPEROPT_LOG_FILE"
@@ -77,14 +115,19 @@ if [ "$DO_HYPEROPT" = "true" ]; then
         HYPEROPT_OUTPUT_DIR="${OUTPUT_DIR}/hyperopt"
     fi
     
+    # 构建超参数优化命令
+    HYPEROPT_CMD="python scripts/hyperparameter_search.py --config ${CONFIG_PATH} --output_dir ${HYPEROPT_OUTPUT_DIR} --search_method ${SEARCH_METHOD} --n_iter ${N_ITER}"
+    
+    # 添加适当的数据路径
+    if [ "$USE_BASELINE_DATA" = "true" ]; then
+      HYPEROPT_CMD="${HYPEROPT_CMD} --use_baseline_data --baseline_data_path ${BASELINE_DATA_PATH}"
+    else
+      HYPEROPT_CMD="${HYPEROPT_CMD} --data_path ${DATA_PATH}"
+    fi
+    
     # 运行超参数优化脚本
-    echo "运行超参数优化..."
-    python scripts/hyperparameter_search.py \
-        --config ${CONFIG_PATH} \
-        --data_path ${DATA_PATH} \
-        --output_dir ${HYPEROPT_OUTPUT_DIR} \
-        --search_method ${SEARCH_METHOD} \
-        --n_iter ${N_ITER} > ${HYPEROPT_LOG_FILE} 2>&1
+    echo "运行超参数优化命令: ${HYPEROPT_CMD}"
+    nohup ${HYPEROPT_CMD} > ${HYPEROPT_LOG_FILE} 2>&1
     
     # 检查是否成功
     if [ $? -ne 0 ]; then
@@ -110,7 +153,13 @@ fi
 echo "开始阶段4: MFCAN训练..."
 echo "训练模式: $MODE"
 echo "配置文件: $CONFIG_PATH"
-echo "数据路径: $DATA_PATH"
+
+if [ "$USE_BASELINE_DATA" = "true" ]; then
+  echo "使用基线数据: $BASELINE_DATA_PATH"
+else
+  echo "数据路径: $DATA_PATH"
+fi
+
 if [ ! -z "$MODEL_PATH" ]; then
   echo "预训练模型: $MODEL_PATH"
 fi
@@ -122,9 +171,17 @@ if [ ! -f "$CONFIG_PATH" ]; then
     exit 1
 fi
 
-if [ ! -f "$DATA_PATH" ]; then
+# 根据使用的数据类型检查数据文件
+if [ "$USE_BASELINE_DATA" = "true" ]; then
+  if [ ! -f "$BASELINE_DATA_PATH" ]; then
+    echo "错误: 基线数据文件 $BASELINE_DATA_PATH 不存在"
+    exit 1
+  fi
+else
+  if [ ! -f "$DATA_PATH" ]; then
     echo "错误: 数据文件 $DATA_PATH 不存在"
     exit 1
+  fi
 fi
 
 # 验证训练模式
@@ -152,7 +209,14 @@ fi
 mkdir -p "$OUTPUT_DIR"
 
 # 构建命令
-CMD="python scripts/train_mfcan.py --mode ${MODE} --config ${CONFIG_PATH} --data_path ${DATA_PATH}"
+CMD="python scripts/train_mfcan.py --mode ${MODE} --config ${CONFIG_PATH}"
+
+# 添加适当的数据路径
+if [ "$USE_BASELINE_DATA" = "true" ]; then
+  CMD="${CMD} --use_baseline_data --baseline_data_path ${BASELINE_DATA_PATH}"
+else
+  CMD="${CMD} --data_path ${DATA_PATH}"
+fi
 
 # 添加模型路径（如果指定）
 if [ ! -z "$MODEL_PATH" ]; then

@@ -212,7 +212,135 @@ class MFCANTrainer:
         return model
 
 
-    # 在mfcan_trainer.py文件中修改load_data方法
+    def load_data_from_baseline_h5(self, data_path, max_samples_per_class=2000):
+        """
+        从基线模型使用的H5文件加载数据
+        
+        参数:
+            data_path: 基线模型数据文件路径
+            max_samples_per_class: 每个类别的最大样本数
+        """
+        self.logger.info(f"从基线模型H5文件加载数据: {data_path}")
+        
+        try:
+            with h5py.File(data_path, 'r') as f:
+                # 检查数据文件的结构
+                keys = list(f.keys())
+                self.logger.info(f"数据文件结构: {keys}")
+                
+                # 尝试加载特征和标签
+                if 'train' in f and 'features' in f['train'] and 'labels' in f['train']:
+                    # 直接加载整体特征
+                    train_features = f['train/features'][()]
+                    train_labels = f['train/labels'][()]
+                    val_features = f['val/features'][()]
+                    val_labels = f['val/labels'][()]
+                    test_features = f['test/features'][()]
+                    test_labels = f['test/labels'][()]
+                    
+                    self.logger.info(f"成功加载数据: train={train_features.shape}, val={val_features.shape}, test={test_features.shape}")
+                    
+                    # 将整体特征划分为三个模态 (示例划分方式，需根据实际特征维度调整)
+                    feature_dim = train_features.shape[1]
+                    
+                    # 获取模态划分信息，可以从配置文件中读取，这里假设默认划分
+                    diffusion_dim = self.config['diffusion_encoder']['input_dim'] 
+                    qti_dim = self.config['qti_encoder']['input_dim']
+                    cest_dim = self.config['cest_encoder']['input_dim']
+                    
+                    # 验证维度
+                    if diffusion_dim + qti_dim + cest_dim != feature_dim:
+                        self.logger.warning(f"特征维度不匹配: {diffusion_dim}+{qti_dim}+{cest_dim} != {feature_dim}")
+                        # 如果维度不匹配，使用默认划分
+                        diffusion_dim = int(feature_dim * 0.05)  # 约5%
+                        qti_dim = int(feature_dim * 0.65)        # 约65%
+                        cest_dim = feature_dim - diffusion_dim - qti_dim  # 剩余部分
+                    
+                    # 划分特征
+                    diffusion_start = 0
+                    qti_start = diffusion_dim
+                    cest_start = diffusion_dim + qti_dim
+                    
+                    # 创建模态特征
+                    train_features_dict = {
+                        'diffusion': train_features[:, diffusion_start:diffusion_start+diffusion_dim],
+                        'qti': train_features[:, qti_start:qti_start+qti_dim],
+                        'cest': train_features[:, cest_start:cest_start+cest_dim]
+                    }
+                    
+                    val_features_dict = {
+                        'diffusion': val_features[:, diffusion_start:diffusion_start+diffusion_dim],
+                        'qti': val_features[:, qti_start:qti_start+qti_dim],
+                        'cest': val_features[:, cest_start:cest_start+cest_dim]
+                    }
+                    
+                    test_features_dict = {
+                        'diffusion': test_features[:, diffusion_start:diffusion_start+diffusion_dim],
+                        'qti': test_features[:, qti_start:qti_start+qti_dim],
+                        'cest': test_features[:, cest_start:cest_start+cest_dim]
+                    }
+                    
+                    # 处理标签（如果需要从1开始调整为从0开始）
+                    if np.min(train_labels) == 1:
+                        train_labels = train_labels - 1
+                        val_labels = val_labels - 1
+                        test_labels = test_labels - 1
+                        self.logger.info("标签从1开始调整为从0开始")
+                    
+                    # 创建PyTorch张量
+                    train_tensors = {modality: torch.FloatTensor(features) 
+                                    for modality, features in train_features_dict.items()}
+                    val_tensors = {modality: torch.FloatTensor(features) 
+                                for modality, features in val_features_dict.items()}
+                    test_tensors = {modality: torch.FloatTensor(features) 
+                                for modality, features in test_features_dict.items()}
+                    
+                    train_labels_tensor = torch.LongTensor(train_labels)
+                    val_labels_tensor = torch.LongTensor(val_labels)
+                    test_labels_tensor = torch.LongTensor(test_labels)
+                    
+                    # 创建数据集
+                    from torch.utils.data import TensorDataset, DataLoader
+                    
+                    # 定义TensorMultiModalDataset
+                    class TensorMultiModalDataset(TensorDataset):
+                        def __init__(self, features, labels):
+                            self.features = features
+                            self.labels = labels
+                            
+                        def __getitem__(self, index):
+                            return {k: v[index] for k, v in self.features.items()}, self.labels[index]
+                            
+                        def __len__(self):
+                            return len(self.labels)
+                    
+                    train_dataset = TensorMultiModalDataset(train_tensors, train_labels_tensor)
+                    val_dataset = TensorMultiModalDataset(val_tensors, val_labels_tensor)
+                    test_dataset = TensorMultiModalDataset(test_tensors, test_labels_tensor)
+                    
+                    # 创建数据加载器
+                    self.data_loaders = {
+                        'train': DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=4, pin_memory=True),
+                        'val': DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=4, pin_memory=True),
+                        'test': DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+                    }
+                    
+                    self.logger.info(f"成功创建数据加载器: train={len(train_dataset)}, val={len(val_dataset)}, test={len(test_dataset)}")
+                    
+                    # 保存类别数量
+                    self.num_classes = len(np.unique(train_labels))
+                    self.logger.info(f"类别数: {self.num_classes}")
+                    
+                    return self.data_loaders
+                else:
+                    self.logger.error("无法在数据文件中找到特征和标签")
+                    raise KeyError("无法在数据文件中找到特征和标签")
+                    
+        except Exception as e:
+            self.logger.error(f"加载数据失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            raise
 
     def load_data(self, data_path, max_samples_per_class=2000):
         """

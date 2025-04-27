@@ -206,7 +206,14 @@ class HyperparameterOptimizer:
         np.random.seed(np.random.randint(0, 10000))
         
         # 获取下一个建议参数
-        suggested_params = self.optimizer.ask()[0]
+        suggested_params = self.optimizer.ask()
+        # 确保suggested_params是列表
+        if not isinstance(suggested_params, list):
+            suggested_params = [suggested_params]
+        # 如果是嵌套列表，取第一个元素
+        if len(suggested_params) == 1 and isinstance(suggested_params[0], list):
+            suggested_params = suggested_params[0]
+        
         params = {name: value for name, value in zip(self.dimension_names, suggested_params)}
         
         # 创建配置
@@ -264,10 +271,30 @@ class HyperparameterOptimizer:
         
         # 告诉优化器结果
         try:
+            # 确保params是正确的格式，skopt需要的是参数列表而不是字典
+            if isinstance(params, dict):
+                params = [params[name] for name in self.dimension_names]
+            
+            # 处理单个参数的情况
+            if len(self.dimension_names) == 1 and not isinstance(params, list):
+                params = [params]
+                
+            # 检查参数长度与维度是否匹配
+            if len(params) != len(self.dimension_names):
+                self.logger.warning(f"参数长度 ({len(params)}) 与维度数量 ({len(self.dimension_names)}) 不匹配")
+                # 尝试修复参数长度
+                if len(params) > len(self.dimension_names):
+                    params = params[:len(self.dimension_names)]
+                else:
+                    # 用None填充缺失的参数
+                    params = params + [None] * (len(self.dimension_names) - len(params))
+            
             self.optimizer.tell(params, f1_score)
             self.logger.info(f"更新贝叶斯优化器: config_id={config_id}, f1_macro={-f1_score}")
         except Exception as e:
             self.logger.error(f"更新优化器失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
 
 

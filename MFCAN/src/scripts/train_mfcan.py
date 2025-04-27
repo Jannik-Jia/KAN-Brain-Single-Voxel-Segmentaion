@@ -27,16 +27,33 @@ def main():
                         help='训练模式：full-完整训练流程，encoders-只训练编码器，fusion-只训练融合机制，finetune-只微调完整模型')
     parser.add_argument('--model_path', type=str, default=None, help='预训练模型路径，用于继续训练')
     parser.add_argument('--max_samples_per_class', type=int, default=2000, 
-                    help='Maximum number of samples per class for balanced sampling')
+                    help='每个类别的最大样本数，用于均衡采样')
+    # 添加基线数据相关参数
+    parser.add_argument('--use_baseline_data', action='store_true', help='使用基线模型的数据')
+    parser.add_argument('--baseline_data_path', type=str, default=None, help='基线模型数据文件路径')
     args = parser.parse_args()
     
-    # 检查文件是否存在
-    if not os.path.exists(args.config):
-        print(f"错误: 配置文件 {args.config} 不存在")
+    # 验证参数
+    if args.use_baseline_data and args.baseline_data_path is None:
+        print(f"错误: 使用基线数据时必须提供 --baseline_data_path 参数")
         return
         
-    if not os.path.exists(args.data_path):
-        print(f"错误: 数据文件 {args.data_path} 不存在")
+    if not args.use_baseline_data and args.data_path is None:
+        print(f"错误: 未指定 --use_baseline_data 时必须提供 --data_path 参数")
+        return
+    
+    # 检查文件是否存在
+    if args.use_baseline_data:
+        if not os.path.exists(args.baseline_data_path):
+            print(f"错误: 基线数据文件 {args.baseline_data_path} 不存在")
+            return
+    else:
+        if not os.path.exists(args.data_path):
+            print(f"错误: 数据文件 {args.data_path} 不存在")
+            return
+    
+    if not os.path.exists(args.config):
+        print(f"错误: 配置文件 {args.config} 不存在")
         return
     
     # 设置时间戳
@@ -49,7 +66,10 @@ def main():
     logger.info("=" * 80)
     logger.info("开始MFCAN训练流程")
     logger.info(f"配置文件: {args.config}")
-    logger.info(f"数据路径: {args.data_path}")
+    if args.use_baseline_data:
+        logger.info(f"使用基线数据: {args.baseline_data_path}")
+    else:
+        logger.info(f"数据路径: {args.data_path}")
     logger.info(f"训练模式: {args.mode}")
     
     # 设置输出目录
@@ -58,20 +78,31 @@ def main():
     logger.info(f"输出目录: {output_dir}")
     
     # 记录实验开始
-    logger_manager.log_experiment_start("MFCAN训练", f"模式: {args.mode}, 时间戳: {timestamp}")
+    experiment_name = f"MFCAN训练"
+    experiment_desc = f"模式: {args.mode}, 时间戳: {timestamp}"
+    if args.use_baseline_data:
+        experiment_desc += f", 使用基线数据: {os.path.basename(args.baseline_data_path)}"
+    logger_manager.log_experiment_start(experiment_name, experiment_desc)
     
     start_time = time.time()
     
     try:
         # 初始化训练器
-
         trainer = MFCANTrainer(
             config_path=args.config,
-            data_path=args.data_path,
+            data_path=None,  # 先不加载数据
             output_dir=output_dir,
             logger=logger,
             max_samples_per_class=args.max_samples_per_class
         )
+
+        # 根据参数选择加载不同的数据
+        if args.use_baseline_data:
+            logger.info(f"从基线数据加载: {args.baseline_data_path}")
+            trainer.load_data_from_baseline_h5(args.baseline_data_path, max_samples_per_class=args.max_samples_per_class)
+        else:
+            logger.info(f"从标准数据加载: {args.data_path}")
+            trainer.load_data(args.data_path, max_samples_per_class=args.max_samples_per_class)
 
         # 如果提供了预训练模型路径，则加载模型
         if args.model_path and os.path.exists(args.model_path):
@@ -115,9 +146,10 @@ def main():
             "宏平均F1": metrics['f1_macro'],
             "加权F1": metrics['f1_weighted'],
             "训练模式": args.mode,
+            "使用基线数据": args.use_baseline_data,
             "模型路径": model_path
         }
-        logger_manager.log_experiment_end("MFCAN训练", results)
+        logger_manager.log_experiment_end(experiment_name, results)
         
         return {
             'output_dir': output_dir,
@@ -131,7 +163,7 @@ def main():
         logger.error(traceback.format_exc())
         
         # 记录实验失败
-        logger_manager.log_experiment_end("MFCAN训练", {"状态": "失败", "错误": str(e)})
+        logger_manager.log_experiment_end(experiment_name, {"状态": "失败", "错误": str(e)})
         
         return {
             'status': 'failed',
