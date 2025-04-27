@@ -221,7 +221,7 @@ class HyperparameterOptimizer:
         self.next_config_index += 1
         
         return config
-
+    
     def update_optimizer(self, config_id, metrics):
         """更新贝叶斯优化器"""
         if not hasattr(self, 'optimizer') or not hasattr(self, 'dimension_names'):
