@@ -173,9 +173,34 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     
     # 训练循环
     for epoch in range(num_epochs):
-        # 训练代码保持不变...
+        model.train()
+        for batch_idx, (data, target) in enumerate(data_loaders['train']):
+            data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
         
-        # 验证代码保持不变...
+        # 验证
+        model.eval()
+        all_preds = []
+        all_targets = []
+        
+        with torch.no_grad():
+            for data, target in data_loaders['val']:
+                data, target = data.to(device), target.to(device)
+                output = model(data)
+                _, preds = torch.max(output, 1)
+                
+                # 只评估非背景像素
+                valid_mask = target != -1
+                all_preds.extend(preds[valid_mask].cpu().numpy())
+                all_targets.extend(target[valid_mask].cpu().numpy())
+        
+        # 计算F1分数
+        val_f1_macro = f1_score(all_targets, all_preds, average='macro')
+        val_f1_values.append(val_f1_macro)
         
         # 更新学习率调度器
         if lr_scheduler is not None:
