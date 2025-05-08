@@ -17,9 +17,9 @@ CONFIG = {
     
     # 数据路径和处理设置
     'data_dirs': {
-        'train_dir': "/path/to/your/train_dir",
-        'test_dir': "/path/to/your/test_dir",
-        'val_dir': "/path/to/your/val_dir"
+        'train_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train",
+        'test_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test",
+        'val_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
     },
     'apply_pca': False,  # 是否应用PCA降维
     'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
