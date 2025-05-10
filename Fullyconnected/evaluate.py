@@ -61,21 +61,33 @@ def setup_environment(config):
     print(f"使用设备: {device}")
     
     return device
-
 def load_datasets(config):
     """加载数据集"""
     print("开始加载数据集...")
     
-    # 构建数据目录字典
-    data_dirs = {
-        'train_dir': config.get('train_dir'),
-        'test_dir': config.get('test_dir'),
-        'val_dir': config.get('val_dir')
-    }
+    # 确保数据目录存在且不为None
+    if 'data_dirs' not in config or not all(key in config['data_dirs'] and config['data_dirs'][key] is not None 
+                                         for key in ['train_dir', 'test_dir', 'val_dir']):
+        print("配置中数据目录不完整，尝试使用命令行参数中的路径...")
+        
+        # 使用命令行参数中的路径重建data_dirs
+        config['data_dirs'] = {
+            'train_dir': config.get('train_dir'),
+            'test_dir': config.get('test_dir'),
+            'val_dir': config.get('val_dir')
+        }
     
-    # 加载数据
+    # 最终检查确保所有路径都存在
+    for key, path in config['data_dirs'].items():
+        if path is None:
+            raise ValueError(f"错误: {key} 路径为None，请检查配置文件或命令行参数")
+        if not os.path.exists(path):
+            raise ValueError(f"错误: {key} 路径不存在: {path}")
+        print(f"使用 {key}: {path}")
+    
+    # 继续原有的数据加载流程...
     dataset_dict = load_multiclass_data(
-        data_dirs,
+        config['data_dirs'],
         apply_pca_flag=config.get('apply_pca', False),
         n_components=config.get('n_pca', 0),
         norm=config.get('norm', True)
@@ -225,13 +237,14 @@ def main():
     config = load_config(config_path)
     
     # 用命令行参数覆盖配置
-    if args.train_dir:
-        config['data_dirs'] = {
-            'train_dir': args.train_dir,
-            'test_dir': args.test_dir,
-            'val_dir': args.val_dir
-        }
-    
+    if args.train_dir is not None:
+        config['train_dir'] = args.train_dir
+    if args.test_dir is not None:
+        config['test_dir'] = args.test_dir
+    if args.val_dir is not None:
+        config['val_dir'] = args.val_dir
+
+        
     if args.batch_size:
         config['batch_size'] = args.batch_size
     
