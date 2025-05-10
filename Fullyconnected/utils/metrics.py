@@ -169,7 +169,7 @@ def compare_class_performance(results_list, dataset_names, result_path=None):
 
 def get_best_model(metrics_list, epoch_list, save_path, metric='f1', del_others=False):
     """
-    通过指定评估指标找到最佳模型
+    通过指定评估指标找到最佳模型，适应不同的文件名前缀
     
     参数:
         metrics_list: 指标列表（如准确率、F1或AUC-PR）
@@ -187,31 +187,45 @@ def get_best_model(metrics_list, epoch_list, save_path, metric='f1', del_others=
     best_epoch = epoch_list[best_index]
     best_metric = metrics_list[best_index]
     
-    # 根据使用的指标查找对应模型文件
-    if metric == 'f1':
-        pattern = f"epoch_{best_epoch}_*_f1_{best_metric:.4f}*.pth"
-    else:  # 默认使用acc
-        pattern = f"epoch_{best_epoch}_acc_{best_metric:.4f}*.pth"
+    # 获取目录中所有的.pth文件
+    all_model_files = glob.glob(os.path.join(save_path, "*.pth"))
     
-    matching_files = glob.glob(os.path.join(save_path, pattern))
-    if not matching_files:
-        # 备用搜索方式
-        all_model_files = glob.glob(os.path.join(save_path, "*.pth"))
-        for file in all_model_files:
-            if f"epoch_{best_epoch}_" in file:
-                matching_files.append(file)
+    if not all_model_files:
+        raise FileNotFoundError(f"在目录 {save_path} 中没有找到任何.pth模型文件")
     
+    # 查找包含正确轮次和指标的模型文件
+    matching_files = []
+    for file_path in all_model_files:
+        file_name = os.path.basename(file_path)
+        # 检查文件名中是否包含正确的轮次和指标值
+        epoch_pattern = f"epoch_{best_epoch}_"
+        metric_pattern = f"f1_{best_metric:.4f}"
+        
+        if epoch_pattern in file_name and metric_pattern in file_name:
+            matching_files.append(file_path)
+    
+    # 如果没有找到精确匹配，尝试只匹配轮次
     if not matching_files:
-        raise FileNotFoundError(f"找不到对应的模型文件: {pattern}")
+        print(f"没有找到精确匹配的模型文件，尝试只匹配轮次 {best_epoch}")
+        for file_path in all_model_files:
+            file_name = os.path.basename(file_path)
+            epoch_pattern = f"epoch_{best_epoch}_"
+            if epoch_pattern in file_name:
+                matching_files.append(file_path)
+    
+    # 如果仍然没有匹配，使用最后修改的文件
+    if not matching_files:
+        print(f"警告: 无法找到epoch {best_epoch}对应的模型文件，将使用最近修改的模型文件")
+        matching_files = [max(all_model_files, key=os.path.getmtime)]
     
     best_model_path = matching_files[0]
-    print(f"最佳模型 ({metric}={best_metric:.4f}): {os.path.basename(best_model_path)}")
+    print(f"选择的最佳模型: {os.path.basename(best_model_path)}")
     
-    # 删除其他模型
+    # 删除其他模型(如果需要)
     if del_others:
-        for f in os.listdir(save_path):
-            if f.endswith('.pth') and os.path.join(save_path, f) != best_model_path:
-                os.remove(os.path.join(save_path, f))
+        for f in all_model_files:
+            if f != best_model_path:
+                os.remove(f)
     
     return best_model_path
 
