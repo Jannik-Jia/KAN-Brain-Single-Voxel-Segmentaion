@@ -26,7 +26,7 @@ from eval import evaluate_model_detailed  # 保留兼容性包装
 from utils.metrics import evaluate_model, calculate_class_weights, get_best_model, compare_class_performance
 from utils.visualization import visualize_dataset_distribution, visualize_training_curves
 from utils.optimization import run_bayesian_optimization
-
+from utils.model_io import safe_load_model, load_model_with_architecture  # 添加新的导入
 
 
 def parse_args():
@@ -267,18 +267,27 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         training_results,
         save_path=os.path.join(config['save_dir'], "training_curves.png")
     )
-    
+        
     # 获取最佳模型
-    best_model_path = get_best_model(
-        training_results['val_f1_macro_list'],
-        training_results['val_epoch_list'],
-        config['save_dir'],
-        metric='f1'
-    )
-    
-    # 加载最佳模型
-    model.load_state_dict(torch.load(best_model_path, map_location=device)['state_dict'])
-    
+    try:
+        best_model_path = get_best_model(
+            training_results['val_f1_macro_list'],
+            training_results['val_epoch_list'],
+            config['save_dir'],
+            metric='f1'
+        )
+        
+        # 使用安全加载工具
+        checkpoint = safe_load_model(best_model_path, device)
+        model.load_state_dict(checkpoint['state_dict'])
+        print(f"成功加载最佳模型: {os.path.basename(best_model_path)}")
+        
+    except Exception as e:
+        print(f"加载最佳模型时出错: {e}")
+        print("将使用当前模型继续评估")
+
+        
+
     # 评估模型
     print("\n使用最佳模型进行评估...")
 

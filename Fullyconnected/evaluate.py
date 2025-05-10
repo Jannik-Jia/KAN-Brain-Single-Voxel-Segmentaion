@@ -10,6 +10,7 @@ import sys
 import json
 import argparse
 import torch
+import torch.serialization
 import numpy as np
 from torch.utils.data import DataLoader
 
@@ -19,6 +20,14 @@ from models import get_model
 from data import BrainVoxelDataset, load_multiclass_data
 from utils.metrics import evaluate_model
 from utils.visualization import visualize_dataset_distribution
+
+
+try:
+    torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+    print("已添加 numpy.core.multiarray.scalar 到安全全局变量列表")
+except Exception as e:
+    print(f"添加安全全局变量时出错: {e}")
+    print("将尝试使用 weights_only=False 加载模型")
 
 def parse_args():
     """解析命令行参数"""
@@ -112,6 +121,9 @@ def load_model_from_checkpoint(model_path, model_type, input_dim, hidden_dims, n
     """从检查点加载模型"""
     print(f"从检查点加载模型: {model_path}")
     
+    # 加载模型状态 - 使用 weights_only=False
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    
     # 创建模型
     model = get_model(
         model_type=model_type,
@@ -123,7 +135,6 @@ def load_model_from_checkpoint(model_path, model_type, input_dim, hidden_dims, n
     )
     
     # 加载模型状态
-    checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint['state_dict'])
     model = model.to(device)
     model.eval()

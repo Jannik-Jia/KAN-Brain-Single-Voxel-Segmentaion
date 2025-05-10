@@ -178,6 +178,8 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                 print(f"  Val:   Acc:{val_accuracy:.4f}  F1:{val_f1_macro:.4f}  Kappa:{val_kappa:.4f}  Balanced Acc:{val_balanced_acc:.4f}")
                 print(f"  Diff:  F1:{train_val_diff:.4f} (Training-Validation)")
 
+
+
                 # 保存当前模型
                 save_name = os.path.join(save_path, f"{experiment_name}_epoch_{e+1}_acc_{val_accuracy:.4f}_f1_{val_f1_macro:.4f}.pth")
 
@@ -194,10 +196,23 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                     'val_f1_macro_list': val_f1_macro_list,
                     'val_kappa_list': val_kappa_list,
                     'val_balanced_acc_list': val_balanced_acc_list,
-                    'lr_list': lr_list
+                    'lr_list': lr_list,
+                    # 添加元数据以便将来识别
+                    'created_with': f'PyTorch {torch.__version__}',
+                    'save_format_version': 1.0
                 }
-                torch.save(save_dict, save_name, _use_new_zipfile_serialization=not use_old_zipfile_serialization)
-                
+
+                # 尝试保存模型，兼容性设置
+                try:
+                    torch.save(save_dict, save_name, _use_new_zipfile_serialization=not use_old_zipfile_serialization)
+                except TypeError as e:
+                    # 如果不支持 _use_new_zipfile_serialization 参数（新版本PyTorch）
+                    if "_use_new_zipfile_serialization" in str(e):
+                        torch.save(save_dict, save_name)
+                    else:
+                        raise e
+    
+
                 # 记录日志
                 log_line = f"{e+1},{loss_list[-1]:.6f},{acc_list[-1]:.6f},{train_f1_macro:.6f},{val_accuracy:.6f},{val_f1_macro:.6f},{val_kappa:.6f},{val_balanced_acc:.6f},{current_lr:.8f}\n"
                 with open(log_file, 'a') as f:
