@@ -28,21 +28,21 @@ EXPERIMENT_NAME="DEBUG_BrainVoxel_MLP_$(date +%Y%m%d_%H%M%S)"
 
 # 运行代码 - 使用最小参数
 python main.py \
-    --experiment_name $EXPERIMENT_NAME \
+    --experiment_name "$EXPERIMENT_NAME" \
     --train_dir "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train" \
     --test_dir "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test" \
     --val_dir "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val" \
     --batch_size 128 \
-    --epochs 1 \               # 只跑1个epoch
+    --epochs 1 \
     --device 0 \
     --model_type "base_mlp" \
-    --hidden_units "1024,1024" \ # 使用更小的模型加快速度
+    --hidden_units "1024,1024" \
     --activation "relu" \
     --dropout_rate 0.5 \
     --lr 1e-5 \
     --weight_decay 1e-5 \
     --optimizer "adam" \
-    --save_dir "./debug_results" \ # 使用不同的保存目录
-    --log_dir "./debug_logs"      # 使用不同的日志目录
+    --save_dir "./debug_results" \
+    --log_dir "./debug_logs"
 
 echo "Debug run completed. Check for any errors."
