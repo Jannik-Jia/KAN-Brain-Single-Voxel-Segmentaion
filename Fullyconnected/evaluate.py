@@ -157,7 +157,9 @@ def evaluate_loaded_model(model, train_loader, val_loader, test_loader, device, 
         result_path=result_path,
         dataset_name="train",
         detailed=True,
-        plot=True
+        plot=True,
+        disable_progress=True,
+        show_class_metrics=True  # 显示每个标签的指标
     )
 
     # 在验证集上评估
@@ -169,7 +171,9 @@ def evaluate_loaded_model(model, train_loader, val_loader, test_loader, device, 
         result_path=result_path,
         dataset_name="val",
         detailed=True,
-        plot=True
+        plot=True,
+        disable_progress=True,
+        show_class_metrics=True  # 显示每个标签的指标
     )
 
     # 在测试集上评估
@@ -181,7 +185,9 @@ def evaluate_loaded_model(model, train_loader, val_loader, test_loader, device, 
         result_path=result_path,
         dataset_name="test",
         detailed=True,
-        plot=True
+        plot=True,
+        disable_progress=True,
+        show_class_metrics=True  # 显示每个标签的指标
     )
     
     # 保存评估结果摘要

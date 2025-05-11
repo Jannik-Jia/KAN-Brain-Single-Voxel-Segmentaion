@@ -171,7 +171,7 @@ def analyze_pca_variance(X, max_components=None, plot=True, save_path=None):
     suggested_components = optimal_n_components  # 使用保留95%信息的维度
     return suggested_components, explained_variance_ratio, cumulative_variance_ratio
 
-def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=True):
+def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=True, disable_progress=True):
     """
     载入所有类别的数据用于多分类训练 - 不进行类别平衡处理
     
@@ -180,6 +180,7 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
         apply_pca_flag: 是否应用PCA降维
         n_components: PCA保留的主成分数量，0表示自动选择
         norm: 是否进行标准化处理
+        disable_progress: 是否禁用进度条
         
     返回:
         dataset_dict: 包含训练、测试和验证集数据的字典
@@ -202,7 +203,9 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
     train_samples = []
     train_labels = []
     
-    for label_id in tqdm(valid_labels, desc="加载训练集数据"):
+    for label_id in (valid_labels if disable_progress else tqdm(valid_labels, desc="加载训练集数据")):
+        if not disable_progress and label_id % 10 == 0:
+            print(f"正在加载训练集标签 {label_id}...")
         file_path = train_sampler.get_file_path(label_id)
         if file_path and os.path.exists(file_path):
             samples = np.load(file_path)
@@ -214,7 +217,9 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
     test_samples = []
     test_labels = []
     
-    for label_id in tqdm(valid_labels, desc="加载测试集数据"):
+    for label_id in (valid_labels if disable_progress else tqdm(valid_labels, desc="加载测试集数据")):
+        if not disable_progress and label_id % 10 == 0:
+            print(f"正在加载测试集标签 {label_id}...")
         file_path = test_sampler.get_file_path(label_id)
         if file_path and os.path.exists(file_path):
             samples = np.load(file_path)
@@ -226,7 +231,9 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
     val_samples = []
     val_labels = []
     
-    for label_id in tqdm(valid_labels, desc="加载验证集数据"):
+    for label_id in (valid_labels if disable_progress else tqdm(valid_labels, desc="加载验证集数据")):
+        if not disable_progress and label_id % 10 == 0:
+            print(f"正在加载验证集标签 {label_id}...")
         file_path = val_sampler.get_file_path(label_id)
         if file_path and os.path.exists(file_path):
             samples = np.load(file_path)
@@ -255,9 +262,11 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
         
         if n_components == 0:
             # 自动选择主成分数量
-            n_components, _, _ = analyze_pca_variance(all_samples, plot=True)
+            n_components, _, _ = analyze_pca_variance(all_samples, plot=False)
+            print(f"自动选择主成分数量: {n_components}")
         
         # 创建并拟合PCA模型
+        print(f"应用PCA降维，保留 {n_components} 个主成分...")
         pca_model = PCA(n_components=n_components)
         pca_model.fit(all_samples)
         
@@ -275,6 +284,7 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
             stds[stds == 0] = 1e-10  # 避免除零
             
             # 应用标准化
+            print("应用数据标准化...")
             train_samples = (train_samples - means) / stds
             test_samples = (test_samples - means) / stds
             val_samples = (val_samples - means) / stds
@@ -287,35 +297,30 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
         pca_model = None
     
     # 类别分布统计
-    print("\n类别分布:")
-    class_counts = {}
+    print("\n类别分布统计:")
+    min_count = float('inf')
+    max_count = 0
+    min_label = None
+    max_label = None
+    
     for label_id in valid_labels:
         train_count = np.sum(train_labels == label_id)
         test_count = np.sum(test_labels == label_id)
         val_count = np.sum(val_labels == label_id)
         total_count = train_count + test_count + val_count
-        print(f"标签 {label_id}: 训练集 {train_count}, 测试集 {test_count}, 验证集 {val_count}, 总计 {total_count}")
-        class_counts[label_id] = {
-            'train': train_count,
-            'test': test_count,
-            'val': val_count,
-            'total': total_count
-        }
+        
+        if total_count < min_count:
+            min_count = total_count
+            min_label = label_id
+        if total_count > max_count:
+            max_count = total_count
+            max_label = label_id
     
     # 显示某些关键的类别统计
     print("\n类别统计摘要:")
-    min_label = min(class_counts.items(), key=lambda x: x[1]['total'])[0]
-    max_label = max(class_counts.items(), key=lambda x: x[1]['total'])[0]
-    print(f"样本最少的类别: 标签 {min_label}, 共 {class_counts[min_label]['total']} 个样本")
-    print(f"样本最多的类别: 标签 {max_label}, 共 {class_counts[max_label]['total']} 个样本")
-    print(f"类别不平衡比例: {class_counts[max_label]['total'] / class_counts[min_label]['total']:.2f} : 1")
-    
-    # 统计小样本类别
-    small_classes = [k for k, v in class_counts.items() if v['total'] < 10]
-    if small_classes:
-        print(f"\n样本数少于10的类别: {len(small_classes)} 个")
-        for label in small_classes:
-            print(f"标签 {label}: {class_counts[label]['total']} 个样本")
+    print(f"样本最少的类别: 标签 {min_label}, 共 {min_count} 个样本")
+    print(f"样本最多的类别: 标签 {max_label}, 共 {max_count} 个样本")
+    print(f"类别不平衡比例: {max_count / min_count:.2f} : 1")
     
     return {
         'train_samples': train_samples,
@@ -326,6 +331,5 @@ def load_multiclass_data(data_dirs, apply_pca_flag=True, n_components=24, norm=T
         'val_labels': val_labels,
         'feature_dim': feature_dim,
         'pca_model': pca_model,
-        'valid_labels': valid_labels,
-        'class_counts': class_counts
+        'valid_labels': valid_labels
     }

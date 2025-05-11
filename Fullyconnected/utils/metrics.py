@@ -229,9 +229,8 @@ def get_best_model(metrics_list, epoch_list, save_path, metric='f1', del_others=
     
     return best_model_path
 
-
 def evaluate_model(model, data_loader, device, result_path=None, dataset_name="", 
-                   class_names=None, detailed=True, plot=True):
+                   class_names=None, detailed=True, plot=True, disable_progress=True, show_class_metrics=True):
     """
     评估模型性能并可选生成详细报告
     
@@ -244,6 +243,8 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
         class_names: 类别名称列表
         detailed: 是否生成详细评估报告
         plot: 是否生成可视化图表
+        disable_progress: 是否禁用进度条
+        show_class_metrics: 是否显示每个类别的指标
     
     返回:
         评估结果字典
@@ -254,9 +255,11 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     all_probs = []  # 存储预测概率
     
     desc = f"评估{dataset_name}集" if dataset_name else "评估中"
+    print(f"开始{desc}...")
     
     with torch.no_grad():
-        for data, target in tqdm(data_loader, desc=desc):
+        loader_iterator = data_loader if disable_progress else tqdm(data_loader, desc=desc)
+        for data, target in loader_iterator:
             data, target = data.to(device), target.to(device)
             output = model(data)
             probs = torch.softmax(output, dim=1)
@@ -314,6 +317,45 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     print(f"表现最好的类别: 类别{best_class} (F1={class_f1[best_class_idx]:.4f}, 样本数={class_samples[best_class_idx]})")
     print(f"表现最差的类别: 类别{worst_class} (F1={class_f1[worst_class_idx]:.4f}, 样本数={class_samples[worst_class_idx]})")
     
+    # 如果需要显示每个标签的指标，打印每个标签的F1分数
+    if show_class_metrics:
+        print(f"\n{'-'*50}")
+        print(f"{dataset_name}集每个标签的F1分数:")
+        print(f"{'标签ID':<8}{'样本数':<10}{'精确率':<10}{'召回率':<10}{'F1分数':<10}")
+        
+        # 创建一个完整的类别列表 - 包括所有可能的标签，不仅仅是数据集中出现的标签
+        # 假设标签从0到101（或你知道的最大值）
+        max_label = np.max(unique_classes)
+        all_possible_labels = np.arange(max_label + 1)
+        
+        # 为所有标签创建字典，方便查找
+        class_metrics = {}
+        for idx, cls in enumerate(unique_classes):
+            class_metrics[cls] = {
+                'samples': class_samples[idx],
+                'precision': class_precision[idx],
+                'recall': class_recall[idx],
+                'f1': class_f1[idx]
+            }
+        
+        # 打印所有标签的指标（包括零样本标签）
+        for label in all_possible_labels:
+            if label in class_metrics:
+                # 数据集中存在此标签
+                metrics = class_metrics[label]
+                print(f"{label:<8}{metrics['samples']:<10}{metrics['precision']:.4f}{'':6}{metrics['recall']:.4f}{'':6}{metrics['f1']:.4f}")
+            else:
+                # 数据集中不存在此标签
+                print(f"{label:<8}{'0':<10}{'N/A':<10}{'N/A':<10}{'N/A':<10}")
+                
+        # 添加标签分布信息
+        non_zero_classes = np.sum(class_samples > 0)
+        zero_classes = len(all_possible_labels) - non_zero_classes
+        print(f"\n标签分布统计:")
+        print(f"总标签数量: {len(all_possible_labels)}")
+        print(f"有样本的标签数量: {non_zero_classes}")
+        print(f"无样本的标签数量: {zero_classes}")
+    
     # 计算混淆矩阵
     conf_matrix = confusion_matrix(all_targets, all_preds, labels=unique_classes)
     
@@ -349,43 +391,30 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             for i, cls in enumerate(unique_classes):
                 f.write(f"{cls:<10} {class_samples[i]:<10} {class_precision[i]:.4f}:<10 {class_recall[i]:.4f}:<10 {class_f1[i]:.4f}:<10\n")
             
-            # 额外添加类别分析
-            f.write("\n类别表现分析:\n")
-            # 按F1分数排序的类别
-            sorted_idx = np.argsort(class_f1)
-            f.write("\n表现最好的10个类别:\n")
-            for i in sorted_idx[-10:]:
-                f.write(f"类别 {unique_classes[i]}: F1={class_f1[i]:.4f}, 样本数={class_samples[i]}, 精确率={class_precision[i]:.4f}, 召回率={class_recall[i]:.4f}\n")
+            # 保存所有可能标签的详细信息（包括零样本标签）
+            f.write("\n所有标签的详细指标（包括零样本标签）:\n")
+            f.write(f"{'标签ID':<10} {'样本数':<10} {'精确率':<10} {'召回率':<10} {'F1分数':<10}\n")
             
-            f.write("\n表现最差的10个类别:\n")
-            for i in sorted_idx[:10]:
-                f.write(f"类别 {unique_classes[i]}: F1={class_f1[i]:.4f}, 样本数={class_samples[i]}, 精确率={class_precision[i]:.4f}, 召回率={class_recall[i]:.4f}\n")
-            
-            # 分析样本数与性能的关系
-            f.write("\n样本数与性能的关系分析:\n")
-            # 计算样本数和F1分数的相关性
-            correlation = np.corrcoef(class_samples, class_f1)[0, 1]
-            f.write(f"样本数与F1分数的相关系数: {correlation:.4f}\n")
-            
-            # 按样本数分组分析平均F1
-            f.write("\n按样本数分组的平均F1分数:\n")
-            # 定义样本数分组
-            sample_bins = [0, 10, 50, 100, 500, 1000, 5000, float('inf')]
-            bin_names = ['<10', '10-50', '50-100', '100-500', '500-1000', '1000-5000', '>5000']
-            
-            for i in range(len(sample_bins)-1):
-                mask = (class_samples >= sample_bins[i]) & (class_samples < sample_bins[i+1])
-                if np.sum(mask) > 0:
-                    avg_f1 = np.mean(class_f1[mask])
-                    count = np.sum(mask)
-                    f.write(f"样本数 {bin_names[i]}: 类别数量={count}, 平均F1={avg_f1:.4f}\n")
+            for label in all_possible_labels:
+                if label in class_metrics:
+                    # 数据集中存在此标签
+                    metrics = class_metrics[label]
+                    f.write(f"{label:<10} {metrics['samples']:<10} {metrics['precision']:.4f}:<10 {metrics['recall']:.4f}:<10 {metrics['f1']:.4f}:<10\n")
+                else:
+                    # 数据集中不存在此标签
+                    f.write(f"{label:<10} {'0':<10} {'N/A':<10} {'N/A':<10} {'N/A':<10}\n")
         
         # 保存CSV格式的类别性能
         csv_file = os.path.join(result_path, f"{dataset_name}_class_metrics.csv")
         with open(csv_file, 'w') as f:
             f.write("Class,SampleCount,Precision,Recall,F1Score\n")
-            for i, cls in enumerate(unique_classes):
-                f.write(f"{cls},{class_samples[i]},{class_precision[i]:.6f},{class_recall[i]:.6f},{class_f1[i]:.6f}\n")
+            # 保存所有可能的标签
+            for label in all_possible_labels:
+                if label in class_metrics:
+                    metrics = class_metrics[label]
+                    f.write(f"{label},{metrics['samples']},{metrics['precision']:.6f},{metrics['recall']:.6f},{metrics['f1']:.6f}\n")
+                else:
+                    f.write(f"{label},0,0,0,0\n")
         
         # 保存预测概率和真实标签
         np.savez(
@@ -407,115 +436,66 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             f.write(f"kappa,{kappa:.6f}\n")
             f.write(f"num_samples,{len(all_targets)}\n")
             f.write(f"num_classes,{class_count}\n")
+            f.write(f"non_zero_classes,{non_zero_classes}\n")
+            f.write(f"zero_classes,{zero_classes}\n")
         
         # 如果需要生成可视化
         if plot:
-            # 混淆矩阵可视化
-            plt.figure(figsize=(12, 10))
-            # 使用对数缩放
-            conf_mat_log = np.log1p(conf_matrix)  # log(1+x)以处理零值
-            mask = conf_matrix == 0
-            # 绘制混淆矩阵热图
-            sns.heatmap(conf_mat_log, annot=False, fmt='d', cmap='Blues', mask=mask)
-            plt.xlabel('Predicted Label')
-            plt.ylabel('True Label')
-            plt.title(f'Confusion Matrix - {dataset_name} set (log scale)')
-            plt.savefig(os.path.join(result_path, f"{dataset_name}_confusion_matrix.png"))
-            plt.close()
-            
-            # 类别F1分数可视化
-            plt.figure(figsize=(15, 6))
-            
-            # 按F1分数排序
-            sorted_indices = np.argsort(class_f1)
-            # 选择最好和最差的20个类别（如果可用）
-            num_to_show = min(20, len(sorted_indices))
-            worst_indices = sorted_indices[:num_to_show]
-            best_indices = sorted_indices[-num_to_show:]
-            
-            # 绘制最差类别
-            plt.subplot(1, 2, 1)
-            bars = plt.barh(range(len(worst_indices)), class_f1[worst_indices])
-            plt.yticks(range(len(worst_indices)), [f"Class {unique_classes[i]}" for i in worst_indices])
-            plt.xlabel('F1 Score')
-            plt.title('Worst Performing Classes')
-            plt.grid(True, axis='x')
-            
-            # 为每个柱状图添加样本数量标注
-            for i, bar in enumerate(bars):
-                plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2, 
-                         f"n={class_samples[worst_indices[i]]}", va='center')
-            
-            # 绘制最好类别
-            plt.subplot(1, 2, 2)
-            bars = plt.barh(range(len(best_indices)), class_f1[best_indices])
-            plt.yticks(range(len(best_indices)), [f"Class {unique_classes[i]}" for i in best_indices])
-            plt.xlabel('F1 Score')
-            plt.title('Best Performing Classes')
-            plt.grid(True, axis='x')
-            
-            # 为每个柱状图添加样本数量标注
-            for i, bar in enumerate(bars):
-                plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2, 
-                         f"n={class_samples[best_indices[i]]}", va='center')
-            
-            plt.tight_layout()
-            plt.savefig(os.path.join(result_path, f"{dataset_name}_class_performance.png"))
-            plt.close()
-            
-            # 样本数与性能关系可视化
-            plt.figure(figsize=(12, 8))
-            
-            # 绘制样本数与F1的散点图
-            plt.subplot(2, 2, 1)
-            plt.scatter(class_samples, class_f1, alpha=0.6)
-            plt.xscale('log')
-            plt.xlabel('Sample Count (log scale)')
-            plt.ylabel('F1 Score')
-            plt.title('Sample Count vs. F1 Score')
-            plt.grid(True)
-            
-            # 绘制样本数与精确率的散点图
-            plt.subplot(2, 2, 2)
-            plt.scatter(class_samples, class_precision, alpha=0.6)
-            plt.xscale('log')
-            plt.xlabel('Sample Count (log scale)')
-            plt.ylabel('Precision')
-            plt.title('Sample Count vs. Precision')
-            plt.grid(True)
-            
-            # 绘制样本数与召回率的散点图
-            plt.subplot(2, 2, 3)
-            plt.scatter(class_samples, class_recall, alpha=0.6)
-            plt.xscale('log')
-            plt.xlabel('Sample Count (log scale)')
-            plt.ylabel('Recall')
-            plt.title('Sample Count vs. Recall')
-            plt.grid(True)
-            
-            # 绘制按样本数分组的平均F1
-            plt.subplot(2, 2, 4)
-            avg_f1_by_bin = []
-            bin_counts = []
-            bin_centers = []
-            
-            for i in range(len(sample_bins)-1):
-                mask = (class_samples >= sample_bins[i]) & (class_samples < sample_bins[i+1])
-                if np.sum(mask) > 0:
-                    avg_f1 = np.mean(class_f1[mask])
-                    avg_f1_by_bin.append(avg_f1)
-                    bin_counts.append(np.sum(mask))
-                    bin_centers.append(f"{bin_names[i]}\n(n={np.sum(mask)})")
-            
-            plt.bar(bin_centers, avg_f1_by_bin)
-            plt.ylabel('Average F1 Score')
-            plt.title('Average F1 Score by Sample Count Bins')
-            plt.xticks(rotation=45, ha='right')
-            plt.grid(True, axis='y')
-            
-            plt.tight_layout()
-            plt.savefig(os.path.join(result_path, f"{dataset_name}_sample_vs_performance.png"))
-            plt.close()
+            try:
+                # 混淆矩阵可视化
+                plt.figure(figsize=(12, 10))
+                # 使用对数缩放
+                conf_mat_log = np.log1p(conf_matrix)  # log(1+x)以处理零值
+                mask = conf_matrix == 0
+                # 绘制混淆矩阵热图
+                sns.heatmap(conf_mat_log, annot=False, fmt='d', cmap='Blues', mask=mask)
+                plt.xlabel('Predicted Label')
+                plt.ylabel('True Label')
+                plt.title(f'Confusion Matrix - {dataset_name} set (log scale)')
+                plt.savefig(os.path.join(result_path, f"{dataset_name}_confusion_matrix.png"))
+                plt.close()
+                
+                # 类别F1分数可视化
+                plt.figure(figsize=(15, 6))
+                
+                # 按F1分数排序
+                sorted_indices = np.argsort(class_f1)
+                # 选择最好和最差的20个类别（如果可用）
+                num_to_show = min(20, len(sorted_indices))
+                worst_indices = sorted_indices[:num_to_show]
+                best_indices = sorted_indices[-num_to_show:]
+                
+                # 绘制最差类别
+                plt.subplot(1, 2, 1)
+                bars = plt.barh(range(len(worst_indices)), class_f1[worst_indices])
+                plt.yticks(range(len(worst_indices)), [f"Class {unique_classes[i]}" for i in worst_indices])
+                plt.xlabel('F1 Score')
+                plt.title('Worst Performing Classes')
+                plt.grid(True, axis='x')
+                
+                # 为每个柱状图添加样本数量标注
+                for i, bar in enumerate(bars):
+                    plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2, 
+                             f"n={class_samples[worst_indices[i]]}", va='center')
+                
+                # 绘制最好类别
+                plt.subplot(1, 2, 2)
+                bars = plt.barh(range(len(best_indices)), class_f1[best_indices])
+                plt.yticks(range(len(best_indices)), [f"Class {unique_classes[i]}" for i in best_indices])
+                plt.xlabel('F1 Score')
+                plt.title('Best Performing Classes')
+                plt.grid(True, axis='x')
+                
+                # 为每个柱状图添加样本数量标注
+                for i, bar in enumerate(bars):
+                    plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2, 
+                             f"n={class_samples[best_indices[i]]}", va='center')
+                
+                plt.tight_layout()
+                plt.savefig(os.path.join(result_path, f"{dataset_name}_class_performance.png"))
+                plt.close()
+            except Exception as e:
+                print(f"生成可视化图表时出错: {e}")
     
     # 返回评估结果字典
     result = {

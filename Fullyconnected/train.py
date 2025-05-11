@@ -11,6 +11,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import f1_score, cohen_kappa_score, balanced_accuracy_score
+import sys
 
 def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion, optimizer, device, 
                           num_epochs=100, val_epoch=1, save_path="./Results",
@@ -80,7 +81,7 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
     
     try:
         # 训练循环
-        for e in tqdm(range(num_epochs), desc="Training Progress:"):
+        for e in range(num_epochs):
             # 获取当前学习率
             current_lr = optimizer.param_groups[0]['lr']
             lr_list.append(current_lr)
@@ -95,8 +96,8 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
             train_all_preds = []
             train_all_targets = []
             
-            # 批次循环
-            for batch_idx, (data, target) in tqdm(enumerate(train_loader), total=batch_num, desc=f"Epoch {e+1}/{num_epochs}"):
+            # 批次循环 - 移除tqdm
+            for batch_idx, (data, target) in enumerate(train_loader):
                 # 将数据移动到指定设备
                 data, target = data.to(device), target.to(device)
                 
@@ -130,7 +131,9 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
             train_f1_macro = f1_score(train_all_targets, train_all_preds, average='macro')
             f1_macro_list.append(train_f1_macro)
             
-            print(f"Epoch {e+1}/{num_epochs} Loss:{loss_list[-1]:.4f} Train Acc:{acc_list[-1]:.4f} Train F1:{train_f1_macro:.4f} LR:{current_lr:.6f}")
+            epoch_msg = f"Epoch {e+1}/{num_epochs} Loss:{loss_list[-1]:.4f} Train Acc:{acc_list[-1]:.4f} Train F1:{train_f1_macro:.4f} LR:{current_lr:.6f}"
+            print(epoch_msg)
+            sys.stdout.flush()  # 确保立即输出到nohup.out
             
             # 验证阶段
             if (e+1) % val_epoch == 0 or (e+1) == num_epochs:
@@ -143,7 +146,8 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                 all_targets = []
                 
                 with torch.no_grad():
-                    for batch_idx, (data, target) in tqdm(enumerate(val_loader), total=len(val_loader), desc="Validating"):
+                    # 移除tqdm
+                    for batch_idx, (data, target) in enumerate(val_loader):
                         data, target = data.to(device), target.to(device)
                         out = model(data)
                         _, pred = torch.max(out, dim=1)
@@ -173,12 +177,9 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                 # 显示对比训练集和验证集的评估指标
                 train_val_diff = train_f1_macro - val_f1_macro  # 训练集和验证集F1的差异（用于评估过拟合）
                 
-                print(f"Epoch {e+1}/{num_epochs}")
-                print(f"  Train: Acc:{acc_list[-1]:.4f}  F1:{train_f1_macro:.4f}")
-                print(f"  Val:   Acc:{val_accuracy:.4f}  F1:{val_f1_macro:.4f}  Kappa:{val_kappa:.4f}  Balanced Acc:{val_balanced_acc:.4f}")
-                print(f"  Diff:  F1:{train_val_diff:.4f} (Training-Validation)")
-
-
+                val_msg = f"Epoch {e+1}/{num_epochs}\n  Train: Acc:{acc_list[-1]:.4f}  F1:{train_f1_macro:.4f}\n  Val:   Acc:{val_accuracy:.4f}  F1:{val_f1_macro:.4f}  Kappa:{val_kappa:.4f}  Balanced Acc:{val_balanced_acc:.4f}\n  Diff:  F1:{train_val_diff:.4f} (Training-Validation)"
+                print(val_msg)
+                sys.stdout.flush()  # 确保立即输出到nohup.out
 
                 # 保存当前模型
                 save_name = os.path.join(save_path, f"{experiment_name}_epoch_{e+1}_acc_{val_accuracy:.4f}_f1_{val_f1_macro:.4f}.pth")
@@ -264,11 +265,3 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
         'lr_list': lr_list,
         'last_epoch': e+1
     }
-
-
-
-
-
-
-
-

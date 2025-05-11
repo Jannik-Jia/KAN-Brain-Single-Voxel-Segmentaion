@@ -124,11 +124,14 @@ def load_datasets(config):
     print(f"数据加载完成! 共载入 {len(train_dataset)} 个训练样本，{len(val_dataset)} 个验证样本，{len(test_dataset)} 个测试样本")
     print(f"特征维度: {dataset_dict['feature_dim']}")
     
-    # 可视化数据分布
-    visualize_dataset_distribution(
-        dataset_dict,
-        save_path=os.path.join(config['save_dir'], "dataset_distribution.png")
-    )
+    # 可视化数据分布 - 在nohup模式下可能不需要
+    try:
+        visualize_dataset_distribution(
+            dataset_dict,
+            save_path=os.path.join(config['save_dir'], "dataset_distribution.png")
+        )
+    except Exception as e:
+        print(f"可视化数据分布时出错: {e}")
     
     return dataset_dict, train_loader, val_loader, test_loader
 
@@ -263,10 +266,13 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     )
     
     # 可视化训练过程
-    visualize_training_curves(
-        training_results,
-        save_path=os.path.join(config['save_dir'], "training_curves.png")
-    )
+    try:
+        visualize_training_curves(
+            training_results,
+            save_path=os.path.join(config['save_dir'], "training_curves.png")
+        )
+    except Exception as e:
+        print(f"可视化训练曲线时出错: {e}")
         
     # 获取最佳模型
     try:
@@ -286,8 +292,6 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         print(f"加载最佳模型时出错: {e}")
         print("将使用当前模型继续评估")
 
-        
-
     # 评估模型
     print("\n使用最佳模型进行评估...")
 
@@ -300,7 +304,9 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         result_path=config['save_dir'],
         dataset_name="train",
         detailed=True,
-        plot=True
+        plot=True,
+        disable_progress=True,
+        show_class_metrics=True  # 添加这个参数以显示每个标签的F1分数
     )
 
     # 在验证集上评估
@@ -312,7 +318,9 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         result_path=config['save_dir'],
         dataset_name="val",
         detailed=True,
-        plot=True
+        plot=True,
+        disable_progress=True,
+        show_class_metrics=True  # 添加这个参数以显示每个标签的F1分数
     )
 
     # 在测试集上评估
@@ -324,7 +332,9 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         result_path=config['save_dir'],
         dataset_name="test",
         detailed=True,
-        plot=True
+        plot=True,
+        disable_progress=True,
+        show_class_metrics=True  # 添加这个参数以显示每个标签的F1分数
     )
     
     # 保存评估结果摘要
@@ -465,6 +475,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     print(f"评估完成，结果摘要已保存至{summary_path}")
     
     return train_results, val_results, test_results, best_model_path
+
+
 def main():
     """主函数"""
     # 解析命令行参数
