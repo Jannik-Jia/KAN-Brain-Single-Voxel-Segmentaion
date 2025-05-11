@@ -63,6 +63,8 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     """
     # 配置信息
     epochs = config.get('epochs', 30) if config else 30
+    # 确保epochs至少为5，防止t_max参数出错
+    train_epochs = max(5, min(epochs, 10))  # 贝叶斯优化时使用较少的epoch，但至少5轮
     
     # ===== 共享参数空间（所有架构通用）=====
     # 这些参数对所有架构保持一致
@@ -111,8 +113,12 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         hidden_dims = layer_sizes_options[layer_sizes_idx]
         model_params = {
             'use_bottleneck': trial.suggest_categorical('use_bottleneck', [True, False]),
-            'bottleneck_factor': trial.suggest_float('bottleneck_factor', 0.25, 0.5) if trial.suggest_categorical('use_bottleneck', [True, False]) else 0.5
         }
+        # 只有当use_bottleneck为True时才添加bottleneck_factor参数
+        if model_params['use_bottleneck']:
+            model_params['bottleneck_factor'] = trial.suggest_float('bottleneck_factor', 0.25, 0.5)
+        else:
+            model_params['bottleneck_factor'] = 0.5  # 默认值
     
     # 创建模型
     model_kwargs = {
@@ -144,19 +150,22 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     # 学习率调度器
     lr_scheduler = None
     if shared_params['lr_scheduler'] == 'cosine':
-        t_max = trial.suggest_int('cosine_t_max', max(5, epochs // 4), epochs)
+        # 修复t_max参数：确保low <= high
+        t_max = min(train_epochs, max(2, train_epochs // 2))  # 确保t_max在合理范围内
         eta_min = trial.suggest_float('cosine_eta_min', 1e-7, 1e-5, log=True)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=t_max, eta_min=eta_min
         )
     elif shared_params['lr_scheduler'] == 'step':
-        step_size = trial.suggest_int('step_size', 3, 15)
+        # 确保step_size <= train_epochs
+        step_size = trial.suggest_int('step_size', 1, max(1, train_epochs // 2))
         gamma = trial.suggest_float('step_gamma', 0.1, 0.5)
         lr_scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=step_size, gamma=gamma
         )
     elif shared_params['lr_scheduler'] == 'plateau':
-        patience = trial.suggest_int('plateau_patience', 2, 7)
+        # 确保patience不超过训练轮数
+        patience = trial.suggest_int('plateau_patience', 1, max(1, train_epochs // 3))
         factor = trial.suggest_float('plateau_factor', 0.1, 0.5)
         threshold = trial.suggest_float('plateau_threshold', 1e-4, 1e-2, log=True)
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -168,11 +177,10 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
     
     # 训练模型 - 简化版本，只训练几个epoch用于评估
-    num_epochs = 10  # 贝叶斯优化时使用较少的epoch
     val_f1_values = []
     
     # 训练循环
-    for epoch in range(num_epochs):
+    for epoch in range(train_epochs):
         model.train()
         for batch_idx, (data, target) in enumerate(data_loaders['train']):
             data, target = data.to(device), target.to(device)
