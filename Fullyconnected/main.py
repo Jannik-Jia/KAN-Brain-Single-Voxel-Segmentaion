@@ -14,6 +14,26 @@ import argparse
 import torch
 import torch.nn as nn
 import numpy as np
+
+# 设置PyTorch序列化安全变量 - 添加这部分
+try:
+    # 添加可能需要的numpy类型到安全全局变量列表
+    safe_globals = [
+        np.dtype,
+        np.core.multiarray.scalar,
+        np.ndarray,
+        np.generic,
+        np.float64,
+        np.float32,
+        np.int64,
+        np.int32
+    ]
+    torch.serialization.add_safe_globals(safe_globals)
+    print("已添加numpy类型到PyTorch安全全局变量列表")
+except Exception as e:
+    print(f"添加安全全局变量时出错 (可忽略): {e}")
+    print("将尝试在需要时再添加安全全局变量")
+    
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 

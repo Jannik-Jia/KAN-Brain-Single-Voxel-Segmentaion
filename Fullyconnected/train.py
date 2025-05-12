@@ -200,16 +200,33 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                     'lr_list': lr_list,
                     # 添加元数据以便将来识别
                     'created_with': f'PyTorch {torch.__version__}',
-                    'save_format_version': 1.0
+                    'save_format_version': 1.0,
+                    'numpy_version': f'{np.__version__}'
                 }
 
                 # 尝试保存模型，兼容性设置
                 try:
+                    # 先尝试使用标准方法
                     torch.save(save_dict, save_name, _use_new_zipfile_serialization=not use_old_zipfile_serialization)
+                    print(f"已保存模型到: {save_name}")
                 except TypeError as e:
-                    # 如果不支持 _use_new_zipfile_serialization 参数（新版本PyTorch）
+                    # 如果不支持 _use_new_zipfile_serialization 参数
                     if "_use_new_zipfile_serialization" in str(e):
-                        torch.save(save_dict, save_name)
+                        try:
+                            # 尝试直接保存
+                            torch.save(save_dict, save_name)
+                            print(f"已使用默认序列化方式保存模型到: {save_name}")
+                        except Exception as save_e:
+                            print(f"保存模型失败: {save_e}")
+                            # 尝试备用方式保存
+                            try:
+                                # 尝试使用pickle直接保存
+                                import pickle
+                                with open(save_name, 'wb') as f:
+                                    pickle.dump(save_dict, f)
+                                print(f"已使用pickle保存模型到: {save_name}")
+                            except Exception as pickle_e:
+                                print(f"所有保存方法都失败: {pickle_e}")
                     else:
                         raise e
     
