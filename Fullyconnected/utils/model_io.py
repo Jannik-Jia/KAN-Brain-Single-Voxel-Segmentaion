@@ -9,8 +9,10 @@ import torch
 import os
 import json
 import numpy as np
-
-def save_model_with_architecture(model, optimizer, config, training_info, save_path, lr_scheduler=None, use_old_zipfile_serialization=True):
+def save_model_with_architecture(model, optimizer, config, training_info, save_path, 
+                               normalization_params=None, lr_scheduler=None, 
+                               use_old_zipfile_serialization=True):
+    
     """
     保存模型并包含完整的架构和超参数信息
     
@@ -22,6 +24,7 @@ def save_model_with_architecture(model, optimizer, config, training_info, save_p
         save_path: 保存路径
         lr_scheduler: 学习率调度器（可选）
         use_old_zipfile_serialization: 是否使用旧的PyTorch序列化格式
+        normalization_params: 包含均值和标准差的字典，用于特征标准化
     
     返回:
         save_dict: 保存的字典
@@ -71,6 +74,7 @@ def save_model_with_architecture(model, optimizer, config, training_info, save_p
         # 其他配置信息
         'random_seed': config.get('random_seed', 666),
         'experiment_name': config.get('experiment_name', 'unknown'),
+        'normalization_params': normalization_params,
     }
     
     # 收集模型额外特征（如果有自定义类或属性）

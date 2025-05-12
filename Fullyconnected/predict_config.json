@@ -1,0 +1,18 @@
+{
+    "default_model_path": "./results/BrainVoxel_MLP_best_model.pth",
+    "data_dirs": {
+      "train_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train",
+      "test_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test",
+      "val_dir": "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
+    },
+    "matlab_data_mapping": {
+      "features_key": "voxel_data",
+      "coordinates_key": "voxel_coords",
+      "shape_key": "original_shape"
+    },
+    "visualization": {
+      "default_colormap": "viridis",
+      "confidence_threshold": 0.5,
+      "max_points": 10000
+    }
+  }

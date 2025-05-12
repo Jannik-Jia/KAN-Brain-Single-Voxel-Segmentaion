@@ -16,7 +16,9 @@ import sys
 def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion, optimizer, device, 
                           num_epochs=100, val_epoch=1, save_path="./Results",
                           lr_scheduler=None, use_old_zipfile_serialization=True, experiment_name=None,
-                          config=None):  # 添加config参数
+                          config=None, normalization_params=None):  # 新增normalization_params参数
+
+
     """
     训练脑体素MLP多分类模型，并输出训练集和验证集的性能指标
     
@@ -206,6 +208,7 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                 }
                 
                 # 使用新的保存函数保存模型及其完整架构
+
                 try:
                     # 如果没有提供配置对象，创建一个基本配置
                     if config is None:
@@ -215,6 +218,7 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                             'num_class': model.layers[-1].out_features if hasattr(model, 'layers') else 0,
                             'experiment_name': experiment_name
                         }
+
                     
                     # 保存模型
                     _, save_path_full = save_model_with_architecture(
@@ -222,11 +226,13 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                         optimizer=optimizer,
                         config=config,
                         training_info=training_info,
+                        normalization_params=normalization_params,  # 添加这一行
                         save_path=save_name,
                         lr_scheduler=lr_scheduler,
                         use_old_zipfile_serialization=use_old_zipfile_serialization
                     )
                     print(f"已保存模型及完整架构信息到: {save_path_full}")
+
                     
                 except Exception as save_e:
                     print(f"保存模型时出错: {save_e}")

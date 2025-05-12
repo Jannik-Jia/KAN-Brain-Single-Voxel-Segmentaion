@@ -265,12 +265,36 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer, mode='max', factor=config['lr_gamma'], patience=5, verbose=True
             )
-    
+
+    # 计算标准化参数
+    if config['norm']:
+        # 从数据集中获取标准化参数
+        if 'train_samples' in dataset_dict:
+            train_samples = dataset_dict['train_samples']
+            mean = np.mean(train_samples, axis=0)
+            std = np.std(train_samples, axis=0)
+            # 避免除零
+            std[std == 0] = 1e-10
+            
+            # 创建标准化参数字典
+            normalization_params = {
+                'mean': mean.tolist(),  # 转为列表以确保可JSON序列化
+                'std': std.tolist()
+            }
+            
+            print("已计算标准化参数")
+        else:
+            normalization_params = None
+            print("警告: 无法计算标准化参数，因为没有找到训练样本")
+    else:
+        normalization_params = None
+
+
     # 开始训练
     print("\n开始训练模型...")
     print(f"总轮数: {config['epochs']}, 批大小: {config['batch_size']}, 学习率: {config['lr']}")
-    
-    # 更新：传递config参数
+
+    # 更新：传递标准化参数
     training_results = train_brain_voxel_mlp_multiclass(
         model=model,
         train_loader=train_loader,
@@ -284,7 +308,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         lr_scheduler=lr_scheduler,
         use_old_zipfile_serialization=config.get('use_old_zipfile_serialization', True),
         experiment_name=config.get('experiment_name', time.strftime("%Y%m%d_%H%M%S")),
-        config=config  # 新增：传递配置对象
+        config=config,  # 传递配置对象
+        normalization_params=normalization_params  # 新增：传递标准化参数
     )
     
     # 可视化训练过程
