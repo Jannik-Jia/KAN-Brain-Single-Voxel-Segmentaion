@@ -7,17 +7,38 @@
 
 import os
 import sys
+import json
 import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import loadmat, savemat
-import scipy.ndimage as ndimage
-from mpl_toolkits.mplot3d import Axes3D
+from sklearn.decomposition import PCA
+import pickle
+import time
 
-# 导入你的工具模块
+# 设置PyTorch序列化安全变量
+try:
+    # 添加可能需要的numpy类型到安全全局变量列表
+    safe_globals = [
+        np.dtype,
+        np.core.multiarray.scalar,
+        np.ndarray,
+        np.generic,
+        np.float64,
+        np.float32,
+        np.int64,
+        np.int32
+    ]
+    torch.serialization.add_safe_globals(safe_globals)
+    print("已添加numpy类型到PyTorch安全全局变量列表")
+except Exception as e:
+    print(f"添加安全全局变量时出错 (可忽略): {e}")
+    print("将尝试在需要时再添加安全全局变量")
+
+# 导入自定义模块
 from utils.model_io import load_model_with_architecture, safe_load_model
-from data import apply_pca
+from data import apply_pca  # 假设你的数据模块中有这个函数
 
 def parse_args():
     """解析命令行参数"""
@@ -26,6 +47,7 @@ def parse_args():
     # 基本参数
     parser.add_argument('--model_path', type=str, required=True, help='训练好的模型路径')
     parser.add_argument('--data_path', type=str, required=True, help='要预测的MAT文件路径')
+    parser.add_argument('--config_path', type=str, default=None, help='配置文件路径')
     parser.add_argument('--output_dir', type=str, default='./prediction_results', help='结果保存目录')
     parser.add_argument('--device', type=int, default=0, help='使用的设备（-1表示CPU）')
     
@@ -33,11 +55,19 @@ def parse_args():
     parser.add_argument('--apply_pca', action='store_true', help='是否应用PCA降维')
     parser.add_argument('--pca_model', type=str, default=None, help='PCA模型路径，如果有的话')
     parser.add_argument('--normalize', action='store_true', help='是否标准化特征')
+    parser.add_argument('--region_key', type=str, default=None, help='MAT文件中region掩码的键名')
+    parser.add_argument('--features_key', type=str, default=None, help='MAT文件中特征数据的键名')
+    
+    # 预测参数
+    parser.add_argument('--batch_size', type=int, default=1024, help='预测时的批处理大小')
+    parser.add_argument('--threshold', type=float, default=0.0, help='预测概率阈值，低于此值的预测将被忽略')
+    parser.add_argument('--save_probability_maps', action='store_true', help='是否保存概率体积（可能较大）')
     
     # 可视化参数
     parser.add_argument('--save_3d', action='store_true', help='是否保存3D可视化结果')
     parser.add_argument('--colormap', type=str, default='jet', help='3D可视化使用的颜色映射')
-    parser.add_argument('--threshold', type=float, default=0.0, help='预测概率阈值，低于此值的预测将被忽略')
+    parser.add_argument('--no_display', action='store_true', help='不显示可视化，只保存')
+    parser.add_argument('--max_points', type=int, default=10000, help='3D可视化中显示的最大点数')
     
     return parser.parse_args()
 
@@ -53,17 +83,28 @@ def setup_environment(device_idx):
     
     return device
 
-def load_matlab_data(data_path):
+def load_config(config_path):
+    """加载配置文件"""
+    if config_path and os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        print(f"已加载配置文件: {config_path}")
+        return config
+    return {}
+
+def load_matlab_data(data_path, features_key=None, region_key=None):
     """
-    加载MATLAB .mat文件数据
+    加载MATLAB .mat文件数据，包括region掩码
     
     参数:
         data_path: .mat文件路径
+        features_key: 特征数据的键名，如果指定则优先使用
+        region_key: region掩码的键名，如果指定则优先使用
     
     返回:
         features: 特征矩阵
-        original_shape: 原始3D形状 (用于后续映射回3D)
-        metadata: 其他元数据 (如坐标等)
+        original_shape: 原始3D形状
+        metadata: 其他元数据
     """
     print(f"加载数据: {data_path}")
     try:
@@ -75,42 +116,54 @@ def load_matlab_data(data_path):
         # 预期的数据结构可能需要根据你的具体.mat文件调整
         features = None
         original_shape = None
+        region_mask = None
         metadata = {}
         
-        # 尝试获取常见的键名
-        # 这里需要根据你的.mat文件的具体结构调整
-        possible_feature_keys = ['data', 'features', 'X', 'voxel_data']
-        for key in possible_feature_keys:
-            if key in mat_data and mat_data[key] is not None:
-                features = mat_data[key]
-                print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
-                break
+        # 获取特征数据
+        if features_key and features_key in mat_data:
+            features = mat_data[features_key]
+            print(f"使用指定键 '{features_key}' 获取特征数据，形状: {features.shape}")
+        else:
+            # 尝试常见的键名
+            possible_feature_keys = ['data', 'features', 'X', 'voxel_data']
+            for key in possible_feature_keys:
+                if key in mat_data and mat_data[key] is not None:
+                    features = mat_data[key]
+                    print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
+                    break
         
-        # 尝试获取原始形状信息
-        possible_shape_keys = ['original_shape', 'shape', 'dimensions', 'voxel_shape']
-        for key in possible_shape_keys:
-            if key in mat_data and mat_data[key] is not None:
-                original_shape = mat_data[key]
-                if isinstance(original_shape, np.ndarray):
-                    original_shape = tuple(original_shape.flatten())
-                print(f"找到原始形状信息: {original_shape}")
-                break
-        
-        # 尝试获取坐标信息
-        possible_coord_keys = ['coordinates', 'coords', 'voxel_coords']
-        for key in possible_coord_keys:
-            if key in mat_data and mat_data[key] is not None:
-                metadata['coordinates'] = mat_data[key]
-                print(f"找到坐标信息，形状: {metadata['coordinates'].shape}")
-                break
-                
-        # 如果找不到原始形状，尝试从坐标推断
-        if original_shape is None and 'coordinates' in metadata:
-            coords = metadata['coordinates']
-            max_coords = np.max(coords, axis=0)
-            original_shape = tuple(max_coords + 1)
-            print(f"从坐标推断原始形状: {original_shape}")
+        # 获取region掩码
+        if region_key and region_key in mat_data:
+            region_mask = mat_data[region_key]
+            print(f"使用指定键 '{region_key}' 获取region掩码，形状: {region_mask.shape}")
             
+            # 如果我们有region掩码，可以从中推断原始形状
+            original_shape = region_mask.shape
+            print(f"从region掩码推断原始形状: {original_shape}")
+        else:
+            # 尝试常见的键名
+            possible_region_keys = ['region', 'mask', 'template', 'brain_mask']
+            for key in possible_region_keys:
+                if key in mat_data and mat_data[key] is not None:
+                    region_mask = mat_data[key]
+                    print(f"找到region掩码，使用键: {key}，形状: {region_mask.shape}")
+                    
+                    # 如果我们有region掩码，可以从中推断原始形状
+                    original_shape = region_mask.shape
+                    print(f"从region掩码推断原始形状: {original_shape}")
+                    break
+        
+        # 尝试获取原始形状信息(如果region掩码中没有)
+        if original_shape is None:
+            possible_shape_keys = ['original_shape', 'shape', 'dimensions', 'voxel_shape']
+            for key in possible_shape_keys:
+                if key in mat_data and mat_data[key] is not None:
+                    original_shape = mat_data[key]
+                    if isinstance(original_shape, np.ndarray):
+                        original_shape = tuple(original_shape.flatten())
+                    print(f"找到原始形状信息: {original_shape}")
+                    break
+        
         # 添加其他可能有用的元数据
         for key in mat_data.keys():
             if key not in ['__header__', '__version__', '__globals__'] and key not in metadata:
@@ -120,6 +173,8 @@ def load_matlab_data(data_path):
         if features is None:
             raise ValueError(f"无法在MAT文件中找到特征数据。可用键: {list(mat_data.keys())}")
             
+        metadata['region_mask'] = region_mask
+        
         return features, original_shape, metadata
         
     except Exception as e:
@@ -145,8 +200,8 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
     print(f"预处理特征，原始形状: {features.shape}")
     
     # 确保特征是2D矩阵
+    original_dims = features.shape
     if len(features.shape) > 2:
-        original_shape = features.shape
         features = features.reshape(-1, features.shape[-1])
         print(f"将特征重塑为2D矩阵: {features.shape}")
     
@@ -154,9 +209,6 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
     
     # 应用PCA (如果需要)
     if apply_pca_flag:
-        from sklearn.decomposition import PCA
-        import pickle
-        
         if pca_model_path and os.path.exists(pca_model_path):
             # 加载已有PCA模型
             print(f"加载PCA模型: {pca_model_path}")
@@ -166,8 +218,13 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
             # 应用变换
             features = pca_model.transform(features)
             print(f"应用PCA后的特征形状: {features.shape}")
+        elif model_info and 'pca_model' in model_info:
+            print("使用模型中保存的PCA参数")
+            pca_model = model_info['pca_model']
+            features = pca_model.transform(features)
+            print(f"应用PCA后的特征形状: {features.shape}")
         else:
-            print("未指定PCA模型路径或文件不存在，跳过PCA")
+            print("未找到PCA模型，跳过PCA")
     
     # 使用与训练时相同的标准化参数
     if normalize:
@@ -181,6 +238,12 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
             norm_params = model_info['normalization_params']
             mean = norm_params.get('mean')
             std = norm_params.get('std')
+            
+            # 如果参数是列表，转换为numpy数组
+            if mean is not None and isinstance(mean, list):
+                mean = np.array(mean)
+            if std is not None and isinstance(std, list):
+                std = np.array(std)
         
         # 从配置中提取标准化参数
         elif config and 'normalization_params' in config:
@@ -188,6 +251,12 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
             norm_params = config['normalization_params']
             mean = norm_params.get('mean')
             std = norm_params.get('std')
+            
+            # 如果参数是列表，转换为numpy数组
+            if mean is not None and isinstance(mean, list):
+                mean = np.array(mean)
+            if std is not None and isinstance(std, list):
+                std = np.array(std)
         
         # 如果找不到保存的参数，则尝试从训练数据集加载
         if mean is None or std is None:
@@ -239,7 +308,7 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
     
     return features, pca_model
 
-def predict_with_model(model, features, device, threshold=0.0):
+def predict_with_model(model, features, device, batch_size=1024, threshold=0.0):
     """
     使用模型进行预测
     
@@ -247,6 +316,7 @@ def predict_with_model(model, features, device, threshold=0.0):
         model: 加载的模型
         features: 处理后的特征
         device: 计算设备
+        batch_size: 批处理大小
         threshold: 预测概率阈值
     
     返回:
@@ -255,25 +325,30 @@ def predict_with_model(model, features, device, threshold=0.0):
     """
     print("使用模型进行预测...")
     
-    # 转换为Tensor
-    features_tensor = torch.FloatTensor(features).to(device)
+    # 确保模型处于评估模式
+    model.eval()
     
-    # 批处理预测，避免内存溢出
-    batch_size = 1024
+    # 获取样本数量
     n_samples = features.shape[0]
     n_batches = (n_samples + batch_size - 1) // batch_size
     
+    # 初始化结果存储
     all_probs = []
     all_preds = []
     
-    model.eval()
+    # 批处理预测
     with torch.no_grad():
         for i in range(n_batches):
+            # 获取当前批次
             start_idx = i * batch_size
             end_idx = min((i + 1) * batch_size, n_samples)
-            batch = features_tensor[start_idx:end_idx]
+            batch_features = features[start_idx:end_idx]
             
-            outputs = model(batch)
+            # 转换为Tensor
+            batch_tensor = torch.FloatTensor(batch_features).to(device)
+            
+            # 前向传播
+            outputs = model(batch_tensor)
             probs = torch.softmax(outputs, dim=1)
             _, preds = torch.max(outputs, dim=1)
             
@@ -281,7 +356,11 @@ def predict_with_model(model, features, device, threshold=0.0):
             all_probs.append(probs.cpu().numpy())
             all_preds.append(preds.cpu().numpy())
             
-    # 合并批次结果
+            # 打印进度
+            if (i + 1) % 10 == 0 or (i + 1) == n_batches:
+                print(f"已处理 {end_idx}/{n_samples} 个样本 ({end_idx/n_samples*100:.1f}%)")
+    
+    # 合并所有批次结果
     probabilities = np.vstack(all_probs)
     predictions = np.concatenate(all_preds)
     
@@ -303,41 +382,87 @@ def predict_with_model(model, features, device, threshold=0.0):
     
     return predictions, probabilities
 
-def map_predictions_to_3d(predictions, original_shape, coordinates=None):
+def map_predictions_to_3d(predictions, original_shape, region_mask=None, metadata=None):
     """
-    将预测结果映射回3D空间
+    将预测结果映射回3D空间，使用与MATLAB revert_reshape相同的逻辑
     
     参数:
-        predictions: 预测的类别
-        original_shape: 原始3D形状
-        coordinates: 坐标信息 (如果有)
-    
+        predictions: 预测的类别或概率矩阵 [n_voxels, n_classes] 或 [n_voxels]
+        original_shape: 原始3D体积的形状
+        region_mask: 掩码，指定哪些位置应该被填充 (等同于MATLAB中的region参数)
+        metadata: 其他元数据
+        
     返回:
-        volume: 3D体积，包含预测结果
+        volume: 3D或4D体积，包含映射后的预测结果
     """
     print(f"将预测映射回3D空间，目标形状: {original_shape}")
     
-    # 创建空体积
-    volume = np.zeros(original_shape, dtype=np.int32) - 1  # 初始化为-1（未知）
+    # 检查预测是否为多类别概率
+    multi_class = len(predictions.shape) > 1
     
-    if coordinates is not None:
-        # 使用坐标直接映射
-        for i, (x, y, z) in enumerate(coordinates):
-            volume[x, y, z] = predictions[i]
+    if multi_class:
+        # 创建4D体积 [x, y, z, n_classes]
+        n_classes = predictions.shape[1]
+        volume = np.zeros(original_shape + (n_classes,), dtype=np.float32)
+        
+        # 如果有region_mask，使用它来确定哪些位置应该被填充
+        if region_mask is not None:
+            # 确保region_mask是布尔型
+            if not np.issubdtype(region_mask.dtype, np.bool_):
+                region_mask = region_mask > 0
+                
+            # 为每个类别单独处理
+            for c in range(n_classes):
+                # 创建临时3D体积
+                temp_vol = np.zeros(original_shape, dtype=np.float32)
+                # 将掩码展平为1D
+                mask_flat = region_mask.flatten()
+                # 只有掩码为True的位置才填充预测值
+                temp_vol_flat = temp_vol.flatten()
+                temp_vol_flat[mask_flat] = predictions[:, c]
+                # 将1D数组重新整形为3D
+                temp_vol = temp_vol_flat.reshape(original_shape)
+                # 保存到4D体积的相应通道
+                volume[..., c] = temp_vol
+        else:
+            # 如果没有region_mask，假设所有体素都是有效的
+            # 将1D预测重塑为4D体积
+            for c in range(n_classes):
+                volume[..., c] = predictions[:, c].reshape(original_shape)
     else:
-        # 如果没有坐标，假设特征和体积的排列顺序相同
-        volume = predictions.reshape(original_shape)
+        # 创建3D体积
+        volume = np.zeros(original_shape, dtype=np.int32) - 1  # 初始化为-1（未知）
+        
+        # 如果有region_mask，使用它来确定哪些位置应该被填充
+        if region_mask is not None:
+            # 确保region_mask是布尔型
+            if not np.issubdtype(region_mask.dtype, np.bool_):
+                region_mask = region_mask > 0
+                
+            # 创建临时3D体积
+            temp_vol = np.full(original_shape, -1, dtype=np.int32)  # 初始化为-1
+            # 将掩码展平为1D
+            mask_flat = region_mask.flatten()
+            # 只有掩码为True的位置才填充预测值
+            temp_vol_flat = temp_vol.flatten()
+            temp_vol_flat[mask_flat] = predictions
+            # 将1D数组重新整形为3D
+            volume = temp_vol_flat.reshape(original_shape)
+        else:
+            # 如果没有region_mask，假设特征和体积的排列顺序相同
+            volume = predictions.reshape(original_shape)
     
     # 计算统计信息
-    unique_classes = np.unique(predictions)
-    class_counts = {cls: np.sum(predictions == cls) for cls in unique_classes if cls != -1}
-    
-    print(f"体积中的唯一类别: {len(class_counts)}")
-    print(f"前5个类别统计: {sorted(class_counts.items(), key=lambda x: x[1], reverse=True)[:5]}")
+    if not multi_class:
+        unique_classes = np.unique(predictions)
+        class_counts = {cls: np.sum(predictions == cls) for cls in unique_classes if cls != -1}
+        
+        print(f"体积中的唯一类别: {len(class_counts)}")
+        print(f"前5个类别统计: {sorted(class_counts.items(), key=lambda x: x[1], reverse=True)[:5]}")
     
     return volume
 
-def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True):
+def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True, max_points=10000):
     """
     可视化3D体积
     
@@ -346,6 +471,7 @@ def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True):
         colormap: 颜色映射
         save_path: 保存路径
         show: 是否显示图像
+        max_points: 每个类别显示的最大点数
     """
     print("生成3D可视化...")
     
@@ -387,7 +513,6 @@ def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True):
         z = z[::downsample]
         
         # 如果点数仍然很多，进一步下采样
-        max_points = 5000
         if len(x) > max_points:
             idx = np.random.choice(len(x), max_points, replace=False)
             x = x[idx]
@@ -421,7 +546,7 @@ def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True):
     else:
         plt.close()
 
-def save_results(predictions, probabilities, volume, metadata, output_dir):
+def save_results(predictions, probabilities, volume, probability_volume=None, metadata=None, output_dir=None):
     """
     保存预测结果
     
@@ -429,9 +554,13 @@ def save_results(predictions, probabilities, volume, metadata, output_dir):
         predictions: 预测的类别
         probabilities: 预测的概率
         volume: 3D体积
+        probability_volume: 概率体积（可选）
         metadata: 原始数据的元数据
         output_dir: 输出目录
     """
+    if output_dir is None:
+        output_dir = './prediction_results_' + time.strftime("%Y%m%d_%H%M%S")
+    
     print(f"保存结果到: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     
@@ -440,6 +569,9 @@ def save_results(predictions, probabilities, volume, metadata, output_dir):
     np.save(os.path.join(output_dir, 'probabilities.npy'), probabilities)
     np.save(os.path.join(output_dir, 'volume_3d.npy'), volume)
     
+    if probability_volume is not None:
+        np.save(os.path.join(output_dir, 'probability_volume.npy'), probability_volume)
+    
     # 保存为MAT文件
     output_data = {
         'predictions': predictions,
@@ -447,13 +579,35 @@ def save_results(predictions, probabilities, volume, metadata, output_dir):
         'volume_3d': volume
     }
     
+    if probability_volume is not None:
+        output_data['probability_volume'] = probability_volume
+    
     # 添加元数据
     if metadata:
         for key, value in metadata.items():
             if key not in output_data:
-                output_data[key] = value
+                # 只添加简单的元数据，避免过大的数据
+                try:
+                    if isinstance(value, np.ndarray) and value.size > 1000000:
+                        print(f"跳过保存大型元数据 '{key}'，大小: {value.shape}")
+                    else:
+                        output_data[key] = value
+                except:
+                    print(f"无法保存元数据 '{key}'")
     
-    savemat(os.path.join(output_dir, 'prediction_results.mat'), output_data)
+    # 保存MAT文件
+    try:
+        savemat(os.path.join(output_dir, 'prediction_results.mat'), output_data)
+    except Exception as e:
+        print(f"保存MAT文件时出错: {e}")
+        print("尝试保存不包含元数据的简化版本...")
+        
+        # 尝试保存简化版本
+        simple_output = {
+            'predictions': predictions,
+            'volume_3d': volume
+        }
+        savemat(os.path.join(output_dir, 'prediction_results_simple.mat'), simple_output)
     
     # 保存一些基本统计信息
     stats_file = os.path.join(output_dir, 'prediction_stats.txt')
@@ -482,11 +636,16 @@ def save_results(predictions, probabilities, volume, metadata, output_dir):
         f.write(f"  最大置信度: {np.max(max_probs):.4f}\n")
     
     print(f"已保存统计信息到: {stats_file}")
+    
+    return output_dir
 
 def main():
     """主函数"""
     # 解析命令行参数
     args = parse_args()
+    
+    # 加载配置文件
+    config = load_config(args.config_path)
     
     # 设置环境
     device = setup_environment(args.device)
@@ -501,16 +660,17 @@ def main():
         model_info = checkpoint.get('model_arch_info', {})
         training_info = checkpoint.get('training_info', {})
         
-        # 尝试从模型中提取标准化参数
-        if 'normalization_params' not in model_info and args.config_path:
-            print(f"从配置文件加载信息: {args.config_path}")
-            with open(args.config_path, 'r') as f:
-                config = json.load(f)
-        else:
-            config = None
-            
-        # 加载并预处理数据
-        features, original_shape, metadata = load_matlab_data(args.data_path)
+        # 加载数据
+        features, original_shape, metadata = load_matlab_data(
+            args.data_path, 
+            features_key=args.features_key,
+            region_key=args.region_key
+        )
+        
+        # 获取region_mask
+        region_mask = metadata.get('region_mask', None)
+        
+        # 预处理特征
         processed_features, pca_model = preprocess_features(
             features,
             config=config,
@@ -520,29 +680,70 @@ def main():
             normalize=args.normalize
         )
         
+        # 检查特征维度是否与模型兼容
+        expected_dim = model_info.get('feature_dim', None)
+        if expected_dim and processed_features.shape[1] != expected_dim:
+            print(f"警告: 预处理后的特征维度 ({processed_features.shape[1]}) 与模型期望的维度 ({expected_dim}) 不匹配!")
+            print("这可能导致错误或不准确的预测结果。")
+            
+            # 如果可能，尝试调整维度
+            if args.apply_pca:
+                print("建议: 请确保使用与训练模型相同的PCA配置。")
+            else:
+                print("建议: 如果训练使用了PCA，请添加 --apply_pca 参数并提供相同的PCA模型。")
         
         # 进行预测
         predictions, probabilities = predict_with_model(
             model, 
             processed_features, 
             device,
+            batch_size=args.batch_size,
             threshold=args.threshold
         )
         
         # 映射回3D
-        coordinates = metadata.get('coordinates', None)
-        volume = map_predictions_to_3d(predictions, original_shape, coordinates)
+        volume = map_predictions_to_3d(
+            predictions, 
+            original_shape, 
+            region_mask=region_mask,
+            metadata=metadata
+        )
+        
+        # 如果需要，映射概率体积
+        probability_volume = None
+        if args.save_probability_maps:
+            print("映射概率体积...")
+            probability_volume = map_predictions_to_3d(
+                probabilities,
+                original_shape,
+                region_mask=region_mask,
+                metadata=metadata
+            )
         
         # 保存结果
-        save_results(predictions, probabilities, volume, metadata, args.output_dir)
+        output_dir = save_results(
+            predictions, 
+            probabilities, 
+            volume, 
+            probability_volume=probability_volume, 
+            metadata=metadata, 
+            output_dir=args.output_dir
+        )
         
         # 可视化 (如果需要)
         if args.save_3d:
-            vis_file = os.path.join(args.output_dir, '3d_visualization.png')
-            visualize_3d_volume(volume, colormap=args.colormap, save_path=vis_file, show=False)
+            vis_file = os.path.join(output_dir, '3d_visualization.png')
+            visualize_3d_volume(
+                volume, 
+                colormap=args.colormap, 
+                save_path=vis_file, 
+                show=not args.no_display,
+                max_points=args.max_points
+            )
             print(f"3D可视化已保存到: {vis_file}")
         
         print("\n预测和3D映射完成!")
+        print(f"结果已保存到: {output_dir}")
         
     except Exception as e:
         print(f"错误: {e}")
