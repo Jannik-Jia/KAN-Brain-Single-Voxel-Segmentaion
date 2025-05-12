@@ -270,6 +270,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     print("\n开始训练模型...")
     print(f"总轮数: {config['epochs']}, 批大小: {config['batch_size']}, 学习率: {config['lr']}")
     
+    # 更新：传递config参数
     training_results = train_brain_voxel_mlp_multiclass(
         model=model,
         train_loader=train_loader,
@@ -282,7 +283,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         save_path=config['save_dir'],
         lr_scheduler=lr_scheduler,
         use_old_zipfile_serialization=config.get('use_old_zipfile_serialization', True),
-        experiment_name=config.get('experiment_name', time.strftime("%Y%m%d_%H%M%S"))
+        experiment_name=config.get('experiment_name', time.strftime("%Y%m%d_%H%M%S")),
+        config=config  # 新增：传递配置对象
     )
     
     # 可视化训练过程

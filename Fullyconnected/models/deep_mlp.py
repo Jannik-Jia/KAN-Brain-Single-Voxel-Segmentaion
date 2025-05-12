@@ -103,3 +103,22 @@ class DeepMLP(nn.Module):
         x = self.layers[-1](x)
         
         return x
+    
+
+
+    # deep_mlp.py
+    def get_model_info(self):
+        """获取模型的架构信息"""
+        return {
+            'model_type': 'deep_mlp',
+            'input_dim': self.input_dim if hasattr(self, 'input_dim') else self.layers[0].in_features,
+            'hidden_dims': self.hidden_dims if hasattr(self, 'hidden_dims') else [l.out_features for l in self.layers[::3] if isinstance(l, nn.Linear)][:-1],
+            'num_classes': self.num_classes if hasattr(self, 'num_classes') else self.layers[-1].out_features,
+            'dropout_rate': self.dropout_rate if hasattr(self, 'dropout_rate') else 0.5,
+            'activation': self.activation_name if hasattr(self, 'activation_name') else 'relu',
+            'use_skip_connections': self.use_skip_connections,
+            'num_layers': len([l for l in self.layers if isinstance(l, nn.Linear)]),
+            'total_parameters': sum(p.numel() for p in self.parameters()),
+            'trainable_parameters': sum(p.numel() for p in self.parameters() if p.requires_grad),
+        }
+

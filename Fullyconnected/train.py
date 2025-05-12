@@ -15,7 +15,8 @@ import sys
 
 def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion, optimizer, device, 
                           num_epochs=100, val_epoch=1, save_path="./Results",
-                          lr_scheduler=None, use_old_zipfile_serialization=True, experiment_name=None):
+                          lr_scheduler=None, use_old_zipfile_serialization=True, experiment_name=None,
+                          config=None):  # 添加config参数
     """
     训练脑体素MLP多分类模型，并输出训练集和验证集的性能指标
     
@@ -32,10 +33,14 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
         lr_scheduler: 学习率调度器
         use_old_zipfile_serialization: 是否使用旧的序列化方式
         experiment_name: 实验名称
+        config: 配置字典，包含模型架构和超参数信息
     
     返回:
         训练结果统计信息
     """
+    # 导入模型保存函数
+    from utils.model_io import save_model_with_architecture
+    
     # 确保保存路径存在
     os.makedirs(save_path, exist_ok=True)
     
@@ -183,12 +188,10 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
 
                 # 保存当前模型
                 save_name = os.path.join(save_path, f"{experiment_name}_epoch_{e+1}_acc_{val_accuracy:.4f}_f1_{val_f1_macro:.4f}.pth")
-
-                # 保存模型和训练信息
-                save_dict = {
-                    'state_dict': model.state_dict(), 
+                
+                # 收集训练信息
+                training_info = {
                     'epoch': e+1, 
-                    'optimizer': optimizer.state_dict(),
                     'loss_list': loss_list, 
                     'acc_list': acc_list,
                     'f1_macro_list': f1_macro_list,
@@ -198,38 +201,50 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                     'val_kappa_list': val_kappa_list,
                     'val_balanced_acc_list': val_balanced_acc_list,
                     'lr_list': lr_list,
-                    # 添加元数据以便将来识别
-                    'created_with': f'PyTorch {torch.__version__}',
-                    'save_format_version': 1.0,
-                    'numpy_version': f'{np.__version__}'
+                    'last_epoch': e+1,
+                    'train_time': time.time() - train_st
                 }
-
-                # 尝试保存模型，兼容性设置
+                
+                # 使用新的保存函数保存模型及其完整架构
                 try:
-                    # 先尝试使用标准方法
-                    torch.save(save_dict, save_name, _use_new_zipfile_serialization=not use_old_zipfile_serialization)
-                    print(f"已保存模型到: {save_name}")
-                except TypeError as e:
-                    # 如果不支持 _use_new_zipfile_serialization 参数
-                    if "_use_new_zipfile_serialization" in str(e):
-                        try:
-                            # 尝试直接保存
-                            torch.save(save_dict, save_name)
-                            print(f"已使用默认序列化方式保存模型到: {save_name}")
-                        except Exception as save_e:
-                            print(f"保存模型失败: {save_e}")
-                            # 尝试备用方式保存
-                            try:
-                                # 尝试使用pickle直接保存
-                                import pickle
-                                with open(save_name, 'wb') as f:
-                                    pickle.dump(save_dict, f)
-                                print(f"已使用pickle保存模型到: {save_name}")
-                            except Exception as pickle_e:
-                                print(f"所有保存方法都失败: {pickle_e}")
-                    else:
-                        raise e
-    
+                    # 如果没有提供配置对象，创建一个基本配置
+                    if config is None:
+                        config = {
+                            'model_type': model.__class__.__name__,
+                            'feature_dim': model.layers[0].in_features if hasattr(model, 'layers') else 0,
+                            'num_class': model.layers[-1].out_features if hasattr(model, 'layers') else 0,
+                            'experiment_name': experiment_name
+                        }
+                    
+                    # 保存模型
+                    _, save_path_full = save_model_with_architecture(
+                        model=model,
+                        optimizer=optimizer,
+                        config=config,
+                        training_info=training_info,
+                        save_path=save_name,
+                        lr_scheduler=lr_scheduler,
+                        use_old_zipfile_serialization=use_old_zipfile_serialization
+                    )
+                    print(f"已保存模型及完整架构信息到: {save_path_full}")
+                    
+                except Exception as save_e:
+                    print(f"保存模型时出错: {save_e}")
+                    # 尝试使用旧的保存方法作为备选
+                    try:
+                        save_dict = {
+                            'state_dict': model.state_dict(), 
+                            'epoch': e+1, 
+                            'optimizer': optimizer.state_dict(),
+                            'training_info': training_info,
+                            'created_with': f'PyTorch {torch.__version__}',
+                            'save_format_version': 1.0,
+                            'numpy_version': f'{np.__version__}'
+                        }
+                        torch.save(save_dict, save_name, _use_new_zipfile_serialization=not use_old_zipfile_serialization)
+                        print(f"已使用备选方法保存模型到: {save_name}")
+                    except Exception as backup_e:
+                        print(f"备选保存方法也失败: {backup_e}")
 
                 # 记录日志
                 log_line = f"{e+1},{loss_list[-1]:.6f},{acc_list[-1]:.6f},{train_f1_macro:.6f},{val_accuracy:.6f},{val_f1_macro:.6f},{val_kappa:.6f},{val_balanced_acc:.6f},{current_lr:.8f}\n"

@@ -25,6 +25,12 @@ class BrainVoxelMLP(nn.Module):
         """
         super(BrainVoxelMLP, self).__init__()
         
+        self.input_dim = input_dim
+        self.hidden_dims = hidden_dims if isinstance(hidden_dims, list) else [hidden_dims]
+        self.num_classes = num_classes
+        self.dropout_rate = dropout_rate
+        self.activation_name = activation
+        
         self.layers = nn.ModuleList()
         
         # 添加输入层到第一个隐藏层
@@ -69,3 +75,22 @@ class BrainVoxelMLP(nn.Module):
         for layer in self.layers:
             x = layer(x)
         return x
+    
+    def get_model_info(self):
+        """
+        获取模型的架构信息
+        
+        返回:
+            model_info: 包含模型架构细节的字典
+        """
+        return {
+            'model_type': 'base_mlp',
+            'input_dim': self.input_dim,
+            'hidden_dims': self.hidden_dims,
+            'num_classes': self.num_classes,
+            'dropout_rate': self.dropout_rate,
+            'activation': self.activation_name,
+            'num_layers': len(self.hidden_dims) + 1,  # 包括输出层
+            'total_parameters': sum(p.numel() for p in self.parameters()),
+            'trainable_parameters': sum(p.numel() for p in self.parameters() if p.requires_grad),
+        }

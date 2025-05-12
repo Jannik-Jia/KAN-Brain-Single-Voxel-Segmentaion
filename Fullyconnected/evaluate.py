@@ -138,33 +138,66 @@ def load_datasets(config):
     
     return dataset_dict, train_loader, val_loader, test_loader
 
-def load_model_from_checkpoint(model_path, model_type, input_dim, hidden_dims, num_classes, dropout_rate, activation, device):
-    """从检查点加载模型"""
+def load_model_from_checkpoint(model_path, device):
+    """从检查点加载模型，使用新的加载函数"""
     print(f"从检查点加载模型: {model_path}")
     
-    # 加载模型状态 - 使用 weights_only=False
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    # 使用新的加载函数
+    from utils.model_io import load_model_with_architecture
     
-    # 创建模型
-    model = get_model(
-        model_type=model_type,
-        input_dim=input_dim,
-        hidden_dims=hidden_dims,
-        num_classes=num_classes,
-        dropout_rate=dropout_rate,
-        activation=activation
-    )
+    try:
+        model, checkpoint = load_model_with_architecture(model_path, device)
+        print("成功完整重建模型架构并加载权重")
+        
+        # 打印模型架构信息
+        if hasattr(model, 'get_model_info'):
+            model_info = model.get_model_info()
+            print("\n模型架构信息:")
+            for key, value in model_info.items():
+                if isinstance(value, (list, tuple)) and len(value) > 10:
+                    value = f"{value[:5]}...共{len(value)}项"
+                print(f"  {key}: {value}")
+        
+        return model, checkpoint
+    except Exception as e:
+        print(f"使用新方法加载模型失败: {e}, 尝试旧方法")
+        
+        # 如果新方法失败，回退到旧方法
+        # 加载模型状态
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        
+        # 从配置文件获取模型参数
+        config_path = os.path.join(os.path.dirname(model_path), "config.json")
+        if not os.path.exists(config_path):
+            config_path = os.path.join(os.path.dirname(model_path), "optimized_config.json")
+        
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"找不到配置文件，无法重建模型架构")
+        
+        # 加载配置
+        from config import load_config
+        config = load_config(config_path)
+        
+        # 创建模型
+        from models import get_model
+        model = get_model(
+            model_type=config.get('model_type', 'base_mlp'),
+            input_dim=config.get('feature_dim', 0),
+            hidden_dims=config.get('hidden_units', [4096, 4096, 4096, 4096]),
+            num_classes=config.get('num_class', 102),
+            dropout_rate=config.get('dropout_rate', 0.5),
+            activation=config.get('activation', 'relu')
+        )
+        
+        # 加载模型状态
+        model.load_state_dict(checkpoint['state_dict'])
+        model = model.to(device)
+        model.eval()
+        
+        print(f"使用旧方法成功加载模型")
+        
+        return model, checkpoint
     
-    # 加载模型状态
-    model.load_state_dict(checkpoint['state_dict'])
-    model = model.to(device)
-    model.eval()
-    
-    # 打印模型信息
-    print(f"模型加载成功: {model_type}, 层大小: {hidden_dims}")
-    
-    return model, checkpoint
-
 def evaluate_loaded_model(model, train_loader, val_loader, test_loader, device, result_path):
     """评估已加载的模型"""
     print("\n开始评估模型...")

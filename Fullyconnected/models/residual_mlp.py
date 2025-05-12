@@ -97,3 +97,28 @@ class ResidualBrainVoxelMLP(nn.Module):
         # 输出层
         x = self.output_layer(x)
         return x
+    
+
+
+    # residual_mlp.py
+    def get_model_info(self):
+        """获取模型的架构信息"""
+        # 提取隐藏层维度
+        hidden_dims = []
+        for block in self.residual_blocks:
+            hidden_dim = block['main_path'][0].out_features
+            hidden_dims.append(hidden_dim)
+        
+        return {
+            'model_type': 'residual_mlp',
+            'input_dim': self.input_layer.in_features,
+            'hidden_dims': hidden_dims,
+            'num_classes': self.output_layer.out_features,
+            'dropout_rate': self.dropout_rate if hasattr(self, 'dropout_rate') else 0.5,
+            'activation': self.activation_name if hasattr(self, 'activation_name') else 'relu',
+            'use_bottleneck': self.use_bottleneck if hasattr(self, 'use_bottleneck') else False,
+            'bottleneck_factor': self.bottleneck_factor if hasattr(self, 'bottleneck_factor') else 0.5,
+            'num_residual_blocks': len(self.residual_blocks),
+            'total_parameters': sum(p.numel() for p in self.parameters()),
+            'trainable_parameters': sum(p.numel() for p in self.parameters() if p.requires_grad),
+        }
