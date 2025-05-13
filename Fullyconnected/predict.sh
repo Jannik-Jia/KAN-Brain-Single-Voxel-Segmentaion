@@ -5,9 +5,8 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 export CUDA_VISIBLE_DEVICES=0
 
 
-
 # 指定新的模型路径
-MODEL_PATH="/path/to/your/new/model.pth"  # 将此路径替换为您新模型的实际路径
+MODEL_PATH="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/Fullyconnected/best_model_results/BrainVoxel_BestParams_20250513_141710_epoch_9_acc_0.7071_f1_0.6970.pth"
 
 # 从模型路径中提取实验名称前缀
 MODEL_DIR=$(dirname "$MODEL_PATH")
@@ -81,9 +80,18 @@ echo "记录系统信息..."
     echo "数据文件: $DATA_PATH"
 } > "$RESULT_DIR/system_info.txt"
 
-# 添加PyTorch安全全局变量
-# 如果需要，在Python脚本中预先添加所需的安全全局变量
-echo "import torch; import numpy as np; try: torch.serialization.add_safe_globals([np.core.multiarray.scalar]); print('添加安全全局变量成功'); except Exception as e: print(f'添加安全全局变量失败 (可忽略): {e}')" > "$RESULT_DIR/prepare.py"
+# 添加PyTorch安全全局变量 - 修复语法错误，使用多行语法
+cat > "$RESULT_DIR/prepare.py" << 'EOF'
+import torch
+import numpy as np
+
+try:
+    torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+    print('添加安全全局变量成功')
+except Exception as e:
+    print(f'添加安全全局变量失败 (可忽略): {e}')
+EOF
+
 python "$RESULT_DIR/prepare.py"
 
 # 预测使用训练时的标准化参数
