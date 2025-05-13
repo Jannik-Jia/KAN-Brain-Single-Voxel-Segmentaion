@@ -92,23 +92,34 @@ def load_config(config_path):
         return config
     return {}
 
-def load_matlab_data(data_path, features_key=None, region_key=None):
+def load_matlab_data(data_path):
     """
-    加载MATLAB .mat文件数据，包括region掩码
+    加载MATLAB .mat文件数据，支持v7.3格式
     
     参数:
         data_path: .mat文件路径
-        features_key: 特征数据的键名，如果指定则优先使用
-        region_key: region掩码的键名，如果指定则优先使用
     
     返回:
         features: 特征矩阵
-        original_shape: 原始3D形状
-        metadata: 其他元数据
+        original_shape: 原始3D形状 (用于后续映射回3D)
+        metadata: 其他元数据 (如坐标等)
     """
     print(f"加载数据: {data_path}")
     try:
-        mat_data = loadmat(data_path)
+        # 首先检查文件格式并选择适当的加载方法
+        import h5py
+        import scipy.io as sio
+        
+        try:
+            # 尝试使用scipy.io.loadmat加载
+            mat_data = sio.loadmat(data_path)
+            print("使用scipy.io.loadmat成功加载数据")
+            is_hdf5 = False
+        except NotImplementedError:
+            # 如果是v7.3格式，使用h5py加载
+            print("检测到MATLAB v7.3 (HDF5)格式，使用h5py加载")
+            mat_data = h5py.File(data_path, 'r')
+            is_hdf5 = True
         
         # 打印mat文件中的键以帮助调试
         print(f"MAT文件中的键: {list(mat_data.keys())}")
@@ -116,45 +127,67 @@ def load_matlab_data(data_path, features_key=None, region_key=None):
         # 预期的数据结构可能需要根据你的具体.mat文件调整
         features = None
         original_shape = None
-        region_mask = None
         metadata = {}
         
-        # 获取特征数据
-        if features_key and features_key in mat_data:
-            features = mat_data[features_key]
-            print(f"使用指定键 '{features_key}' 获取特征数据，形状: {features.shape}")
+        # 处理HDF5格式的.mat文件
+        if is_hdf5:
+            # 在HDF5格式中，MATLAB的变量作为HDF5的group或dataset存储
+            # 并且字符串是以引用的形式存储
+            
+            # 尝试获取常见的特征数据键
+            possible_feature_keys = ['data', 'features', 'X', 'voxel_data', 'DEMO38']
+            for key in possible_feature_keys:
+                if key in mat_data and isinstance(mat_data[key], h5py.Dataset):
+                    # 注意：HDF5中MATLAB数组的轴顺序可能不同，需要转置
+                    features = np.array(mat_data[key])
+                    # 如果是MATLAB矩阵，需要转置
+                    if features.ndim > 1:
+                        features = features.T
+                    print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
+                    break
+            
+            # 如果没有直接找到特征，可能需要在嵌套结构中查找
+            if features is None:
+                # 递归检查组结构
+                def explore_group(group, path=""):
+                    for key in group.keys():
+                        full_path = f"{path}/{key}" if path else key
+                        if isinstance(group[key], h5py.Dataset):
+                            print(f"找到数据集: {full_path}, 形状: {group[key].shape}")
+                        elif isinstance(group[key], h5py.Group):
+                            explore_group(group[key], full_path)
+                
+                explore_group(mat_data)
+                
+                # 请求用户交互式输入数据路径
+                print("\n请根据上面显示的数据集路径，指定包含特征数据的路径:")
+                features_path = input("特征数据路径: ").strip()
+                
+                if features_path and features_path in mat_data:
+                    features = np.array(mat_data[features_path])
+                    if features.ndim > 1:
+                        features = features.T
+                    print(f"使用指定路径加载特征数据，形状: {features.shape}")
+            
+            # 尝试获取原始形状信息和其他元数据
+            # 这部分需要根据实际文件结构调整
+            if 'original_shape' in mat_data:
+                original_shape = np.array(mat_data['original_shape']).T
+            
+            if 'coordinates' in mat_data:
+                metadata['coordinates'] = np.array(mat_data['coordinates']).T
+        
+        # 处理传统格式的.mat文件
         else:
-            # 尝试常见的键名
-            possible_feature_keys = ['data', 'features', 'X', 'voxel_data']
+            # 尝试获取常见的键名
+            possible_feature_keys = ['data', 'features', 'X', 'voxel_data', 'DEMO38']
             for key in possible_feature_keys:
                 if key in mat_data and mat_data[key] is not None:
                     features = mat_data[key]
                     print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
                     break
-        
-        # 获取region掩码
-        if region_key and region_key in mat_data:
-            region_mask = mat_data[region_key]
-            print(f"使用指定键 '{region_key}' 获取region掩码，形状: {region_mask.shape}")
             
-            # 如果我们有region掩码，可以从中推断原始形状
-            original_shape = region_mask.shape
-            print(f"从region掩码推断原始形状: {original_shape}")
-        else:
-            # 尝试常见的键名
-            possible_region_keys = ['region', 'mask', 'template', 'brain_mask']
-            for key in possible_region_keys:
-                if key in mat_data and mat_data[key] is not None:
-                    region_mask = mat_data[key]
-                    print(f"找到region掩码，使用键: {key}，形状: {region_mask.shape}")
-                    
-                    # 如果我们有region掩码，可以从中推断原始形状
-                    original_shape = region_mask.shape
-                    print(f"从region掩码推断原始形状: {original_shape}")
-                    break
-        
-        # 尝试获取原始形状信息(如果region掩码中没有)
-        if original_shape is None:
+            # 尝试获取原始形状信息
             possible_shape_keys = ['original_shape', 'shape', 'dimensions', 'voxel_shape']
             for key in possible_shape_keys:
                 if key in mat_data and mat_data[key] is not None:
@@ -163,23 +196,253 @@ def load_matlab_data(data_path, features_key=None, region_key=None):
                         original_shape = tuple(original_shape.flatten())
                     print(f"找到原始形状信息: {original_shape}")
                     break
+            
+            # 尝试获取坐标信息
+            possible_coord_keys = ['coordinates', 'coords', 'voxel_coords']
+            for key in possible_coord_keys:
+                if key in mat_data and mat_data[key] is not None:
+                    metadata['coordinates'] = mat_data[key]
+                    print(f"找到坐标信息，形状: {metadata['coordinates'].shape}")
+                    break
         
-        # 添加其他可能有用的元数据
-        for key in mat_data.keys():
-            if key not in ['__header__', '__version__', '__globals__'] and key not in metadata:
-                metadata[key] = mat_data[key]
+        # 如果仍然没有找到特征数据，尝试查找每个键下的数组
+        if features is None:
+            for key in mat_data.keys():
+                if key not in ['__header__', '__version__', '__globals__']:
+                    try:
+                        value = mat_data[key]
+                        if isinstance(value, np.ndarray) and value.size > 0:
+                            if is_hdf5:
+                                arr = np.array(value)
+                                if arr.ndim > 1:
+                                    arr = arr.T
+                            else:
+                                arr = value
+                            
+                            print(f"键 '{key}' 包含数组，形状: {arr.shape}")
+                            
+                            # 如果看起来像特征矩阵(2D且第二维度很大)
+                            if arr.ndim == 2 and arr.shape[1] > 10:
+                                print(f"键 '{key}' 可能包含特征数据")
+                                if features is None:
+                                    features = arr
+                    except Exception as e:
+                        print(f"读取键 '{key}' 时出错: {e}")
+        
+        # 如果找不到原始形状，尝试从坐标推断
+        if original_shape is None and 'coordinates' in metadata:
+            coords = metadata['coordinates']
+            max_coords = np.max(coords, axis=0)
+            original_shape = tuple(max_coords + 1)
+            print(f"从坐标推断原始形状: {original_shape}")
+        
+        # 如果仍未找到原始形状，使用默认值
+        if original_shape is None:
+            if features is not None:
+                # 假设是3D体积数据被展平为特征向量
+                # 尝试猜测原始形状(假设是立方体)
+                n_voxels = features.shape[0]
+                dim = int(round(n_voxels**(1/3)))
+                original_shape = (dim, dim, dim)
+                print(f"无法确定原始形状，假设为立方体: {original_shape}")
+            else:
+                original_shape = (1, 1, 1)  # 默认值
+                print("警告: 无法确定原始形状，使用默认值: (1, 1, 1)")
         
         # 验证是否找到了必要数据
         if features is None:
             raise ValueError(f"无法在MAT文件中找到特征数据。可用键: {list(mat_data.keys())}")
             
-        metadata['region_mask'] = region_mask
-        
+        # 如果是HDF5文件，需要关闭文件
+        if is_hdf5:
+            mat_data.close()
+            
         return features, original_shape, metadata
         
     except Exception as e:
         print(f"加载MAT文件出错: {e}")
         raise
+
+
+def interactive_matlab_file_explorer(data_path):
+    """
+    交互式浏览MATLAB v7.3 HDF5文件，帮助用户查找数据
+    
+    参数:
+        data_path: .mat文件路径
+    
+    返回:
+        选择的数据路径 (可直接用于h5py文件对象的索引)
+    """
+    import h5py
+    
+    try:
+        file = h5py.File(data_path, 'r')
+        print(f"\n== MATLAB v7.3 文件浏览器 ==")
+        print(f"文件: {data_path}")
+        print("顶级对象:")
+        
+        for key in file.keys():
+            obj = file[key]
+            if isinstance(obj, h5py.Dataset):
+                print(f"  [{key}] 数据集, 形状: {obj.shape}, 类型: {obj.dtype}")
+            elif isinstance(obj, h5py.Group):
+                print(f"  [{key}] 组/结构体")
+        
+        print("\n可用命令:")
+        print("  cd <对象名>    - 进入组/结构体")
+        print("  ls             - 列出当前组中的所有对象")
+        print("  info <对象名>  - 显示对象的详细信息")
+        print("  read <对象名>  - 读取并显示对象的内容(小型数组)")
+        print("  select <对象名> - 选择此对象作为数据源")
+        print("  back           - 返回上一级")
+        print("  exit           - 退出浏览器")
+        
+        current_path = ["/"]
+        
+        while True:
+            current_group = file
+            path_str = "/".join(current_path)
+            if path_str != "/":
+                for key in path_str.strip("/").split("/"):
+                    current_group = current_group[key]
+            
+            cmd = input(f"\n{path_str}> ").strip()
+            
+            if not cmd:
+                continue
+                
+            parts = cmd.split()
+            cmd_type = parts[0].lower()
+            
+            if cmd_type == "exit":
+                file.close()
+                return None
+                
+            elif cmd_type == "ls":
+                print("内容:")
+                for key in current_group.keys():
+                    obj = current_group[key]
+                    if isinstance(obj, h5py.Dataset):
+                        print(f"  [{key}] 数据集, 形状: {obj.shape}, 类型: {obj.dtype}")
+                    elif isinstance(obj, h5py.Group):
+                        print(f"  [{key}] 组/结构体")
+                        
+            elif cmd_type == "cd":
+                if len(parts) < 2:
+                    print("错误: 必须指定对象名")
+                    continue
+                    
+                obj_name = parts[1]
+                if obj_name not in current_group:
+                    print(f"错误: 找不到名为 '{obj_name}' 的对象")
+                    continue
+                    
+                obj = current_group[obj_name]
+                if not isinstance(obj, h5py.Group):
+                    print(f"错误: '{obj_name}' 不是组/结构体")
+                    continue
+                    
+                current_path.append(obj_name)
+                
+            elif cmd_type == "back":
+                if len(current_path) > 1:
+                    current_path.pop()
+                else:
+                    print("已在根目录，无法返回")
+                    
+            elif cmd_type == "info":
+                if len(parts) < 2:
+                    print("错误: 必须指定对象名")
+                    continue
+                    
+                obj_name = parts[1]
+                if obj_name not in current_group:
+                    print(f"错误: 找不到名为 '{obj_name}' 的对象")
+                    continue
+                    
+                obj = current_group[obj_name]
+                print(f"对象: {obj_name}")
+                print(f"类型: {'数据集' if isinstance(obj, h5py.Dataset) else '组/结构体'}")
+                
+                if isinstance(obj, h5py.Dataset):
+                    print(f"形状: {obj.shape}")
+                    print(f"数据类型: {obj.dtype}")
+                    print(f"属性: {dict(obj.attrs)}")
+                else:
+                    print(f"子对象数: {len(obj.keys())}")
+                    print(f"子对象: {list(obj.keys())}")
+                    
+            elif cmd_type == "read":
+                if len(parts) < 2:
+                    print("错误: 必须指定对象名")
+                    continue
+                    
+                obj_name = parts[1]
+                if obj_name not in current_group:
+                    print(f"错误: 找不到名为 '{obj_name}' 的对象")
+                    continue
+                    
+                obj = current_group[obj_name]
+                if not isinstance(obj, h5py.Dataset):
+                    print(f"错误: '{obj_name}' 不是数据集")
+                    continue
+                    
+                # 读取数据（对于大型数组，只显示部分内容）
+                try:
+                    if obj.size <= 100:  # 小数组完整显示
+                        data = np.array(obj)
+                        if data.ndim > 1:
+                            data = data.T  # 转置MATLAB数组
+                        print(data)
+                    else:  # 大数组只显示形状和一些统计信息
+                        data = np.array(obj)
+                        if data.ndim > 1:
+                            data = data.T
+                        print(f"数组太大无法完整显示. 形状: {data.shape}")
+                        print(f"前几个元素: {data.flatten()[:10]}")
+                        try:
+                            print(f"最小值: {np.min(data)}")
+                            print(f"最大值: {np.max(data)}")
+                            print(f"均值: {np.mean(data)}")
+                            print(f"标准差: {np.std(data)}")
+                        except:
+                            print("无法计算统计信息")
+                except Exception as e:
+                    print(f"读取数据时出错: {e}")
+                    
+            elif cmd_type == "select":
+                if len(parts) < 2:
+                    print("错误: 必须指定对象名")
+                    continue
+                    
+                obj_name = parts[1]
+                if obj_name not in current_group:
+                    print(f"错误: 找不到名为 '{obj_name}' 的对象")
+                    continue
+                
+                obj = current_group[obj_name]
+                if not isinstance(obj, h5py.Dataset):
+                    print(f"错误: '{obj_name}' 不是数据集")
+                    continue
+                
+                # 构建完整路径
+                if len(current_path) > 1:
+                    full_path = "/".join(current_path[1:]) + "/" + obj_name
+                else:
+                    full_path = obj_name
+                    
+                print(f"已选择: {full_path}")
+                file.close()
+                return full_path
+                
+            else:
+                print(f"未知命令: {cmd_type}")
+        
+    except Exception as e:
+        print(f"浏览MATLAB文件时出错: {e}")
+        return None
+    
 
 def preprocess_features(features, config=None, model_info=None, apply_pca_flag=False, pca_model_path=None, normalize=True):
     """
