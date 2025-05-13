@@ -555,6 +555,51 @@ def save_essential_results(predictions, probabilities, volume, output_dir):
     print(f"文件保存完成。")
     return output_dir
 
+def revert_reshape_python(array, region):
+    """
+    Python实现的revert_reshape函数，与MATLAB版本完全一致
+    
+    参数:
+        array: 数组，可以是1D(n_samples,)或2D(n_samples, n_features)
+        region: 3D掩码，指示哪些位置有效
+    
+    返回:
+        big_img: 重建的3D或4D图像
+    """
+    # 确保region是布尔值
+    if not np.issubdtype(region.dtype, np.bool_):
+        region = region > 0
+    
+    # 确保array是2D的
+    if len(array.shape) == 1:
+        array = array.reshape(-1, 1)
+    
+    # 创建输出数组 - 与MATLAB一致，使用single精度
+    big_img = np.zeros(region.shape + (array.shape[1],), dtype=np.float32)
+    
+    # 对每一列进行处理
+    for ii in range(array.shape[1]):
+        # 提取当前切片
+        img = big_img[..., ii]
+        
+        # 展平图像和掩码
+        img_index = img.flatten()
+        template_index = region.flatten()
+        
+        # 在掩码为True的位置填入值
+        img_index[template_index] = array[:, ii]
+        
+        # 重塑并保存回原数组
+        img = img_index.reshape(region.shape)
+        big_img[..., ii] = img
+    
+    # 如果原始数组是1D的，返回3D结果
+    if array.shape[1] == 1:
+        return big_img[..., 0]
+    else:
+        return big_img
+    
+
 def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True, max_points=10000):
     """
     可视化3D体积
@@ -673,6 +718,7 @@ def main():
     
     # 加载输入数据
     print(f"加载输入数据: {args.data_path}")
+
     features, original_shape, metadata = load_matlab_data(
         args.data_path, 
         features_key=args.features_key, 
@@ -741,15 +787,41 @@ def main():
         percentage = count / len(predictions) * 100
         print(f"类别 {cls}: {count} 个样本 ({percentage:.2f}%)")
     
-    # 将预测映射回3D空间
+    # 获取区域掩码
     region_mask = metadata.get('region_mask', None)
-    volume, prob_volume = map_predictions_to_3d(
-        predictions, 
-        original_shape, 
-        region_mask=region_mask,
-        probabilities=probabilities
-    )
-
+    if region_mask is None:
+        print("警告: 未找到区域掩码，将尝试使用原始形状直接重塑")
+        # 创建一个全1的掩码
+        region_mask = np.ones(original_shape, dtype=bool)
+        # 确保掩码中的True数量与预测数量一致
+        n_elements = np.prod(original_shape)
+        if n_elements > len(predictions):
+            # 如果掩码太大，只使用部分
+            flat_mask = region_mask.flatten()
+            flat_mask[len(predictions):] = False
+            region_mask = flat_mask.reshape(original_shape)
+        elif n_elements < len(predictions):
+            print(f"错误: 原始形状({original_shape})元素数量小于预测数量({len(predictions)})")
+            # 尝试猜测更合适的形状
+            side = int(np.ceil(len(predictions)**(1/3)))
+            new_shape = (side, side, side)
+            print(f"尝试使用新形状: {new_shape}")
+            region_mask = np.zeros(new_shape, dtype=bool)
+            flat_mask = region_mask.flatten()
+            flat_mask[:len(predictions)] = True
+            region_mask = flat_mask.reshape(new_shape)
+            original_shape = new_shape
+    
+    # 将预测映射回3D空间 - 使用revert_reshape_python替代map_predictions_to_3d
+    print(f"将预测映射回3D空间，目标形状: {original_shape}")
+    # 使用与MATLAB一致的重塑逻辑
+    volume = revert_reshape_python(predictions, region_mask)
+    
+    # 如果需要概率体积，也使用revert_reshape_python
+    prob_volume = None
+    if args.save_3d or 'prob_volume' in locals():  # 保留原有功能
+        prob_volume = revert_reshape_python(probabilities, region_mask)
+    
     # 保存结果
     output_dir = save_essential_results(
         predictions, 
@@ -757,6 +829,7 @@ def main():
         volume, 
         output_dir=args.output_dir
     )
+    
     # 可视化 (如果需要)
     if args.save_3d:
         vis_file = os.path.join(output_dir, '3d_visualization.png')
