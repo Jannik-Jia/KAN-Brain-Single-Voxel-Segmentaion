@@ -57,6 +57,13 @@ def parse_args():
     parser.add_argument('--normalize', action='store_true', help='是否标准化特征')
     parser.add_argument('--region_key', type=str, default=None, help='MAT文件中region掩码的键名')
     parser.add_argument('--features_key', type=str, default=None, help='MAT文件中特征数据的键名')
+    parser.add_argument('--interactive', action='store_true', help='启用交互式文件浏览模式')
+    parser.add_argument('--dataset_path', type=str, default=None, help='MATLAB v7.3文件中数据集的路径')
+    
+    # 数据目录参数
+    parser.add_argument('--train_dir', type=str, default=None, help='训练数据目录，用于计算标准化参数')
+    parser.add_argument('--test_dir', type=str, default=None, help='测试数据目录')
+    parser.add_argument('--val_dir', type=str, default=None, help='验证数据目录')
     
     # 预测参数
     parser.add_argument('--batch_size', type=int, default=1024, help='预测时的批处理大小')
@@ -273,7 +280,7 @@ def load_matlab_data(data_path, features_key=None, region_key=None, dataset_path
             original_shape = tuple(max_coords + 1)
             print(f"从坐标推断原始形状: {original_shape}")
         
-        # 如果仍未找到原始形状，尝试从region_mask推断
+        # 如果原始形状为None，尝试从region_mask推断
         if original_shape is None and 'region_mask' in metadata:
             region_mask = metadata['region_mask']
             original_shape = region_mask.shape
@@ -485,9 +492,56 @@ def interactive_matlab_file_explorer(data_path):
     except Exception as e:
         print(f"浏览MATLAB文件时出错: {e}")
         return None
-    
 
-def preprocess_features(features, config=None, model_info=None, apply_pca_flag=False, pca_model_path=None, normalize=True):
+
+def compute_normalization_params_from_datasets(data_dirs):
+    """
+    从训练数据计算标准化参数
+    
+    参数:
+        data_dirs: 包含训练、测试和验证数据目录的字典
+    
+    返回:
+        normalization_params: 包含均值和标准差的字典
+    """
+    from data import load_multiclass_data
+    
+    print("计算数据集的标准化参数...")
+    
+    try:
+        # 加载数据但不应用标准化
+        dataset_dict = load_multiclass_data(
+            data_dirs,
+            apply_pca_flag=False,
+            norm=False  # 不应用标准化，我们要获取原始统计值
+        )
+        
+        # 获取训练样本
+        train_samples = dataset_dict['train_samples']
+        
+        # 计算均值和标准差
+        mean = np.mean(train_samples, axis=0)
+        std = np.std(train_samples, axis=0)
+        # 避免除零
+        std[std == 0] = 1e-10
+        
+        # 创建参数字典
+        normalization_params = {
+            'mean': mean,
+            'std': std,
+            'source': 'computed_from_training_data'
+        }
+        
+        print(f"从训练集计算得到标准化参数: 均值范围 [{np.min(mean):.4f}, {np.max(mean):.4f}], 标准差范围 [{np.min(std):.4f}, {np.max(std):.4f}]")
+        
+        return normalization_params
+        
+    except Exception as e:
+        print(f"计算标准化参数时出错: {e}")
+        return None
+
+
+def preprocess_features(features, config=None, model_info=None, apply_pca_flag=False, pca_model_path=None, normalize=True, data_dirs=None):
     """
     预处理特征数据，确保使用与训练时相同的标准化参数
     
@@ -498,6 +552,7 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
         apply_pca_flag: 是否应用PCA降维
         pca_model_path: PCA模型路径
         normalize: 是否标准化特征
+        data_dirs: 数据目录信息，用于重新计算标准化参数
     
     返回:
         processed_features: 处理后的特征
@@ -534,83 +589,44 @@ def preprocess_features(features, config=None, model_info=None, apply_pca_flag=F
     
     # 使用与训练时相同的标准化参数
     if normalize:
-        # 首先尝试从模型信息中获取标准化参数
-        mean = None
-        std = None
+        norm_params = None
         
-        # 从模型信息中提取标准化参数
+        # 尝试从模型信息中获取标准化参数
         if model_info and 'normalization_params' in model_info:
             print("使用模型中保存的标准化参数")
             norm_params = model_info['normalization_params']
-            mean = norm_params.get('mean')
-            std = norm_params.get('std')
-            
-            # 如果参数是列表，转换为numpy数组
-            if mean is not None and isinstance(mean, list):
-                mean = np.array(mean)
-            if std is not None and isinstance(std, list):
-                std = np.array(std)
         
-        # 从配置中提取标准化参数
+        # 尝试从配置中获取标准化参数
         elif config and 'normalization_params' in config:
             print("使用配置文件中的标准化参数")
             norm_params = config['normalization_params']
-            mean = norm_params.get('mean')
-            std = norm_params.get('std')
-            
-            # 如果参数是列表，转换为numpy数组
-            if mean is not None and isinstance(mean, list):
-                mean = np.array(mean)
-            if std is not None and isinstance(std, list):
-                std = np.array(std)
         
-        # 如果找不到保存的参数，则尝试从训练数据集加载
-        if mean is None or std is None:
-            try:
-                # 这里仅为示例，你需要根据实际情况调整
-                from data import load_multiclass_data
-                
-                print("未找到保存的标准化参数，尝试从训练集计算...")
-                if config and 'data_dirs' in config:
-                    dataset_dict = load_multiclass_data(
-                        config['data_dirs'],
-                        apply_pca_flag=False,
-                        norm=False  # 先不标准化，我们要获取原始值
-                    )
-                    
-                    # 合并所有训练数据来计算标准化参数
-                    all_train_samples = dataset_dict['train_samples']
-                    
-                    mean = np.mean(all_train_samples, axis=0)
-                    std = np.std(all_train_samples, axis=0)
-                    # 避免除零
-                    std[std == 0] = 1e-10
-                    
-                    print("成功从训练集计算标准化参数")
-                else:
-                    raise ValueError("无法找到标准化参数，且无法从训练集计算")
-            except Exception as e:
-                print(f"尝试计算标准化参数时出错: {e}")
-                print("警告：将使用当前数据进行标准化，这可能导致不一致的结果")
-                # 如果无法获取训练时的标准化参数，退回到使用当前数据
-                mean = np.mean(features, axis=0)
-                std = np.std(features, axis=0)
-                std[std == 0] = 1e-10
+        # 如果找不到保存的参数，则直接从数据集重新计算
+        if norm_params is None and data_dirs:
+            print("未找到保存的标准化参数，直接从数据集重新计算...")
+            norm_params = compute_normalization_params_from_datasets(data_dirs)
+        
+        # 如果仍然没有标准化参数，使用当前数据
+        if norm_params is None:
+            print("警告：找不到或无法计算标准化参数，使用当前数据计算")
+            mean = np.mean(features, axis=0)
+            std = np.std(features, axis=0)
+            std[std == 0] = 1e-10
+            norm_params = {'mean': mean, 'std': std, 'source': 'current_data'}
+        
+        # 提取均值和标准差
+        mean = norm_params.get('mean')
+        std = norm_params.get('std')
+        
+        # 确保是numpy数组
+        if isinstance(mean, list):
+            mean = np.array(mean)
+        if isinstance(std, list):
+            std = np.array(std)
         
         # 应用标准化
-        print("应用标准化处理")
+        print(f"应用标准化处理，使用来源: {norm_params.get('source', 'unknown')}")
         features = (features - mean) / std
-        
-        # 保存使用的标准化参数，便于调试
-        normalization_used = {
-            'mean': mean,
-            'std': std,
-            'source': 'model' if model_info and 'normalization_params' in model_info else 
-                     'config' if config and 'normalization_params' in config else 
-                     'train_data' if 'dataset_dict' in locals() else 'current_data'
-        }
-        
-        print(f"使用标准化参数源: {normalization_used['source']}")
     
     return features, pca_model
 
@@ -962,6 +978,15 @@ def main():
         model, checkpoint = load_model_with_architecture(args.model_path, device)
         print("模型加载成功")
         
+        # 交互式浏览MATLAB文件
+        if args.interactive:
+            dataset_path = interactive_matlab_file_explorer(args.data_path)
+            if dataset_path:
+                args.dataset_path = dataset_path
+            else:
+                print("未选择数据集，退出程序")
+                return 1
+        
         # 获取模型信息
         model_info = checkpoint.get('model_arch_info', {})
         training_info = checkpoint.get('training_info', {})
@@ -970,11 +995,32 @@ def main():
         features, original_shape, metadata = load_matlab_data(
             args.data_path, 
             features_key=args.features_key,
-            region_key=args.region_key
+            region_key=args.region_key,
+            dataset_path=args.dataset_path
         )
         
         # 获取region_mask
         region_mask = metadata.get('region_mask', None)
+        
+        # 设置数据目录（用于重新计算标准化参数）
+        data_dirs = None
+        if args.train_dir and args.test_dir and args.val_dir:
+            data_dirs = {
+                'train_dir': args.train_dir,
+                'test_dir': args.test_dir,
+                'val_dir': args.val_dir
+            }
+        elif config and 'data_dirs' in config:
+            data_dirs = config['data_dirs']
+        elif model_info and 'data_dirs' in model_info:
+            data_dirs = model_info['data_dirs']
+        else:
+            # 使用默认路径
+            data_dirs = {
+                'train_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train",
+                'test_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test",
+                'val_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
+            }
         
         # 预处理特征
         processed_features, pca_model = preprocess_features(
@@ -983,7 +1029,8 @@ def main():
             model_info=model_info,
             apply_pca_flag=args.apply_pca,
             pca_model_path=args.pca_model,
-            normalize=args.normalize
+            normalize=args.normalize,
+            data_dirs=data_dirs
         )
         
         # 检查特征维度是否与模型兼容
