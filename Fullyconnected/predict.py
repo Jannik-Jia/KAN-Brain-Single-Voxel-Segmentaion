@@ -92,12 +92,15 @@ def load_config(config_path):
         return config
     return {}
 
-def load_matlab_data(data_path):
+def load_matlab_data(data_path, features_key=None, region_key=None, dataset_path=None):
     """
     加载MATLAB .mat文件数据，支持v7.3格式
     
     参数:
         data_path: .mat文件路径
+        features_key: MAT文件中特征数据的键名 (可选)
+        region_key: MAT文件中区域掩码的键名 (可选)
+        dataset_path: 在HDF5格式中的数据集路径 (可选)
     
     返回:
         features: 特征矩阵
@@ -131,20 +134,52 @@ def load_matlab_data(data_path):
         
         # 处理HDF5格式的.mat文件
         if is_hdf5:
-            # 在HDF5格式中，MATLAB的变量作为HDF5的group或dataset存储
-            # 并且字符串是以引用的形式存储
-            
-            # 尝试获取常见的特征数据键
-            possible_feature_keys = ['data', 'features', 'X', 'voxel_data', 'DEMO38']
-            for key in possible_feature_keys:
-                if key in mat_data and isinstance(mat_data[key], h5py.Dataset):
-                    # 注意：HDF5中MATLAB数组的轴顺序可能不同，需要转置
-                    features = np.array(mat_data[key])
-                    # 如果是MATLAB矩阵，需要转置
+            # 直接使用指定的数据集路径
+            if dataset_path and dataset_path in mat_data:
+                try:
+                    features = np.array(mat_data[dataset_path])
                     if features.ndim > 1:
                         features = features.T
-                    print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
-                    break
+                    print(f"使用指定路径加载特征数据，形状: {features.shape}")
+                except Exception as e:
+                    print(f"使用指定路径加载数据失败: {e}")
+            
+            # 使用指定的特征键
+            elif features_key and features_key in mat_data:
+                try:
+                    features = np.array(mat_data[features_key])
+                    if features.ndim > 1:
+                        features = features.T
+                    print(f"使用指定键'{features_key}'加载特征数据，形状: {features.shape}")
+                except Exception as e:
+                    print(f"使用指定键加载数据失败: {e}")
+            
+            # 尝试获取常见的特征数据键
+            else:
+                possible_feature_keys = ['data', 'features', 'X', 'voxel_data', 'DEMO38']
+                for key in possible_feature_keys:
+                    if key in mat_data and isinstance(mat_data[key], h5py.Dataset):
+                        try:
+                            # 注意：HDF5中MATLAB数组的轴顺序可能不同，需要转置
+                            features = np.array(mat_data[key])
+                            # 如果是MATLAB矩阵，需要转置
+                            if features.ndim > 1:
+                                features = features.T
+                            print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
+                            break
+                        except Exception as e:
+                            print(f"加载键'{key}'失败: {e}")
+            
+            # 尝试获取区域掩码
+            if region_key and region_key in mat_data:
+                try:
+                    region_mask = np.array(mat_data[region_key])
+                    if region_mask.ndim > 1:
+                        region_mask = region_mask.T
+                    metadata['region_mask'] = region_mask
+                    print(f"使用指定键'{region_key}'加载区域掩码，形状: {region_mask.shape}")
+                except Exception as e:
+                    print(f"加载区域掩码失败: {e}")
             
             # 如果没有直接找到特征，可能需要在嵌套结构中查找
             if features is None:
@@ -168,24 +203,26 @@ def load_matlab_data(data_path):
                     if features.ndim > 1:
                         features = features.T
                     print(f"使用指定路径加载特征数据，形状: {features.shape}")
-            
-            # 尝试获取原始形状信息和其他元数据
-            # 这部分需要根据实际文件结构调整
-            if 'original_shape' in mat_data:
-                original_shape = np.array(mat_data['original_shape']).T
-            
-            if 'coordinates' in mat_data:
-                metadata['coordinates'] = np.array(mat_data['coordinates']).T
         
         # 处理传统格式的.mat文件
         else:
-            # 尝试获取常见的键名
-            possible_feature_keys = ['data', 'features', 'X', 'voxel_data', 'DEMO38']
-            for key in possible_feature_keys:
-                if key in mat_data and mat_data[key] is not None:
-                    features = mat_data[key]
-                    print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
-                    break
+            # 使用指定的特征键
+            if features_key and features_key in mat_data:
+                features = mat_data[features_key]
+                print(f"使用指定键'{features_key}'加载特征数据，形状: {features.shape}")
+            else:
+                # 尝试获取常见的键名
+                possible_feature_keys = ['data', 'features', 'X', 'voxel_data', 'DEMO38']
+                for key in possible_feature_keys:
+                    if key in mat_data and mat_data[key] is not None:
+                        features = mat_data[key]
+                        print(f"找到特征数据，使用键: {key}，形状: {features.shape}")
+                        break
+            
+            # 获取区域掩码
+            if region_key and region_key in mat_data:
+                metadata['region_mask'] = mat_data[region_key]
+                print(f"使用指定键'{region_key}'加载区域掩码，形状: {metadata['region_mask'].shape}")
             
             # 尝试获取原始形状信息
             possible_shape_keys = ['original_shape', 'shape', 'dimensions', 'voxel_shape']
@@ -235,6 +272,12 @@ def load_matlab_data(data_path):
             max_coords = np.max(coords, axis=0)
             original_shape = tuple(max_coords + 1)
             print(f"从坐标推断原始形状: {original_shape}")
+        
+        # 如果仍未找到原始形状，尝试从region_mask推断
+        if original_shape is None and 'region_mask' in metadata:
+            region_mask = metadata['region_mask']
+            original_shape = region_mask.shape
+            print(f"从区域掩码推断原始形状: {original_shape}")
         
         # 如果仍未找到原始形状，使用默认值
         if original_shape is None:
