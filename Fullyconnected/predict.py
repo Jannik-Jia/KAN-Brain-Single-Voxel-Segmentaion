@@ -211,13 +211,13 @@ def normalize_voxels(voxels, method='standard'):
     
     参数:
         voxels: 形状为(n_samples, 341)的numpy数组
-        method: 标准化方法，'standard'或'minmax'
+        method: 标准化方法，'standard'、'minmax'或'feature_wise'
         
     返回:
         normalized_voxels: 标准化后的体素数据
     """
     if method == 'standard':
-        # 标准化（Z-score）
+        # 标准化（Z-score）- 基于所有特征
         mean = np.mean(voxels, axis=0)
         std = np.std(voxels, axis=0)
         std[std == 0] = 1e-10  # 避免除零
@@ -229,6 +229,22 @@ def normalize_voxels(voxels, method='standard'):
         range_vals = max_vals - min_vals
         range_vals[range_vals == 0] = 1e-10  # 避免除零
         normalized_voxels = (voxels - min_vals) / range_vals
+    elif method == 'feature_wise':
+        # 对每个特征分别进行Z-score标准化
+        normalized_voxels = np.zeros_like(voxels, dtype=np.float32)
+        
+        for i in range(voxels.shape[1]):
+            # 提取当前特征
+            feature = voxels[:, i]
+            # 计算该特征的均值和标准差
+            mean = np.mean(feature)
+            std = np.std(feature)
+            if std == 0:
+                std = 1e-10  # 避免除零
+            # 标准化该特征
+            normalized_voxels[:, i] = (feature - mean) / std
+        
+        print(f"对{voxels.shape[1]}个特征分别进行了Z-score标准化")
     else:
         raise ValueError(f"不支持的标准化方法: {method}")
     
@@ -710,6 +726,9 @@ def main():
     parser.add_argument('--colormap', type=str, default='jet', help='3D可视化使用的颜色映射')
     parser.add_argument('--no_display', action='store_true', help='不显示可视化，只保存')
     parser.add_argument('--max_points', type=int, default=10000, help='3D可视化中显示的最大点数')
+    parser.add_argument('--normalize', type=str, default='same_as_training', 
+                  choices=['same_as_training', 'standard', 'minmax', 'feature_wise', 'none'], 
+                  help='标准化方法: same_as_training=使用与训练相同的参数, standard=当前数据Z标准化, minmax=当前数据最小-最大归一化, feature_wise=对每个特征单独Z标准化, none=不标准化')
     
     args = parser.parse_args()
     
