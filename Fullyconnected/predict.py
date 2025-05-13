@@ -870,7 +870,7 @@ def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True, max_p
 
 def save_results(predictions, probabilities, volume, probability_volume=None, metadata=None, output_dir=None):
     """
-    保存预测结果
+    保存预测结果，仅使用MAT格式
     
     参数:
         predictions: 预测的类别
@@ -886,15 +886,7 @@ def save_results(predictions, probabilities, volume, probability_volume=None, me
     print(f"保存结果到: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     
-    # 保存为NumPy文件
-    np.save(os.path.join(output_dir, 'predictions.npy'), predictions)
-    np.save(os.path.join(output_dir, 'probabilities.npy'), probabilities)
-    np.save(os.path.join(output_dir, 'volume_3d.npy'), volume)
-    
-    if probability_volume is not None:
-        np.save(os.path.join(output_dir, 'probability_volume.npy'), probability_volume)
-    
-    # 保存为MAT文件
+    # 创建要保存的数据字典
     output_data = {
         'predictions': predictions,
         'probabilities': probabilities,
@@ -918,10 +910,13 @@ def save_results(predictions, probabilities, volume, probability_volume=None, me
                     print(f"无法保存元数据 '{key}'")
     
     # 保存MAT文件
+    mat_file_path = os.path.join(output_dir, 'prediction_results.mat')
     try:
-        savemat(os.path.join(output_dir, 'prediction_results.mat'), output_data)
+        print(f"正在保存MAT文件: {mat_file_path}")
+        savemat(mat_file_path, output_data)
+        print(f"成功保存MAT文件")
     except Exception as e:
-        print(f"保存MAT文件时出错: {e}")
+        print(f"保存完整MAT文件时出错: {e}")
         print("尝试保存不包含元数据的简化版本...")
         
         # 尝试保存简化版本
@@ -929,9 +924,24 @@ def save_results(predictions, probabilities, volume, probability_volume=None, me
             'predictions': predictions,
             'volume_3d': volume
         }
-        savemat(os.path.join(output_dir, 'prediction_results_simple.mat'), simple_output)
+        simple_mat_path = os.path.join(output_dir, 'prediction_results_simple.mat')
+        try:
+            savemat(simple_mat_path, simple_output)
+            print(f"成功保存简化版MAT文件: {simple_mat_path}")
+        except Exception as e2:
+            print(f"保存简化MAT文件也失败: {e2}")
+            
+            # 最后尝试分割保存
+            print("尝试分别保存各个组件...")
+            for key, value in simple_output.items():
+                try:
+                    component_path = os.path.join(output_dir, f'{key}.mat')
+                    savemat(component_path, {key: value})
+                    print(f"成功保存组件: {component_path}")
+                except:
+                    print(f"无法保存组件: {key}")
     
-    # 保存一些基本统计信息
+    # 保存一些基本统计信息（作为文本文件）
     stats_file = os.path.join(output_dir, 'prediction_stats.txt')
     with open(stats_file, 'w') as f:
         f.write("预测统计信息\n")
@@ -1107,4 +1117,4 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main())f
