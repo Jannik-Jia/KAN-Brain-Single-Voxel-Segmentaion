@@ -523,6 +523,38 @@ def save_results(predictions, probabilities, volume, prob_volume=None, metadata=
     
     return output_dir
 
+
+def save_essential_results(predictions, probabilities, volume, output_dir):
+    """
+    只保存必要的三个文件：predictions.mat, probabilities.mat, volume_3d.mat
+    
+    参数:
+        predictions: 预测的类别 (1D数组)
+        probabilities: 预测的概率 (2D数组)
+        volume: 3D体积
+        output_dir: 输出目录
+    """
+    if output_dir is None:
+        output_dir = './prediction_results_' + time.strftime("%Y%m%d_%H%M%S")
+    
+    print(f"保存结果到: {output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 保存预测标签
+    print(f"保存预测标签，形状: {predictions.shape}")
+    savemat(os.path.join(output_dir, 'predictions.mat'), {'predictions': predictions})
+    
+    # 保存预测概率
+    print(f"保存预测概率，形状: {probabilities.shape}")
+    savemat(os.path.join(output_dir, 'probabilities.mat'), {'probabilities': probabilities})
+    
+    # 保存3D体积
+    print(f"保存3D体积，形状: {volume.shape}")
+    savemat(os.path.join(output_dir, 'volume_3d.mat'), {'volume_3d': volume})
+    
+    print(f"文件保存完成。")
+    return output_dir
+
 def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True, max_points=10000):
     """
     可视化3D体积
@@ -717,17 +749,14 @@ def main():
         region_mask=region_mask,
         probabilities=probabilities
     )
-    
+
     # 保存结果
-    output_dir = save_results(
+    output_dir = save_essential_results(
         predictions, 
         probabilities, 
         volume, 
-        prob_volume=prob_volume, 
-        metadata=None,  # 不保存元数据以避免文件过大
         output_dir=args.output_dir
     )
-    
     # 可视化 (如果需要)
     if args.save_3d:
         vis_file = os.path.join(output_dir, '3d_visualization.png')
