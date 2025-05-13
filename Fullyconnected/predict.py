@@ -709,9 +709,6 @@ def main():
     parser.add_argument('--region_key', type=str, default='region', help='MATLAB文件中区域掩码的键名')
     parser.add_argument('--output_dir', type=str, default='./prediction_results', help='输出目录')
     parser.add_argument('--batch_size', type=int, default=128, help='批处理大小')
-    parser.add_argument('--normalize', type=str, default='same_as_training', 
-                      choices=['same_as_training', 'standard', 'minmax', 'none'], 
-                      help='标准化方法: same_as_training=使用与训练相同的参数, standard=当前数据Z标准化, minmax=当前数据最小-最大归一化, none=不标准化')
     parser.add_argument('--train_dir', type=str, 
                       default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train", 
                       help='训练数据目录，用于计算标准化参数')
