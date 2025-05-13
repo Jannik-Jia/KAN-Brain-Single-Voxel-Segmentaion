@@ -14,6 +14,7 @@ import json
 import argparse
 import h5py
 import time
+import joblib  # 新增: 用于加载保存的scaler
 from torch.utils.data import DataLoader, Dataset
 from scipy.io import savemat
 
@@ -42,10 +43,10 @@ class SingleVoxelDataset(Dataset):
         x = self.voxels[idx]
         x = torch.FloatTensor(x)
         return x
-
 def load_optimized_model(model_path=None):
     """
-    加载优化后的模型
+    加载优化后的模型，如果是完整模型直接加载，否则尝试从同名JSON文件读取配置，
+    如果两者都失败则报错。
     
     参数:
         model_path: 模型文件路径，如果为None则自动查找
@@ -53,6 +54,8 @@ def load_optimized_model(model_path=None):
     返回:
         model: 加载好的模型
         config: 模型配置
+        device: 计算设备
+        normalization_params: 标准化参数(如果模型中包含)
     """
     # 设置设备
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -83,172 +86,150 @@ def load_optimized_model(model_path=None):
     
     print(f"使用模型: {model_path}")
     
-    # 贝叶斯优化的最佳参数 - 硬编码以确保正确
-    model_config = {
-        'model_type': 'deep_mlp',
-        'hidden_dims': [2048] * 6,
-        'input_dim': 341,
-        'num_classes': 102,
-        'dropout_rate': 0.2567125567148536,
-        'activation': 'gelu',
-        'use_skip_connections': True
-    }
-    
-    print("使用贝叶斯优化的最佳参数创建模型:")
-    for key, value in model_config.items():
-        print(f"  {key}: {value}")
-    
-    # 创建模型
-    model = get_model(
-        model_type=model_config['model_type'],
-        input_dim=model_config['input_dim'],
-        hidden_dims=model_config['hidden_dims'],
-        num_classes=model_config['num_classes'],
-        dropout_rate=model_config['dropout_rate'],
-        activation=model_config['activation'],
-        use_skip_connections=model_config['use_skip_connections']
-    )
-    
-    # 加载模型权重
+    # 策略1: 尝试加载完整模型
     try:
+        print("尝试加载完整模型...")
         checkpoint = safe_load_model(model_path, device)
-        model.load_state_dict(checkpoint['state_dict'])
-        model = model.to(device)
-        model.eval()  # 设置为评估模式
-        print("成功加载模型权重")
+        
+        # 检查是否包含模型架构信息
+        if 'model_arch_info' in checkpoint:
+            print("成功! 这是一个完整模型，包含架构信息")
+            model_config = checkpoint['model_arch_info']
+            
+            # 尝试从检查点获取标准化参数
+            normalization_params = None
+            if 'normalization_params' in checkpoint:
+                normalization_params = checkpoint['normalization_params']
+                print("从模型检查点获取到标准化参数")
+            elif 'training_info' in checkpoint and 'normalization_params' in checkpoint['training_info']:
+                normalization_params = checkpoint['training_info']['normalization_params']
+                print("从训练信息中获取到标准化参数")
+            
+            # 获取模型架构参数
+            model_type = model_config.get('model_type', 'deep_mlp')
+            input_dim = model_config.get('input_dim', 341)
+            # 支持两种可能的隐藏层参数名
+            hidden_dims = model_config.get('hidden_dims', model_config.get('hidden_units', [2048] * 6))
+            num_classes = model_config.get('num_classes', model_config.get('num_class', 102))
+            dropout_rate = model_config.get('dropout_rate', 0.2567125567148536)
+            activation = model_config.get('activation', 'gelu')
+            use_skip_connections = model_config.get('use_skip_connections', True)
+            
+            # 打印关键模型配置
+            print(f"模型类型: {model_type}")
+            print(f"输入维度: {input_dim}")
+            print(f"隐藏层: {hidden_dims}")
+            print(f"输出类别数: {num_classes}")
+            print(f"Dropout率: {dropout_rate}")
+            print(f"激活函数: {activation}")
+            
+            # 创建模型
+            model = get_model(
+                model_type=model_type,
+                input_dim=input_dim,
+                hidden_dims=hidden_dims,
+                num_classes=num_classes,
+                dropout_rate=dropout_rate,
+                activation=activation,
+                use_skip_connections=use_skip_connections
+            )
+            
+            # 加载模型权重
+            model.load_state_dict(checkpoint['state_dict'])
+            model = model.to(device)
+            model.eval()
+            print("成功加载模型权重")
+            
+            return model, model_config, device, normalization_params
+        else:
+            print("模型检查点不包含架构信息，将尝试从同名JSON文件加载")
     except Exception as e:
-        print(f"加载模型权重时出错: {e}")
-        raise
+        print(f"从完整模型加载失败: {e}")
+        print("将尝试从JSON文件加载配置")
     
-    return model, model_config, device
-
-
-def compute_normalization_params_from_datasets(data_dirs):
-    """
-    从训练数据计算标准化参数
+    # 策略2: 尝试从同名JSON配置文件加载
+    json_config_path = None
+    model_dir = os.path.dirname(model_path)
+    model_name = os.path.basename(model_path)
     
-    参数:
-        data_dirs: 包含训练、测试和验证数据目录的字典
+    # 检查几种可能的JSON配置文件名称
+    possible_json_names = [
+        os.path.splitext(model_name)[0] + '_architecture.json',  # 标准命名格式
+        os.path.splitext(model_name)[0] + '.json',               # 简化命名
+        'architecture.json',                                      # 通用架构文件
+        'config.json',                                            # 通用配置
+        'optimized_config.json'                                   # 优化后的配置
+    ]
     
-    返回:
-        mean: 特征均值向量
-        std: 特征标准差向量
-    """
-    from data import load_multiclass_data
+    for json_name in possible_json_names:
+        json_path = os.path.join(model_dir, json_name)
+        if os.path.exists(json_path):
+            json_config_path = json_path
+            print(f"找到模型配置文件: {json_config_path}")
+            break
     
-    print("计算训练数据集的标准化参数...")
-    
-    try:
-        # 加载数据但不应用标准化
-        dataset_dict = load_multiclass_data(
-            data_dirs,
-            apply_pca_flag=False,
-            norm=False  # 不应用标准化，我们要获取原始统计值
-        )
-        
-        # 获取训练样本
-        train_samples = dataset_dict['train_samples']
-        
-        # 计算均值和标准差
-        mean = np.mean(train_samples, axis=0)
-        std = np.std(train_samples, axis=0)
-        # 避免除零
-        std[std == 0] = 1e-10
-        
-        print(f"从训练集计算得到标准化参数: 均值范围 [{np.min(mean):.4f}, {np.max(mean):.4f}], 标准差范围 [{np.min(std):.4f}, {np.max(std):.4f}]")
-        
-        return mean, std
-        
-    except Exception as e:
-        print(f"计算标准化参数时出错: {e}")
-        return None, None
-    
-def predict_voxels(model, voxels, batch_size=128, device=None):
-    """
-    预测体素分类
-    
-    参数:
-        model: 训练好的模型
-        voxels: 形状为(n_samples, 341)的numpy数组
-        batch_size: 批处理大小
-        device: 计算设备
-        
-    返回:
-        predictions: 预测的类别，从0开始
-        probabilities: 每个类别的概率
-    """
-    if device is None:
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    
-    # 创建数据集和数据加载器
-    dataset = SingleVoxelDataset(voxels)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    
-    # 收集预测结果
-    all_probs = []
-    
-    # 预测
-    model.eval()
-    with torch.no_grad():
-        for batch in dataloader:
-            batch = batch.to(device)
-            outputs = model(batch)
-            probs = torch.softmax(outputs, dim=1)
-            all_probs.append(probs.cpu().numpy())
-    
-    # 合并结果
-    all_probs = np.vstack(all_probs)
-    predictions = np.argmax(all_probs, axis=1)
-    
-    # 转换为从1开始的标签（与原始数据匹配）
-    predictions = predictions + 1
-    
-    return predictions, all_probs
-
-def normalize_voxels(voxels, method='standard'):
-    """
-    标准化体素数据
-    
-    参数:
-        voxels: 形状为(n_samples, 341)的numpy数组
-        method: 标准化方法，'standard'、'minmax'或'feature_wise'
-        
-    返回:
-        normalized_voxels: 标准化后的体素数据
-    """
-    if method == 'standard':
-        # 标准化（Z-score）- 基于所有特征
-        mean = np.mean(voxels, axis=0)
-        std = np.std(voxels, axis=0)
-        std[std == 0] = 1e-10  # 避免除零
-        normalized_voxels = (voxels - mean) / std
-    elif method == 'minmax':
-        # 最小-最大归一化
-        min_vals = np.min(voxels, axis=0)
-        max_vals = np.max(voxels, axis=0)
-        range_vals = max_vals - min_vals
-        range_vals[range_vals == 0] = 1e-10  # 避免除零
-        normalized_voxels = (voxels - min_vals) / range_vals
-    elif method == 'feature_wise':
-        # 对每个特征分别进行Z-score标准化
-        normalized_voxels = np.zeros_like(voxels, dtype=np.float32)
-        
-        for i in range(voxels.shape[1]):
-            # 提取当前特征
-            feature = voxels[:, i]
-            # 计算该特征的均值和标准差
-            mean = np.mean(feature)
-            std = np.std(feature)
-            if std == 0:
-                std = 1e-10  # 避免除零
-            # 标准化该特征
-            normalized_voxels[:, i] = (feature - mean) / std
-        
-        print(f"对{voxels.shape[1]}个特征分别进行了Z-score标准化")
+    if json_config_path:
+        try:
+            with open(json_config_path, 'r') as f:
+                model_config = json.load(f)
+            print("成功从JSON文件加载模型配置")
+            
+            # 再次尝试加载检查点以获取权重
+            checkpoint = safe_load_model(model_path, device)
+            
+            # 尝试获取标准化参数
+            normalization_params = None
+            if 'normalization_params' in model_config:
+                normalization_params = model_config['normalization_params']
+                print("从配置文件获取到标准化参数")
+            
+            # 获取模型架构参数
+            model_type = model_config.get('model_type', 'deep_mlp')
+            input_dim = model_config.get('input_dim', 341)
+            hidden_dims = model_config.get('hidden_dims', model_config.get('hidden_units', [2048] * 6))
+            num_classes = model_config.get('num_classes', model_config.get('num_class', 102))
+            dropout_rate = model_config.get('dropout_rate', 0.2567125567148536)
+            activation = model_config.get('activation', 'gelu')
+            use_skip_connections = model_config.get('use_skip_connections', True)
+            
+            # 打印关键模型配置
+            print(f"模型类型: {model_type}")
+            print(f"输入维度: {input_dim}")
+            print(f"隐藏层: {hidden_dims}")
+            print(f"输出类别数: {num_classes}")
+            print(f"Dropout率: {dropout_rate}")
+            print(f"激活函数: {activation}")
+            
+            # 创建模型
+            model = get_model(
+                model_type=model_type,
+                input_dim=input_dim,
+                hidden_dims=hidden_dims,
+                num_classes=num_classes,
+                dropout_rate=dropout_rate,
+                activation=activation,
+                use_skip_connections=use_skip_connections
+            )
+            
+            # 加载模型权重
+            model.load_state_dict(checkpoint['state_dict'])
+            model = model.to(device)
+            model.eval()
+            print("成功从JSON配置创建模型并加载权重")
+            
+            return model, model_config, device, normalization_params
+            
+        except Exception as e:
+            print(f"从JSON配置加载失败: {e}")
     else:
-        raise ValueError(f"不支持的标准化方法: {method}")
+        print("无法找到相关的JSON配置文件")
     
-    return normalized_voxels
+    # 两种策略都失败，报错
+    raise ValueError(
+        "无法加载模型: 既不能作为完整模型加载，也找不到有效的JSON配置文件。"
+        "请确保模型文件包含架构信息或者同目录下有对应的JSON配置文件。"
+    )
+
 
 def load_matlab_data(data_path, features_key=None, region_key=None):
     """
@@ -344,202 +325,6 @@ def load_matlab_data(data_path, features_key=None, region_key=None):
         print(f"加载MAT文件出错: {e}")
         raise
 
-def map_predictions_to_3d(predictions, original_shape, region_mask=None, probabilities=None):
-    """
-    将预测结果映射回3D空间
-    
-    参数:
-        predictions: 预测的类别
-        original_shape: 原始3D形状
-        region_mask: 掩码，指定哪些位置应该被填充
-        probabilities: 预测的概率 (可选)
-        
-    返回:
-        volume: 3D体积，包含预测结果
-        prob_volume: 4D体积，包含概率 (如果probabilities不为None)
-    """
-    print(f"将预测映射回3D空间，目标形状: {original_shape}")
-    
-    # 创建3D体积并初始化为-1（未知）
-    volume = np.zeros(original_shape, dtype=np.int32) - 1
-    
-    # 如果有概率矩阵，创建4D体积
-    prob_volume = None
-    if probabilities is not None:
-        n_classes = probabilities.shape[1]
-        prob_volume = np.zeros(original_shape + (n_classes,), dtype=np.float32)
-    
-    # 如果有区域掩码，使用它来定位预测位置
-    if region_mask is not None:
-        # 确保region_mask是布尔型
-        if not np.issubdtype(region_mask.dtype, np.bool_):
-            region_mask = region_mask > 0
-        
-        # 将掩码展平
-        mask_flat = region_mask.flatten()
-        
-        # 确保预测数量与区域掩码中的True数量匹配
-        if np.sum(mask_flat) != len(predictions):
-            print(f"警告: 预测数量({len(predictions)})与区域掩码中的True数量({np.sum(mask_flat)})不匹配")
-            # 使用最小的数量避免错误
-            n_samples = min(len(predictions), np.sum(mask_flat))
-            mask_indices = np.where(mask_flat)[0][:n_samples]
-        else:
-            # 如果数量匹配，获取所有True位置的索引
-            mask_indices = np.where(mask_flat)[0]
-        
-        # 填充预测
-        volume_flat = volume.flatten()
-        volume_flat[mask_indices] = predictions[:len(mask_indices)]
-        volume = volume_flat.reshape(original_shape)
-        
-        # 如果有概率数据，也填充它们
-        if prob_volume is not None:
-            for c in range(probabilities.shape[1]):
-                # 创建临时3D体积
-                temp_vol = np.zeros(original_shape, dtype=np.float32)
-                temp_vol_flat = temp_vol.flatten()
-                temp_vol_flat[mask_indices] = probabilities[:len(mask_indices), c]
-                # 将1D数组重新整形为3D并保存到相应通道
-                prob_volume[..., c] = temp_vol_flat.reshape(original_shape)
-    else:
-        # 如果没有掩码，尝试直接重塑预测数组
-        try:
-            n_voxels = np.prod(original_shape)
-            if len(predictions) == n_voxels:
-                volume = predictions.reshape(original_shape)
-                print("直接重塑预测数组到指定形状")
-                
-                # 如果有概率数据，也重塑它们
-                if prob_volume is not None:
-                    for c in range(probabilities.shape[1]):
-                        prob_volume[..., c] = probabilities[:, c].reshape(original_shape)
-            else:
-                print(f"警告: 预测数量({len(predictions)})与体积体素数量({n_voxels})不匹配，无法重塑")
-        except Exception as e:
-            print(f"重塑预测数组时出错: {e}")
-    
-    # 统计非背景体素数量
-    n_valid = np.sum(volume != -1)
-    print(f"体积中的有效体素数量: {n_valid} / {volume.size} ({n_valid/volume.size*100:.2f}%)")
-    
-    # 统计不同类别的数量
-    unique_classes = np.unique(volume)
-    unique_classes = unique_classes[unique_classes != -1]  # 排除背景
-    print(f"体积中的唯一类别: {len(unique_classes)}")
-    
-    # 显示前5个类别的统计
-    class_counts = [(cls, np.sum(volume == cls)) for cls in unique_classes]
-    class_counts.sort(key=lambda x: x[1], reverse=True)
-    if class_counts:
-        print(f"前5个类别统计: {class_counts[:5]}")
-    
-    return volume, prob_volume
-
-def save_results(predictions, probabilities, volume, prob_volume=None, metadata=None, output_dir=None):
-    """
-    保存预测结果，仅使用MAT格式
-    
-    参数:
-        predictions: 预测的类别
-        probabilities: 预测的概率
-        volume: 3D体积
-        prob_volume: 概率体积 (可选)
-        metadata: 原始数据的元数据
-        output_dir: 输出目录
-    """
-    if output_dir is None:
-        output_dir = './prediction_results_' + time.strftime("%Y%m%d_%H%M%S")
-    
-    print(f"保存结果到: {output_dir}")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 创建要保存的数据字典
-    output_data = {
-        'predictions': predictions,
-        'probabilities': probabilities,
-        'volume_3d': volume
-    }
-    
-    if prob_volume is not None:
-        output_data['probability_volume'] = prob_volume
-    
-    # 添加元数据
-    if metadata:
-        for key, value in metadata.items():
-            if key not in output_data:
-                # 只添加简单的元数据，避免过大的数据
-                try:
-                    if isinstance(value, np.ndarray) and value.size > 1000000:
-                        print(f"跳过保存大型元数据 '{key}'，大小: {value.shape}")
-                    else:
-                        output_data[key] = value
-                except:
-                    print(f"无法保存元数据 '{key}'")
-    
-    # 保存MAT文件
-    mat_file_path = os.path.join(output_dir, 'prediction_results.mat')
-    try:
-        print(f"正在保存MAT文件: {mat_file_path}")
-        savemat(mat_file_path, output_data)
-        print(f"成功保存MAT文件")
-    except Exception as e:
-        print(f"保存完整MAT文件时出错: {e}")
-        print("尝试保存不包含元数据的简化版本...")
-        
-        # 尝试保存简化版本
-        simple_output = {
-            'predictions': predictions,
-            'volume_3d': volume
-        }
-        simple_mat_path = os.path.join(output_dir, 'prediction_results_simple.mat')
-        try:
-            savemat(simple_mat_path, simple_output)
-            print(f"成功保存简化版MAT文件: {simple_mat_path}")
-        except Exception as e2:
-            print(f"保存简化MAT文件也失败: {e2}")
-            
-            # 最后尝试分割保存
-            print("尝试分别保存各个组件...")
-            for key, value in simple_output.items():
-                try:
-                    component_path = os.path.join(output_dir, f'{key}.mat')
-                    savemat(component_path, {key: value})
-                    print(f"成功保存组件: {component_path}")
-                except:
-                    print(f"无法保存组件: {key}")
-    
-    # 保存一些基本统计信息（作为文本文件）
-    stats_file = os.path.join(output_dir, 'prediction_stats.txt')
-    with open(stats_file, 'w') as f:
-        f.write("预测统计信息\n")
-        f.write("=" * 50 + "\n\n")
-        
-        # 预测类别统计
-        unique_preds, pred_counts = np.unique(predictions, return_counts=True)
-        f.write("预测类别分布:\n")
-        for cls, count in zip(unique_preds, pred_counts):
-            if cls != -1:  # 排除背景/未知类别
-                f.write(f"  类别 {cls}: {count} 样本 ({count/len(predictions)*100:.2f}%)\n")
-        
-        # 体积统计
-        f.write("\n体积信息:\n")
-        f.write(f"  形状: {volume.shape}\n")
-        f.write(f"  占用比例: {np.sum(volume != -1) / volume.size * 100:.2f}%\n")
-        
-        # 最大概率值统计
-        max_probs = np.max(probabilities, axis=1)
-        f.write("\n置信度统计:\n")
-        f.write(f"  平均置信度: {np.mean(max_probs):.4f}\n")
-        f.write(f"  中位数置信度: {np.median(max_probs):.4f}\n")
-        f.write(f"  最小置信度: {np.min(max_probs):.4f}\n")
-        f.write(f"  最大置信度: {np.max(max_probs):.4f}\n")
-    
-    print(f"已保存统计信息到: {stats_file}")
-    
-    return output_dir
-
-
 def save_essential_results(predictions, probabilities, volume, output_dir):
     """
     只保存必要的三个文件：predictions.mat, probabilities.mat, volume_3d.mat
@@ -571,50 +356,7 @@ def save_essential_results(predictions, probabilities, volume, output_dir):
     print(f"文件保存完成。")
     return output_dir
 
-def revert_reshape_python(array, region):
-    """
-    Python实现的revert_reshape函数，与MATLAB版本完全一致
-    
-    参数:
-        array: 数组，可以是1D(n_samples,)或2D(n_samples, n_features)
-        region: 3D掩码，指示哪些位置有效
-    
-    返回:
-        big_img: 重建的3D或4D图像
-    """
-    # 确保region是布尔值
-    if not np.issubdtype(region.dtype, np.bool_):
-        region = region > 0
-    
-    # 确保array是2D的
-    if len(array.shape) == 1:
-        array = array.reshape(-1, 1)
-    
-    # 创建输出数组 - 与MATLAB一致，使用single精度
-    big_img = np.zeros(region.shape + (array.shape[1],), dtype=np.float32)
-    
-    # 对每一列进行处理
-    for ii in range(array.shape[1]):
-        # 提取当前切片
-        img = big_img[..., ii]
-        
-        # 展平图像和掩码
-        img_index = img.flatten()
-        template_index = region.flatten()
-        
-        # 在掩码为True的位置填入值
-        img_index[template_index] = array[:, ii]
-        
-        # 重塑并保存回原数组
-        img = img_index.reshape(region.shape)
-        big_img[..., ii] = img
-    
-    # 如果原始数组是1D的，返回3D结果
-    if array.shape[1] == 1:
-        return big_img[..., 0]
-    else:
-        return big_img
-    
+
 
 def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True, max_points=10000):
     """
@@ -700,6 +442,143 @@ def visualize_3d_volume(volume, colormap='jet', save_path=None, show=True, max_p
     else:
         plt.close()
 
+
+def revert_reshape_python(array, region):
+    """
+    Python实现的revert_reshape函数，与MATLAB版本完全一致
+    
+    参数:
+        array: 数组，可以是1D(n_samples,)或2D(n_samples, n_features)
+        region: 3D掩码，指示哪些位置有效
+    
+    返回:
+        big_img: 重建的3D或4D图像
+    """
+    # 确保region是布尔值
+    if not np.issubdtype(region.dtype, np.bool_):
+        region = region > 0
+    
+    # 确保array是2D的
+    if len(array.shape) == 1:
+        array = array.reshape(-1, 1)
+    
+    # 创建输出数组 - 与MATLAB一致，使用single精度
+    big_img = np.zeros(region.shape + (array.shape[1],), dtype=np.float32)
+    
+    # 对每一列进行处理
+    for ii in range(array.shape[1]):
+        # 提取当前切片
+        img = big_img[..., ii]
+        
+        # 展平图像和掩码
+        img_index = img.flatten()
+        template_index = region.flatten()
+        
+        # 在掩码为True的位置填入值
+        img_index[template_index] = array[:, ii]
+        
+        # 重塑并保存回原数组
+        img = img_index.reshape(region.shape)
+        big_img[..., ii] = img
+    
+    # 如果原始数组是1D的，返回3D结果
+    if array.shape[1] == 1:
+        return big_img[..., 0]
+    else:
+        return big_img
+    
+
+
+def predict_voxels(model, voxels, batch_size=128, device=None):
+    """
+    预测体素分类
+    
+    参数:
+        model: 训练好的模型
+        voxels: 形状为(n_samples, 341)的numpy数组
+        batch_size: 批处理大小
+        device: 计算设备
+        
+    返回:
+        predictions: 预测的类别，从0开始
+        probabilities: 每个类别的概率
+    """
+    if device is None:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    
+    # 创建数据集和数据加载器
+    dataset = SingleVoxelDataset(voxels)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    
+    # 收集预测结果
+    all_probs = []
+    
+    # 预测
+    model.eval()
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = batch.to(device)
+            outputs = model(batch)
+            probs = torch.softmax(outputs, dim=1)
+            all_probs.append(probs.cpu().numpy())
+    
+    # 合并结果
+    all_probs = np.vstack(all_probs)
+    predictions = np.argmax(all_probs, axis=1)
+    
+    # 转换为从1开始的标签（与原始数据匹配）
+    predictions = predictions + 1
+    
+    return predictions, all_probs
+
+
+# 可以移除 compute_normalization_params_from_datasets 函数，因为我们将使用保存的参数
+def normalize_data_with_params(features, mean=None, std=None, scaler=None):
+    """
+    使用预先计算的均值和标准差或者保存的scaler对数据进行标准化
+    
+    参数:
+        features: 需要标准化的特征数据
+        mean: 均值向量
+        std: 标准差向量
+        scaler: 保存的StandardScaler对象
+        
+    返回:
+        normalized_features: 标准化后的特征数据
+    """
+    if scaler is not None:
+        # 优先使用scaler对象
+        try:
+            return scaler.transform(features)
+        except Exception as e:
+            print(f"使用scaler标准化失败: {e}")
+            # 如果scaler失败，尝试使用均值和标准差
+            if mean is not None and std is not None:
+                print("回退到使用均值和标准差标准化")
+            else:
+                raise
+    
+    if mean is not None and std is not None:
+        # 使用均值和标准差
+        # 确保mean和std是numpy数组
+        if not isinstance(mean, np.ndarray):
+            mean = np.array(mean)
+        if not isinstance(std, np.ndarray):
+            std = np.array(std)
+            
+        # 确保维度匹配
+        if mean.shape[0] != features.shape[1] or std.shape[0] != features.shape[1]:
+            raise ValueError(f"特征维度不匹配: 特征维度={features.shape[1]}, 均值维度={mean.shape[0]}, 标准差维度={std.shape[0]}")
+            
+        # 避免除零
+        std_safe = std.copy()
+        std_safe[std_safe < 1e-10] = 1e-10
+        
+        # 执行标准化
+        return (features - mean) / std_safe
+    
+    raise ValueError("必须提供scaler对象或者均值和标准差")
+
 def main():
     # 命令行参数
     parser = argparse.ArgumentParser(description='体素分类预测并映射回3D空间')
@@ -709,32 +588,50 @@ def main():
     parser.add_argument('--region_key', type=str, default='region', help='MATLAB文件中区域掩码的键名')
     parser.add_argument('--output_dir', type=str, default='./prediction_results', help='输出目录')
     parser.add_argument('--batch_size', type=int, default=128, help='批处理大小')
-    parser.add_argument('--train_dir', type=str, 
-                      default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train", 
-                      help='训练数据目录，用于计算标准化参数')
-    parser.add_argument('--test_dir', type=str, 
-                      default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test", 
-                      help='测试数据目录')
-    parser.add_argument('--val_dir', type=str, 
-                      default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val", 
-                      help='验证数据目录')
+    parser.add_argument('--scaler_path', type=str, default=None, help='StandardScaler保存路径，如果不指定则尝试从模型中读取')
     parser.add_argument('--threshold', type=float, default=0.0, help='预测概率阈值，低于此值的预测将被忽略')
     parser.add_argument('--save_3d', action='store_true', help='是否保存3D可视化结果')
     parser.add_argument('--colormap', type=str, default='jet', help='3D可视化使用的颜色映射')
     parser.add_argument('--no_display', action='store_true', help='不显示可视化，只保存')
     parser.add_argument('--max_points', type=int, default=10000, help='3D可视化中显示的最大点数')
-    parser.add_argument('--normalize', type=str, default='same_as_training', 
-                  choices=['same_as_training', 'standard', 'minmax', 'feature_wise', 'none'], 
-                  help='标准化方法: same_as_training=使用与训练相同的参数, standard=当前数据Z标准化, minmax=当前数据最小-最大归一化, feature_wise=对每个特征单独Z标准化, none=不标准化')
-    
     args = parser.parse_args()
     
-    # 加载模型
-    model, config, device = load_optimized_model(args.model)
+    # 加载模型（现在会返回标准化参数）
+    model, config, device, normalization_params = load_optimized_model(args.model)
+    
+    # 如果未指定scaler_path，尝试自动查找
+    if not args.scaler_path:
+        model_dir = os.path.dirname(args.model) if args.model else "."
+        model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model else ""
+        
+        # 可能的scaler文件名模式
+        possible_scaler_names = [
+            f"{model_name}_scaler.pkl",
+            f"{model_name.split('_epoch_')[0]}_scaler.pkl" if "_epoch_" in model_name else "",  # 处理有epoch信息的模型名
+            "model_scaler.pkl",
+            "scaler.pkl"
+        ]
+        
+        for scaler_name in possible_scaler_names:
+            if not scaler_name:  # 跳过空字符串
+                continue
+            scaler_path = os.path.join(model_dir, scaler_name)
+            if os.path.exists(scaler_path):
+                args.scaler_path = scaler_path
+                print(f"自动找到scaler: {args.scaler_path}")
+                break
+    
+    # 加载scaler（如果提供路径）
+    scaler = None
+    if args.scaler_path and os.path.exists(args.scaler_path):
+        try:
+            scaler = joblib.load(args.scaler_path)
+            print(f"从 {args.scaler_path} 加载 StandardScaler")
+        except Exception as e:
+            print(f"加载 StandardScaler 时出错: {e}")
     
     # 加载输入数据
     print(f"加载输入数据: {args.data_path}")
-
     features, original_shape, metadata = load_matlab_data(
         args.data_path, 
         features_key=args.features_key, 
@@ -746,34 +643,81 @@ def main():
         raise ValueError(f"输入数据应有341个特征，但发现了{features.shape[1]}个特征")
     
     # 标准化数据
-    if args.normalize == 'same_as_training':
-        print("使用与训练相同的标准化参数...")
-        # 设置数据目录
-        data_dirs = {
-            'train_dir': args.train_dir,
-            'test_dir': args.test_dir,
-            'val_dir': args.val_dir
-        }
-        
-        # 计算训练数据的标准化参数
-        mean, std = compute_normalization_params_from_datasets(data_dirs)
-        
-        if mean is not None and std is not None:
-            # 使用训练数据的标准化参数
-            features = (features - mean) / std
-            print("成功使用训练数据的标准化参数进行标准化")
+    print("\n开始标准化数据...")
+    try:
+        if scaler is not None:
+            # 使用加载的scaler
+            print(f"使用从 {args.scaler_path} 加载的StandardScaler")
+            
+            # 打印一些scaler的统计信息，便于调试
+            if hasattr(scaler, 'mean_') and hasattr(scaler, 'var_'):
+                print(f"Scaler均值范围: [{np.min(scaler.mean_):.6f}, {np.max(scaler.mean_):.6f}]")
+                print(f"Scaler标准差范围: [{np.min(np.sqrt(scaler.var_)):.6f}, {np.max(np.sqrt(scaler.var_)):.6f}]")
+            
+            # 记录标准化前的统计信息
+            features_mean_before = np.mean(features, axis=0)
+            features_std_before = np.std(features, axis=0)
+            print(f"标准化前数据均值范围: [{np.min(features_mean_before):.6f}, {np.max(features_mean_before):.6f}]")
+            print(f"标准化前数据标准差范围: [{np.min(features_std_before):.6f}, {np.max(features_std_before):.6f}]")
+            
+            # 应用标准化
+            features = scaler.transform(features)
+            
+            # 记录标准化后的统计信息
+            features_mean_after = np.mean(features, axis=0)
+            features_std_after = np.std(features, axis=0)
+            print(f"标准化后数据均值范围: [{np.min(features_mean_after):.6f}, {np.max(features_mean_after):.6f}]")
+            print(f"标准化后数据标准差范围: [{np.min(features_std_after):.6f}, {np.max(features_std_after):.6f}]")
+            
+        elif normalization_params is not None:
+            # 使用从模型中提取的标准化参数
+            mean = np.array(normalization_params['mean'])
+            std = np.array(normalization_params['std'])
+            
+            print("使用训练模型中保存的标准化参数")
+            print(f"标准化参数均值范围: [{np.min(mean):.6f}, {np.max(mean):.6f}]")
+            print(f"标准化参数标准差范围: [{np.min(std):.6f}, {np.max(std):.6f}]")
+            
+            # 记录标准化前的统计信息
+            features_mean_before = np.mean(features, axis=0)
+            features_std_before = np.std(features, axis=0)
+            print(f"标准化前数据均值范围: [{np.min(features_mean_before):.6f}, {np.max(features_mean_before):.6f}]")
+            print(f"标准化前数据标准差范围: [{np.min(features_std_before):.6f}, {np.max(features_std_before):.6f}]")
+            
+            # 应用标准化
+            features = normalize_data_with_params(features, mean, std)
+            
+            # 记录标准化后的统计信息
+            features_mean_after = np.mean(features, axis=0)
+            features_std_after = np.std(features, axis=0)
+            print(f"标准化后数据均值范围: [{np.min(features_mean_after):.6f}, {np.max(features_mean_after):.6f}]")
+            print(f"标准化后数据标准差范围: [{np.min(features_std_after):.6f}, {np.max(features_std_after):.6f}]")
         else:
-            print("警告: 无法获取训练数据的标准化参数，将使用当前数据进行标准化")
-            # 回退到使用当前数据的标准化
-            features = normalize_voxels(features, method='standard')
-    elif args.normalize != 'none':
-        print(f"使用{args.normalize}方法基于当前数据进行标准化")
-        features = normalize_voxels(features, method=args.normalize)
-    else:
-        print("不进行标准化")
+            print("警告: 无法获取标准化参数，将使用原始数据进行预测")
+            print("这可能导致预测结果不准确，因为模型在标准化数据上训练")
+            
+            # 提供用户选择
+            print("\n请选择:")
+            print("1. 使用原始数据继续预测 (不推荐)")
+            print("2. 退出程序")
+            
+            # 在非交互环境中默认继续
+            try:
+                choice = input("请选择 (1/2, 默认1): ").strip()
+                if choice == "2":
+                    print("用户选择退出程序")
+                    return
+            except:
+                print("非交互环境，默认继续使用原始数据")
+            
+            print("继续使用原始数据进行预测")
+            
+    except Exception as e:
+        print(f"标准化数据时出错: {e}")
+        print("将使用原始数据进行预测，但这可能导致结果不准确")
     
     # 预测
-    print("开始预测...")
+    print("\n开始预测...")
     predictions, probabilities = predict_voxels(
         model, 
         features, 
@@ -828,15 +772,18 @@ def main():
             region_mask = flat_mask.reshape(new_shape)
             original_shape = new_shape
     
-    # 将预测映射回3D空间 - 使用revert_reshape_python替代map_predictions_to_3d
+    # 将预测映射回3D空间
     print(f"将预测映射回3D空间，目标形状: {original_shape}")
-    # 使用与MATLAB一致的重塑逻辑
     volume = revert_reshape_python(predictions, region_mask)
     
     # 如果需要概率体积，也使用revert_reshape_python
     prob_volume = None
-    if args.save_3d or 'prob_volume' in locals():  # 保留原有功能
+    if args.save_3d or 'prob_volume' in locals():
         prob_volume = revert_reshape_python(probabilities, region_mask)
+    
+    # 创建并确保输出目录存在
+    if args.output_dir is None:
+        args.output_dir = './prediction_results_' + time.strftime("%Y%m%d_%H%M%S")
     
     # 保存结果
     output_dir = save_essential_results(
@@ -845,6 +792,42 @@ def main():
         volume, 
         output_dir=args.output_dir
     )
+    
+    # 保存标准化信息以便追踪
+    norm_info_path = os.path.join(output_dir, 'normalization_info.txt')
+    with open(norm_info_path, 'w') as f:
+        f.write("标准化信息\n")
+        f.write("=" * 50 + "\n\n")
+        
+        if scaler is not None:
+            f.write(f"使用了从 {args.scaler_path} 加载的StandardScaler\n\n")
+            
+            if hasattr(scaler, 'mean_') and hasattr(scaler, 'var_'):
+                f.write(f"Scaler均值范围: [{np.min(scaler.mean_):.6f}, {np.max(scaler.mean_):.6f}]\n")
+                f.write(f"Scaler标准差范围: [{np.min(np.sqrt(scaler.var_)):.6f}, {np.max(np.sqrt(scaler.var_)):.6f}]\n\n")
+        elif normalization_params is not None:
+            f.write("使用了从模型中提取的标准化参数\n\n")
+            
+            mean = np.array(normalization_params['mean'])
+            std = np.array(normalization_params['std'])
+            f.write(f"标准化参数均值范围: [{np.min(mean):.6f}, {np.max(mean):.6f}]\n")
+            f.write(f"标准化参数标准差范围: [{np.min(std):.6f}, {np.max(std):.6f}]\n\n")
+        else:
+            f.write("警告: 未使用任何标准化\n\n")
+        
+        # 记录数据统计信息
+        f.write("预测数据统计:\n")
+        f.write(f"特征维度: {features.shape[1]}\n")
+        f.write(f"样本数量: {features.shape[0]}\n")
+        f.write(f"预测的类别数量: {len(unique_classes[unique_classes != -1])}\n\n")
+        
+        # 记录预测分布
+        f.write("预测类别分布 (前10个):\n")
+        for i, (cls, count) in enumerate(class_counts[:10]):
+            percentage = count / len(predictions) * 100
+            f.write(f"类别 {cls}: {count} 个样本 ({percentage:.2f}%)\n")
+    
+    print(f"标准化信息已保存到: {norm_info_path}")
     
     # 可视化 (如果需要)
     if args.save_3d:
@@ -860,6 +843,23 @@ def main():
     
     print("\n预测和3D映射完成!")
     print(f"结果已保存到: {output_dir}")
+    
+    # 提供使用建议
+    print("\n使用建议:")
+    if scaler is not None:
+        print(f"✓ 成功使用了与训练相同的StandardScaler")
+    elif normalization_params is not None:
+        print(f"✓ 成功使用了从模型中提取的标准化参数")
+    else:
+        print("⚠ 警告: 未使用任何标准化，预测结果可能不准确")
+    
+    if args.threshold > 0:
+        print(f"✓ 应用了概率阈值 {args.threshold}，低置信度预测被标记为未知")
+    else:
+        print("ℹ 提示: 可以使用 --threshold 参数设置概率阈值，过滤低置信度预测")
+    
+    return output_dir
+
 
 if __name__ == "__main__":
     main()
