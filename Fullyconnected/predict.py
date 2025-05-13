@@ -122,6 +122,47 @@ def load_optimized_model(model_path=None):
     
     return model, model_config, device
 
+
+def compute_normalization_params_from_datasets(data_dirs):
+    """
+    从训练数据计算标准化参数
+    
+    参数:
+        data_dirs: 包含训练、测试和验证数据目录的字典
+    
+    返回:
+        mean: 特征均值向量
+        std: 特征标准差向量
+    """
+    from data import load_multiclass_data
+    
+    print("计算训练数据集的标准化参数...")
+    
+    try:
+        # 加载数据但不应用标准化
+        dataset_dict = load_multiclass_data(
+            data_dirs,
+            apply_pca_flag=False,
+            norm=False  # 不应用标准化，我们要获取原始统计值
+        )
+        
+        # 获取训练样本
+        train_samples = dataset_dict['train_samples']
+        
+        # 计算均值和标准差
+        mean = np.mean(train_samples, axis=0)
+        std = np.std(train_samples, axis=0)
+        # 避免除零
+        std[std == 0] = 1e-10
+        
+        print(f"从训练集计算得到标准化参数: 均值范围 [{np.min(mean):.4f}, {np.max(mean):.4f}], 标准差范围 [{np.min(std):.4f}, {np.max(std):.4f}]")
+        
+        return mean, std
+        
+    except Exception as e:
+        print(f"计算标准化参数时出错: {e}")
+        return None, None
+    
 def predict_voxels(model, voxels, batch_size=128, device=None):
     """
     预测体素分类
@@ -575,8 +616,18 @@ def main():
     parser.add_argument('--region_key', type=str, default='region', help='MATLAB文件中区域掩码的键名')
     parser.add_argument('--output_dir', type=str, default='./prediction_results', help='输出目录')
     parser.add_argument('--batch_size', type=int, default=128, help='批处理大小')
-    parser.add_argument('--normalize', type=str, default='standard', choices=['standard', 'minmax', 'none'], 
-                      help='标准化方法: standard=Z标准化, minmax=最小-最大归一化, none=不标准化')
+    parser.add_argument('--normalize', type=str, default='same_as_training', 
+                      choices=['same_as_training', 'standard', 'minmax', 'none'], 
+                      help='标准化方法: same_as_training=使用与训练相同的参数, standard=当前数据Z标准化, minmax=当前数据最小-最大归一化, none=不标准化')
+    parser.add_argument('--train_dir', type=str, 
+                      default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train", 
+                      help='训练数据目录，用于计算标准化参数')
+    parser.add_argument('--test_dir', type=str, 
+                      default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test", 
+                      help='测试数据目录')
+    parser.add_argument('--val_dir', type=str, 
+                      default="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val", 
+                      help='验证数据目录')
     parser.add_argument('--threshold', type=float, default=0.0, help='预测概率阈值，低于此值的预测将被忽略')
     parser.add_argument('--save_3d', action='store_true', help='是否保存3D可视化结果')
     parser.add_argument('--colormap', type=str, default='jet', help='3D可视化使用的颜色映射')
@@ -601,9 +652,31 @@ def main():
         raise ValueError(f"输入数据应有341个特征，但发现了{features.shape[1]}个特征")
     
     # 标准化数据
-    if args.normalize != 'none':
-        print(f"使用{args.normalize}方法标准化数据")
+    if args.normalize == 'same_as_training':
+        print("使用与训练相同的标准化参数...")
+        # 设置数据目录
+        data_dirs = {
+            'train_dir': args.train_dir,
+            'test_dir': args.test_dir,
+            'val_dir': args.val_dir
+        }
+        
+        # 计算训练数据的标准化参数
+        mean, std = compute_normalization_params_from_datasets(data_dirs)
+        
+        if mean is not None and std is not None:
+            # 使用训练数据的标准化参数
+            features = (features - mean) / std
+            print("成功使用训练数据的标准化参数进行标准化")
+        else:
+            print("警告: 无法获取训练数据的标准化参数，将使用当前数据进行标准化")
+            # 回退到使用当前数据的标准化
+            features = normalize_voxels(features, method='standard')
+    elif args.normalize != 'none':
+        print(f"使用{args.normalize}方法基于当前数据进行标准化")
         features = normalize_voxels(features, method=args.normalize)
+    else:
+        print("不进行标准化")
     
     # 预测
     print("开始预测...")
