@@ -1,11 +1,3 @@
-```python
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-数据加载辅助函数，用于加载脑体素数据并进行标准化处理
-"""
-
 import numpy as np
 import os
 import scipy.io
@@ -800,4 +792,3 @@ if __name__ == "__main__":
     # 分析数据分布
     analysis_results = analyze_data_distribution(train_loader, val_loader, test_loader)
     """
-```
