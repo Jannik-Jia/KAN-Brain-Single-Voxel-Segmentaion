@@ -178,7 +178,6 @@ def load_all_regions(directory, region_ids=None, format='mat'):
             result[region_id] = region_data
     
     return result
-
 def load_brain_voxel_data(base_dir, split='train', format='mat', shuffle=True, seed=666):
     """
     从方法1的数据结构中加载脑体素数据
@@ -239,13 +238,14 @@ def load_brain_voxel_data(base_dir, split='train', format='mat', shuffle=True, s
     
     print(f"{split} 数据集总样本数: {len(all_features)}")
     
-    # 打乱数据（如果需要）
+    # 全局打乱数据（如果需要）
     if shuffle:
-        print(f"打乱 {split} 数据集...")
+        print(f"全局打乱 {split} 数据集...")
         np.random.seed(seed)
         indices = np.random.permutation(len(all_features))
         all_features = all_features[indices]
         all_labels = all_labels[indices]
+        print(f"完成全局打乱，确保341维特征、体素和标签的对应关系")
     
     return {
         'features': all_features,
