@@ -21,6 +21,18 @@ CONFIG = {
         'test_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test",
         'val_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
     },
+
+    # 患者数据设置
+    'use_patient_based_loading': False,  # 是否使用基于患者ID的数据加载
+    'patient_data_base_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/reorganized_fold_data",  # 重组数据的基础目录
+    'fixed_patient_split': {  # 固定的患者分组
+        'train': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+        'valid': [21, 22, 23, 24, 25, 26, 27, 28], 
+        'test': [29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
+    },
+    'test_patient_id': 38,  # 默认测试患者ID
+    
+    # 数据处理参数
     'apply_pca': False,  # 是否应用PCA降维
     'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
     'norm': True,        # 是否进行数据标准化
@@ -57,6 +69,44 @@ CONFIG = {
     'run_bayesian_opt': True,  # 是否运行贝叶斯优化
     'n_trials': 30,            # 贝叶斯优化的试验次数
     'pruning_patience': 5,     # 提前终止的耐心值
+
+    # Early Stopping相关配置项
+    'bo_max_epochs': 100,         # 贝叶斯优化中的最大训练轮数
+    'early_stop_patience': 10,    # 早停的耐心值
+    'early_stop_min_delta': 0.001, # 性能改进最小阈值
+    'save_trial_checkpoints': True, # 是否保存每个trial的最佳检查点
+    'pruner_type': 'hyperband',    # pruner类型: 'median', 'hyperband'
+
+    # Early Stopping和优化配置
+    'bo_early_stopping': {
+        'patience': 10,             # 早停轮数
+        'min_delta': 0.001,         # 最小改进阈值
+        'restart_from_best': True,  # 如果性能下降是否回到最佳权重
+    },
+
+    # 模型部署配置
+    'deployment': {
+        'prepare_deployment': True,   # 是否准备部署版本
+        'export_onnx': True,          # 是否导出ONNX
+        'export_torchscript': True,   # 是否导出TorchScript
+        'quantize': False,            # 是否量化模型（可选）
+        'create_serving_scripts': True, # 是否创建服务部署脚本
+        'optimize_for_inference': True, # 是否优化模型以加速推理
+        'model_metadata': {
+            'creator': 'BrainVoxel BO Framework',
+            'version': '1.0.0',
+            'description': '脑体素分类器',
+            'license': 'Private',
+        }
+    },
+
+    # 生产环境配置
+    'production': {
+        'batch_inference': True,       # 是否支持批处理推理
+        'preprocessing_pipeline': True, # 是否包含预处理管道
+        'max_batch_size': 64,          # 最大批处理大小
+        'timeout_ms': 100,             # 推理超时（毫秒）
+    },
     
     # 结果保存
     'save_dir': './results',    # 结果保存目录

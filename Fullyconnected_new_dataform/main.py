@@ -14,6 +14,7 @@ import argparse
 import torch
 import torch.nn as nn
 import numpy as np
+from utils.patient_data_adapter import load_patient_based_data
 
 # 设置PyTorch序列化安全变量 - 添加这部分
 try:
@@ -124,6 +125,27 @@ def load_datasets(config):
     """加载数据集"""
     print("开始加载数据集...")
     
+    # 添加基于患者ID的数据加载支持
+    if config.get('use_patient_based_loading', False):
+        from utils.patient_data_adapter import load_patient_based_data
+        
+        dataset_dict, train_loader, val_loader, test_loader = load_patient_based_data(
+            base_dir=config.get('patient_data_base_dir'),
+            batch_size=config['batch_size'],
+            train_patient_ids=config.get('fixed_patient_split', {}).get('train'),
+            valid_patient_ids=config.get('fixed_patient_split', {}).get('valid'),
+            test_patient_ids=config.get('fixed_patient_split', {}).get('test'),
+            test_patient_id=config.get('test_patient_id', 38),
+            seed=config['random_seed']
+        )
+        
+        print(f"使用基于患者ID的数据加载完成!")
+        print(f"训练集: {len(train_loader.dataset)} 样本")
+        print(f"验证集: {len(val_loader.dataset)} 样本")
+        print(f"测试集: {len(test_loader.dataset)} 样本")
+        
+        return dataset_dict, train_loader, val_loader, test_loader
+    
     dataset_dict = load_multiclass_data(
         config['data_dirs'],
         apply_pca_flag=config['apply_pca'],
@@ -196,8 +218,9 @@ def create_or_optimize_model(config, dataset_dict, train_loader, val_loader, dev
             n_trials=config['n_trials'],
             study_name=f"{config['model_name']}_bayesian_opt",
             save_path=config['save_dir'],
-            config=config  # 添加这一行
+            config=config  # 确保传入完整配置
         )
+        
         
         # 更新配置
         config.update({
