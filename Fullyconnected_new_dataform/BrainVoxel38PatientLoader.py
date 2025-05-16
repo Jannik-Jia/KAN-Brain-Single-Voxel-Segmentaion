@@ -82,7 +82,7 @@ def load_reorganized_data(base_dir):
     
     return patient_data
 
-def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42):
+def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42, standardize=False):
     """
     创建训练集、验证集和测试集的数据加载器
     
@@ -91,6 +91,7 @@ def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42):
         batch_size (int): 批次大小
         test_patient_id (int): 必须放入测试集的患者ID
         seed (int): 随机种子
+        standardize (bool): 是否应用标准化
         
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -162,10 +163,11 @@ def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42):
     print(f"测试集样本数: {len(test_features)}")
     
     # 特征标准化 (只使用训练集来拟合标准化器)
-    scaler = StandardScaler()
-    train_features = scaler.fit_transform(train_features)
-    valid_features = scaler.transform(valid_features)
-    test_features = scaler.transform(test_features)
+    if standardize:
+        scaler = StandardScaler()
+        train_features = scaler.fit_transform(train_features)
+        valid_features = scaler.transform(valid_features)
+        test_features = scaler.transform(test_features)
     
     # 为训练集和验证集创建索引
     train_indices = np.arange(len(train_features))
@@ -196,7 +198,7 @@ def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42):
 # 使用示例
 if __name__ == "__main__":
     # 设置重组数据的基础目录
-    base_dir = '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/reorganized_data'
+    base_dir = '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/reorganized_fold_data'
     
     # 创建数据加载器
     train_loader, valid_loader, test_loader = create_data_loaders(
