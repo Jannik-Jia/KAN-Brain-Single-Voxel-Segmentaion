@@ -50,6 +50,7 @@ from utils.optimization import run_bayesian_optimization
 from utils.model_io import safe_load_model, load_model_with_architecture  # 添加新的导入
 
 
+# 修改main.py文件中的parse_args()函数
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='BrainVoxel MLP Training')
@@ -66,6 +67,11 @@ def parse_args():
     parser.add_argument('--val_dir', type=str, default=None, help='验证数据目录')
     parser.add_argument('--apply_pca', action='store_true', help='是否应用PCA降维')
     parser.add_argument('--n_pca', type=int, default=None, help='PCA保留的主成分数量')
+    
+    # 添加患者数据相关参数
+    parser.add_argument('--use_patient_based_loading', action='store_true', help='是否使用基于患者ID的数据加载')
+    parser.add_argument('--patient_data_base_dir', type=str, default=None, help='重组数据的基础目录')
+    parser.add_argument('--test_patient_id', type=int, default=None, help='指定测试患者ID')
     
     # 模型参数
     parser.add_argument('--model_type', type=str, default=None, 
@@ -94,6 +100,15 @@ def parse_args():
     # 优化参数
     parser.add_argument('--run_bayesian_opt', action='store_true', help='是否运行贝叶斯优化')
     parser.add_argument('--n_trials', type=int, default=None, help='贝叶斯优化的试验次数')
+    
+    # 新增贝叶斯优化相关参数
+    parser.add_argument('--bo_max_epochs', type=int, default=None, help='贝叶斯优化中的最大训练轮数')
+    parser.add_argument('--early_stop_patience', type=int, default=None, help='早停的耐心值')
+    parser.add_argument('--early_stop_min_delta', type=float, default=None, help='性能改进最小阈值')
+    parser.add_argument('--save_trial_checkpoints', action='store_true', help='是否保存trial检查点')
+    parser.add_argument('--pruner_type', type=str, default=None,
+                       choices=['median', 'hyperband'], help='剪枝器类型')
+    parser.add_argument('--restart_from_best', action='store_true', help='性能下降时是否回到最佳权重')
     
     # 保存参数
     parser.add_argument('--save_dir', type=str, default=None, help='保存目录')
@@ -127,25 +142,33 @@ def load_datasets(config):
     
     # 添加基于患者ID的数据加载支持
     if config.get('use_patient_based_loading', False):
+        print("使用基于患者ID的数据加载...")
         from utils.patient_data_adapter import load_patient_based_data
+        
+        # 准备患者ID参数
+        train_patient_ids = config.get('fixed_patient_split', {}).get('train')
+        valid_patient_ids = config.get('fixed_patient_split', {}).get('valid')
+        test_patient_ids = config.get('fixed_patient_split', {}).get('test')
+        test_patient_id = config.get('test_patient_id', 38)
         
         dataset_dict, train_loader, val_loader, test_loader = load_patient_based_data(
             base_dir=config.get('patient_data_base_dir'),
             batch_size=config['batch_size'],
-            train_patient_ids=config.get('fixed_patient_split', {}).get('train'),
-            valid_patient_ids=config.get('fixed_patient_split', {}).get('valid'),
-            test_patient_ids=config.get('fixed_patient_split', {}).get('test'),
-            test_patient_id=config.get('test_patient_id', 38),
-            seed=config['random_seed']
+            test_patient_id=test_patient_id,
+            seed=config['random_seed'],
+            train_patient_ids=train_patient_ids,
+            valid_patient_ids=valid_patient_ids,
+            test_patient_ids=test_patient_ids
         )
         
         print(f"使用基于患者ID的数据加载完成!")
-        print(f"训练集: {len(train_loader.dataset)} 样本")
-        print(f"验证集: {len(val_loader.dataset)} 样本")
-        print(f"测试集: {len(test_loader.dataset)} 样本")
+        print(f"训练集批次数: {len(train_loader)}")
+        print(f"验证集批次数: {len(val_loader)}")
+        print(f"测试集批次数: {len(test_loader)}")
         
         return dataset_dict, train_loader, val_loader, test_loader
     
+    # 原有的数据加载逻辑
     dataset_dict = load_multiclass_data(
         config['data_dirs'],
         apply_pca_flag=config['apply_pca'],
@@ -563,9 +586,26 @@ def main():
             else:
                 config[key] = value
     
+    # 处理布尔标志参数（action='store_true'类型）
+    if args.use_patient_based_loading:
+        config['use_patient_based_loading'] = True
+    if args.save_trial_checkpoints:
+        config['save_trial_checkpoints'] = True
+    if args.restart_from_best:
+        if 'bo_early_stopping' not in config:
+            config['bo_early_stopping'] = {}
+        config['bo_early_stopping']['restart_from_best'] = True
+    
+    # 特殊处理患者数据目录参数
+    if args.patient_data_base_dir:
+        config['patient_data_base_dir'] = args.patient_data_base_dir
+    if args.test_patient_id:
+        config['test_patient_id'] = args.test_patient_id
+    
     # 设置实验名称
     if not config.get('experiment_name'):
         config['experiment_name'] = f"{config['model_name']}_{time.strftime('%Y%m%d_%H%M%S')}"
+    
     
     # 创建保存目录
     save_dir = os.path.join(config['save_dir'], config['experiment_name'])
