@@ -82,16 +82,16 @@ def load_reorganized_data(base_dir):
     
     return patient_data
 
-def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42, standardize=False):
+
+def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42):
     """
-    创建训练集、验证集和测试集的数据加载器
+    创建训练集、验证集和测试集的数据加载器，按6:2:2的比例分割患者
     
     Args:
         base_dir (str): 重组数据的基础目录
         batch_size (int): 批次大小
         test_patient_id (int): 必须放入测试集的患者ID
         seed (int): 随机种子
-        standardize (bool): 是否应用标准化
         
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -117,18 +117,31 @@ def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42, st
     # 随机打乱剩余患者ID
     random.shuffle(remaining_patient_ids)
     
-    # 计算训练集和验证集的大小
-    total_remaining = len(remaining_patient_ids)
-    train_size = int(total_remaining * 0.75)  # 6/8 = 0.75 (因为剩余患者占总数的80%)
+    # 计算6:2:2比例下应有的患者数
+    total_patients = len(all_patient_ids)
+    train_count = int(total_patients * 0.6)  # 60%
+    valid_count = int(total_patients * 0.2)  # 20%
     
-    # 分割患者ID
-    train_patient_ids = remaining_patient_ids[:train_size]
-    valid_patient_ids = remaining_patient_ids[train_size:]
-    test_patient_ids = [test_patient_id]
+    # 测试集已经包含了指定的患者，计算还需要多少患者
+    test_count_needed = int(total_patients * 0.2) - 1  # 20% - 已有的1个患者
     
-    print(f"训练集患者数: {len(train_patient_ids)}")
-    print(f"验证集患者数: {len(valid_patient_ids)}")
-    print(f"测试集患者数: {len(test_patient_ids)}")
+    # 如果测试集需要的患者数为负数，则调整为0（极端情况下可能发生）
+    test_count_needed = max(0, test_count_needed)
+    
+    # 从剩余患者中分配到测试集
+    test_patient_ids = [test_patient_id] + remaining_patient_ids[:test_count_needed]
+    
+    # 剩余的患者按照训练集和验证集的比例分配
+    # 剩余患者应该分配到训练集和验证集，比例为3:1（因为总比例是6:2，所以60:20 = 3:1）
+    remaining_for_train_valid = remaining_patient_ids[test_count_needed:]
+    train_valid_split = int(len(remaining_for_train_valid) * 0.75)  # 3/(3+1) = 0.75
+    
+    train_patient_ids = remaining_for_train_valid[:train_valid_split]
+    valid_patient_ids = remaining_for_train_valid[train_valid_split:]
+    
+    print(f"训练集患者数: {len(train_patient_ids)} (目标约: {train_count})")
+    print(f"验证集患者数: {len(valid_patient_ids)} (目标约: {valid_count})")
+    print(f"测试集患者数: {len(test_patient_ids)} (目标约: {int(total_patients * 0.2)})")
     
     # 收集每个数据集的特征和标签
     train_features, train_labels = [], []
@@ -163,11 +176,10 @@ def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42, st
     print(f"测试集样本数: {len(test_features)}")
     
     # 特征标准化 (只使用训练集来拟合标准化器)
-    if standardize:
-        scaler = StandardScaler()
-        train_features = scaler.fit_transform(train_features)
-        valid_features = scaler.transform(valid_features)
-        test_features = scaler.transform(test_features)
+    scaler = StandardScaler()
+    train_features = scaler.fit_transform(train_features)
+    valid_features = scaler.transform(valid_features)
+    test_features = scaler.transform(test_features)
     
     # 为训练集和验证集创建索引
     train_indices = np.arange(len(train_features))
@@ -194,6 +206,8 @@ def create_data_loaders(base_dir, batch_size=32, test_patient_id=38, seed=42, st
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     return train_loader, valid_loader, test_loader
+
+
 
 # 使用示例
 if __name__ == "__main__":
