@@ -23,7 +23,7 @@ CONFIG = {
     },
 
     # 患者数据设置
-    'use_patient_based_loading': False,  # 是否使用基于患者ID的数据加载
+    'use_patient_based_loading': True,  # 是否使用基于患者ID的数据加载
     'patient_data_base_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/reorganized_fold_data",  # 重组数据的基础目录
     'fixed_patient_split': {  # 固定的患者分组
         'train': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],

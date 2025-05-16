@@ -136,13 +136,14 @@ def setup_environment(config):
     
     return device
 
+# 修改 main.py 中的 load_datasets 函数
+
 def load_datasets(config):
     """加载数据集"""
     print("开始加载数据集...")
     
-    # 添加基于患者ID的数据加载支持
     if config.get('use_patient_based_loading', False):
-        print("使用基于患者ID的数据加载...")
+        # 使用基于患者ID的数据加载
         from utils.patient_data_adapter import load_patient_based_data
         
         # 准备患者ID参数
@@ -160,43 +161,9 @@ def load_datasets(config):
             valid_patient_ids=valid_patient_ids,
             test_patient_ids=test_patient_ids
         )
-        
-        print(f"使用基于患者ID的数据加载完成!")
-        print(f"训练集批次数: {len(train_loader)}")
-        print(f"验证集批次数: {len(val_loader)}")
-        print(f"测试集批次数: {len(test_loader)}")
-        
-        return dataset_dict, train_loader, val_loader, test_loader
-    
-    # 原有的数据加载逻辑
-    dataset_dict = load_multiclass_data(
-        config['data_dirs'],
-        apply_pca_flag=config['apply_pca'],
-        n_components=config['n_pca'],
-        norm=config['norm']
-    )
-    
-    # 创建数据集
-    train_dataset = BrainVoxelDataset(dataset_dict['train_samples'], dataset_dict['train_labels'])
-    test_dataset = BrainVoxelDataset(dataset_dict['test_samples'], dataset_dict['test_labels'])
-    val_dataset = BrainVoxelDataset(dataset_dict['val_samples'], dataset_dict['val_labels'])
-    
-    # 创建数据加载器
-    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=config['batch_size'], shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False)
-    
-    print(f"数据加载完成! 共载入 {len(train_dataset)} 个训练样本，{len(val_dataset)} 个验证样本，{len(test_dataset)} 个测试样本")
-    print(f"特征维度: {dataset_dict['feature_dim']}")
-    
-    # 可视化数据分布 - 在nohup模式下可能不需要
-    try:
-        visualize_dataset_distribution(
-            dataset_dict,
-            save_path=os.path.join(config['save_dir'], "dataset_distribution.png")
-        )
-    except Exception as e:
-        print(f"可视化数据分布时出错: {e}")
+    else:
+        # 如果不使用基于患者ID的加载，抛出错误，因为我们移除了旧的加载方式
+        raise ValueError("必须启用基于患者ID的数据加载 (use_patient_based_loading=True)。旧的数据加载方式已被移除。")
     
     return dataset_dict, train_loader, val_loader, test_loader
 
@@ -578,23 +545,32 @@ def main():
     # 加载配置
     config = load_config(args.config)
     
+    # 强制启用基于患者ID的数据加载
+    config['use_patient_based_loading'] = True
+    
     # 用命令行参数覆盖配置
     for key, value in vars(args).items():
-        if value is not None and key in config:
+        if value is not None:
             if key == 'hidden_units' and isinstance(value, str):
                 config[key] = [int(x) for x in value.split(',')]
-            else:
+            elif key in config:
                 config[key] = value
     
     # 处理布尔标志参数（action='store_true'类型）
-    if args.use_patient_based_loading:
-        config['use_patient_based_loading'] = True
     if args.save_trial_checkpoints:
         config['save_trial_checkpoints'] = True
     if args.restart_from_best:
         if 'bo_early_stopping' not in config:
             config['bo_early_stopping'] = {}
         config['bo_early_stopping']['restart_from_best'] = True
+    if args.apply_pca:
+        config['apply_pca'] = True
+    if args.use_lr_scheduler:
+        config['use_lr_scheduler'] = True
+    if args.run_bayesian_opt:
+        config['run_bayesian_opt'] = True
+    if args.old_serialization:
+        config['use_old_zipfile_serialization'] = True
     
     # 特殊处理患者数据目录参数
     if args.patient_data_base_dir:
@@ -605,7 +581,6 @@ def main():
     # 设置实验名称
     if not config.get('experiment_name'):
         config['experiment_name'] = f"{config['model_name']}_{time.strftime('%Y%m%d_%H%M%S')}"
-    
     
     # 创建保存目录
     save_dir = os.path.join(config['save_dir'], config['experiment_name'])
@@ -628,6 +603,7 @@ def main():
     
     # 更新配置中的特征维度
     config['feature_dim'] = dataset_dict['feature_dim']
+    
     
     # 创建或优化模型
     if config['run_bayesian_opt']:

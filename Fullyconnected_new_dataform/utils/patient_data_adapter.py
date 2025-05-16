@@ -137,25 +137,13 @@ def load_patient_based_data(base_dir, batch_size=32, test_patient_id=38, seed=42
         'val_labels': None,
         'pca_model': None,      # 没有使用PCA
         'valid_labels': list(range(102)),  # 假设有102个类别
-        'train_loader': train_loader,  # 直接提供数据加载器
-        'val_loader': val_loader,
-        'test_loader': test_loader,
     }
     
-    # 打印数据加载信息
     print(f"基于患者ID的数据加载完成!")
     print(f"特征维度: {feature_dim}")
     print(f"训练集批次数: {len(train_loader)}")
     print(f"验证集批次数: {len(val_loader)}")
     print(f"测试集批次数: {len(test_loader)}")
-    
-    if train_patient_ids:
-        print(f"使用手动指定的患者划分")
-        print(f"训练集患者ID: {train_patient_ids}")
-        print(f"验证集患者ID: {valid_patient_ids}")
-        print(f"测试集患者ID: {test_patient_ids}")
-    else:
-        print(f"使用自动划分的患者集，测试集包含患者ID {test_patient_id}")
     
     return dataset_dict, train_loader, val_loader, test_loader
 
