@@ -67,6 +67,14 @@ def parse_args():
     parser.add_argument('--val_dir', type=str, default=None, help='验证数据目录')
     parser.add_argument('--apply_pca', action='store_true', help='是否应用PCA降维')
     parser.add_argument('--n_pca', type=int, default=None, help='PCA保留的主成分数量')
+
+    # 添加标准化相关的参数
+    parser.add_argument('--norm', type=lambda x: x.lower() == 'true', default=None, 
+                      help='是否应用标准化 (True/False)')
+    parser.add_argument('--save_scaler', type=lambda x: x.lower() == 'true', default=None, 
+                     help='是否保存标准化器 (True/False)')
+    parser.add_argument('--scaler_path', type=str, default=None, 
+                     help='预训练标准化器的路径')
     
     # 添加患者数据相关参数
     parser.add_argument('--use_patient_based_loading', action='store_true', help='是否使用基于患者ID的数据加载')
@@ -162,7 +170,7 @@ def load_datasets(config):
             valid_patient_ids=valid_patient_ids,
             test_patient_ids=test_patient_ids,
             apply_normalization=config.get('norm', True),
-            scaler_path=config.get('scaler_path'),
+            scaler_path = config.get('scaler_path', None)
             save_scaler=config.get('save_scaler', True),
             save_dir=config['save_dir'],
             config=config  # 传递完整的配置
