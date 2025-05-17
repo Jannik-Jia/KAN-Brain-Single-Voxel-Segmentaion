@@ -197,6 +197,13 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     # 定义损失函数
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
     
+    # 确保标准化参数被保存在trial的用户属性中
+    if config and 'normalization_params' in config and config['normalization_params'] is not None:
+        trial.set_user_attr('normalization_params', config['normalization_params'])
+    
+    if config and 'scaler_path' in config and config['scaler_path'] is not None:
+        trial.set_user_attr('scaler_path', config['scaler_path'])
+
     # 训练模型 - 增强版本，支持Early Stopping
     val_f1_values = []
     train_losses = []
@@ -296,7 +303,10 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
                         'dropout_rate': shared_params['dropout_rate'],
                         'activation': shared_params['activation'],
                         **model_params
-                    }
+                    },
+                    # ===== 添加标准化信息 =====
+                    'normalization_params': config.get('normalization_params') if config else None,
+                    'scaler_path': config.get('scaler_path') if config else None
                 }
                 
                 # 保存检查点
@@ -415,7 +425,10 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
                 'dropout_rate': shared_params['dropout_rate'],
                 'activation': shared_params['activation'],
                 **model_params
-            }
+            },
+            # ===== 添加标准化信息 =====
+            'normalization_params': config.get('normalization_params') if config else None,
+            'scaler_path': config.get('scaler_path') if config else None
         }
         
         # 保存检查点
@@ -646,6 +659,15 @@ def run_bayesian_optimization(data_loaders, input_dim, num_classes, device, para
             'optimization_duration': duration_str
         })
             
+        # 如果存在标准化器路径，复制到最佳模型目录
+        if study.best_trial.user_attrs.get('scaler_path') and os.path.exists(study.best_trial.user_attrs.get('scaler_path')):
+            best_scaler_path = os.path.join(best_model_dir, "scaler.pkl")
+            shutil.copy2(study.best_trial.user_attrs.get('scaler_path'), best_scaler_path)
+            print(f"标准化器已复制到最佳模型目录: {best_scaler_path}")
+            
+            # 更新完整配置
+            complete_config['scaler_path'] = best_scaler_path
+            
         config_path = os.path.join(best_model_dir, "best_config.json")
         with open(config_path, 'w') as f:
             json.dump(complete_config, f, indent=2)
@@ -779,9 +801,10 @@ if __name__ == "__main__":
 
 import torch
 import numpy as np
+import pickle
 from load_model import load_best_model
 
-def predict(model, features, device='cpu'):
+def predict(model, features, device='cpu', apply_normalization=True, scaler_path='scaler.pkl'):
     \"\"\"
     使用模型进行预测
     
@@ -789,10 +812,38 @@ def predict(model, features, device='cpu'):
         model: 模型
         features: 输入特征 (numpy数组或torch张量)
         device: 计算设备
+        apply_normalization: 是否应用标准化
+        scaler_path: 标准化器路径
         
     返回:
         predictions: 预测的类别
     \"\"\"
+    # 应用标准化（如果需要）
+    if apply_normalization and scaler_path:
+        try:
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+            print(f"已加载标准化器: {scaler_path}")
+            
+            # 确保输入是numpy数组
+            if isinstance(features, torch.Tensor):
+                features_np = features.cpu().numpy()
+            else:
+                features_np = features
+                
+            # 应用标准化
+            features_scaled = scaler.transform(features_np)
+            
+            # 转换回原始类型
+            if isinstance(features, torch.Tensor):
+                features = torch.FloatTensor(features_scaled)
+            else:
+                features = features_scaled
+                
+        except Exception as e:
+            print(f"标准化处理失败: {e}")
+            print("使用原始特征继续...")
+    
     # 确保输入格式正确
     if isinstance(features, np.ndarray):
         features = torch.FloatTensor(features)
@@ -823,20 +874,20 @@ if __name__ == "__main__":
         with open('architecture.json', 'r') as f:
             arch_info = json.load(f)
         
-        input_dim = arch_info['input_dim']
+        input_dim = arch_info['feature_dim']
         num_samples = 5
         
         # 生成随机测试数据
         test_data = np.random.rand(num_samples, input_dim).astype(np.float32)
         
         # 进行预测
-        predictions = predict(model, test_data, device)
+        predictions = predict(model, test_data, device, apply_normalization=True, scaler_path='scaler.pkl')
         
         print(f"\\n为{num_samples}个随机样本生成预测结果:")
         for i, pred in enumerate(predictions):
             print(f"样本 {i+1}: 预测类别 = {pred}")
         
-        print("\\n这是一个示例脚本。在真实应用中，您应该加载实际数据并可能需要应用与训练时相同的预处理步骤。")
+        print("\\n这是一个示例脚本。在真实应用中，您应该加载实际数据并应用与训练时相同的预处理步骤。")
 """
             # 保存推理脚本
             with open(os.path.join(best_model_dir, "inference.py"), 'w') as f:

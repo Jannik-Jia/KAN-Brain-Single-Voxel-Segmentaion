@@ -9,6 +9,8 @@ import torch
 import os
 import json
 import numpy as np
+
+
 def save_model_with_architecture(model, optimizer, config, training_info, save_path, 
                                normalization_params=None, lr_scheduler=None, 
                                use_old_zipfile_serialization=True):
@@ -70,6 +72,7 @@ def save_model_with_architecture(model, optimizer, config, training_info, save_p
         'apply_pca': config.get('apply_pca', False),
         'n_pca': config.get('n_pca', 0),
         'norm': config.get('norm', True),
+        'scaler_path': config.get('scaler_path', None),
         
         # 其他配置信息
         'random_seed': config.get('random_seed', 666),
@@ -94,6 +97,10 @@ def save_model_with_architecture(model, optimizer, config, training_info, save_p
         # 学习率调度器状态
         'lr_scheduler_state': lr_scheduler.state_dict() if lr_scheduler else None,
         'lr_scheduler_type': config.get('lr_scheduler_type', 'none') if lr_scheduler else 'none',
+        
+        # 标准化信息
+        'normalization_params': normalization_params,
+        'scaler_path': config.get('scaler_path', None),
         
         # 元信息
         'created_with': f'PyTorch {torch.__version__}',
@@ -147,7 +154,12 @@ def import_time():
 def safe_load_model(model_path, device='cpu'):
     """
     安全加载模型，处理 PyTorch 版本兼容性问题
-    
+
+    参数:
+        model_path: 模型文件路径
+        device: 设备（'cpu' 或 'cuda:0' 等）
+
+    返回:
     参数:
         model_path: 模型文件路径
         device: 设备（'cpu' 或 'cuda:0' 等）

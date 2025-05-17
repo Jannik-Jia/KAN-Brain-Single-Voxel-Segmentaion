@@ -33,10 +33,13 @@ CONFIG = {
     'test_patient_id': 38,  # 默认测试患者ID
     
     # 数据处理参数
-    'apply_pca': False,  # 是否应用PCA降维
-    'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
-    'norm': True,        # 是否进行数据标准化
-    
+    'apply_pca': False,        # 是否应用PCA降维
+    'n_pca': 0,                # PCA保留的主成分数量，0表示不进行PCA
+    'norm': True,              # 是否进行数据标准化
+    'save_scaler': True,       # 是否保存拟合的标准化器
+    'scaler_path': None,       # 预训练的标准化器路径（如果有）
+    'scaler_dir': 'scalers',   # 标准化器保存目录（相对于save_dir）
+        
     # 模型基本参数
     'model_name': 'BrainVoxel_102Class_MLP',
     'dataset_name': 'BrainVoxel',

@@ -142,8 +142,8 @@ def load_datasets(config):
     """加载数据集"""
     print("开始加载数据集...")
     
-    if config.get('use_patient_based_loading', False):
-        # 使用基于患者ID的数据加载
+    if config.get('use_patient_based_loading', True):  # 默认使用患者数据加载
+        # 使用改进的基于患者ID的数据加载
         from utils.patient_data_adapter import load_patient_based_data
         
         # 准备患者ID参数
@@ -152,6 +152,7 @@ def load_datasets(config):
         test_patient_ids = config.get('fixed_patient_split', {}).get('test')
         test_patient_id = config.get('test_patient_id', 38)
         
+        # 加载数据
         dataset_dict, train_loader, val_loader, test_loader = load_patient_based_data(
             base_dir=config.get('patient_data_base_dir'),
             batch_size=config['batch_size'],
@@ -159,10 +160,23 @@ def load_datasets(config):
             seed=config['random_seed'],
             train_patient_ids=train_patient_ids,
             valid_patient_ids=valid_patient_ids,
-            test_patient_ids=test_patient_ids
+            test_patient_ids=test_patient_ids,
+            apply_normalization=config.get('norm', True),
+            scaler_path=config.get('scaler_path'),
+            save_scaler=config.get('save_scaler', True),
+            save_dir=config['save_dir'],
+            config=config  # 传递完整的配置
         )
+        
+        # 如果有标准化参数，更新配置
+        if 'normalization_params' in dataset_dict and dataset_dict['normalization_params']:
+            config['normalization_params'] = dataset_dict['normalization_params']
+            
+        # 如果有标准化器路径，更新配置
+        if 'scaler_path' in dataset_dict and dataset_dict['scaler_path']:
+            config['scaler_path'] = dataset_dict['scaler_path']
     else:
-        # 如果不使用基于患者ID的加载，抛出错误，因为我们移除了旧的加载方式
+        # 保留旧的数据加载方式作为备选
         raise ValueError("必须启用基于患者ID的数据加载 (use_patient_based_loading=True)。旧的数据加载方式已被移除。")
     
     return dataset_dict, train_loader, val_loader, test_loader
@@ -279,30 +293,9 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
                 optimizer, mode='max', factor=config['lr_gamma'], patience=5, verbose=True
             )
 
-    # 计算标准化参数
-    if config['norm']:
-        # 从数据集中获取标准化参数
-        if 'train_samples' in dataset_dict:
-            train_samples = dataset_dict['train_samples']
-            mean = np.mean(train_samples, axis=0)
-            std = np.std(train_samples, axis=0)
-            # 避免除零
-            std[std == 0] = 1e-10
-            
-            # 创建标准化参数字典
-            normalization_params = {
-                'mean': mean.tolist(),  # 转为列表以确保可JSON序列化
-                'std': std.tolist()
-            }
-            
-            print("已计算标准化参数")
-        else:
-            normalization_params = None
-            print("警告: 无法计算标准化参数，因为没有找到训练样本")
-    else:
-        normalization_params = None
-
-
+    # 获取标准化参数
+    normalization_params = config.get('normalization_params', None)
+    
     # 开始训练
     print("\n开始训练模型...")
     print(f"总轮数: {config['epochs']}, 批大小: {config['batch_size']}, 学习率: {config['lr']}")
@@ -322,7 +315,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         use_old_zipfile_serialization=config.get('use_old_zipfile_serialization', True),
         experiment_name=config.get('experiment_name', time.strftime("%Y%m%d_%H%M%S")),
         config=config,  # 传递配置对象
-        normalization_params=normalization_params  # 新增：传递标准化参数
+        normalization_params=normalization_params  # 传递标准化参数
     )
     
     # 可视化训练过程
@@ -348,6 +341,17 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         model.load_state_dict(checkpoint['state_dict'])
         print(f"成功加载最佳模型: {os.path.basename(best_model_path)}")
         
+        # 如果存在标准化器路径，复制到最佳模型目录
+        if config.get('scaler_path') and os.path.exists(config.get('scaler_path')):
+            best_model_dir = os.path.dirname(best_model_path)
+            if best_model_dir == config['save_dir']:
+                best_model_dir = os.path.join(config['save_dir'], "best_model")
+                os.makedirs(best_model_dir, exist_ok=True)
+            
+            best_scaler_path = os.path.join(best_model_dir, "scaler.pkl")
+            shutil.copy2(config['scaler_path'], best_scaler_path)
+            print(f"标准化器已复制到最佳模型目录: {best_scaler_path}")
+        
     except Exception as e:
         print(f"加载最佳模型时出错: {e}")
         print("将使用当前模型继续评估")
@@ -366,7 +370,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True  # 添加这个参数以显示每个标签的F1分数
+        show_class_metrics=True
     )
 
     # 在验证集上评估
@@ -380,7 +384,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True  # 添加这个参数以显示每个标签的F1分数
+        show_class_metrics=True
     )
 
     # 在测试集上评估
@@ -394,7 +398,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True  # 添加这个参数以显示每个标签的F1分数
+        show_class_metrics=True
     )
     
     # 保存评估结果摘要
@@ -421,118 +425,21 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         f.write(f"  平衡准确率: {test_results['balanced_accuracy']:.4f}\n")
         f.write(f"  Kappa系数: {test_results['kappa']:.4f}\n\n")
         
-        f.write(f"模型: {config['model_type']}\n")
-        f.write(f"隐藏层: {config['hidden_units']}\n")
-        f.write(f"激活函数: {config['activation']}\n")
-        f.write(f"Dropout率: {config['dropout_rate']}\n")
-        f.write(f"优化器: {config['optimizer']}\n")
-        f.write(f"学习率: {config['lr']}\n")
-        f.write(f"权重衰减: {config['weight_decay']}\n")
+        # 记录标准化信息
+        if config.get('norm', True):
+            f.write("标准化信息:\n")
+            if config.get('scaler_path'):
+                f.write(f"  标准化器路径: {config['scaler_path']}\n")
+            if config.get('normalization_params'):
+                f.write(f"  标准化类型: Z-score (StandardScaler)\n")
+                mean_sample = config['normalization_params'].get('mean', [])[:5]
+                std_sample = config['normalization_params'].get('std', [])[:5]
+                f.write(f"  均值样本: {mean_sample}...\n")
+                f.write(f"  标准差样本: {std_sample}...\n")
+        else:
+            f.write("未应用标准化\n")
     
-    # 比较训练集、验证集和测试集中的类别性能
-    compare_results = compare_class_performance(
-        results_list=[train_results, val_results, test_results],
-        dataset_names=["Train", "Validation", "Test"],
-        result_path=config['save_dir']
-    )
-    
-    # 分析不同集合间一致性最差的类别
-    if compare_results:
-        consistency_analysis_path = os.path.join(config['save_dir'], "class_consistency_analysis.txt")
-        with open(consistency_analysis_path, 'w') as f:
-            f.write("类别一致性分析\n")
-            f.write("="*50 + "\n\n")
-            
-            # 计算每个类别在训练、验证和测试集上的F1分数差异
-            f1_diffs = {}
-            for cls in compare_results.keys():
-                train_f1 = compare_results[cls]["Train"]["f1"]
-                val_f1 = compare_results[cls]["Validation"]["f1"]
-                test_f1 = compare_results[cls]["Test"]["f1"]
-                
-                # 计算最大和最小F1分数之间的差异
-                max_f1 = max(train_f1, val_f1, test_f1)
-                min_f1 = min(train_f1, val_f1, test_f1)
-                diff = max_f1 - min_f1
-                f1_diffs[cls] = diff
-            
-            # 找出差异最大的类别（Top 10）
-            inconsistent_classes = sorted(f1_diffs.items(), key=lambda x: x[1], reverse=True)[:10]
-            
-            f.write("差异最大的10个类别:\n")
-            f.write(f"{'类别ID':<10} {'训练集F1':<12} {'验证集F1':<12} {'测试集F1':<12} {'最大差异':<12}\n")
-            
-            for cls, diff in inconsistent_classes:
-                train_f1 = compare_results[cls]["Train"]["f1"]
-                val_f1 = compare_results[cls]["Validation"]["f1"]
-                test_f1 = compare_results[cls]["Test"]["f1"]
-                
-                f.write(f"{cls:<10} {train_f1:.4f}:<12 {val_f1:.4f}:<12 {test_f1:.4f}:<12 {diff:.4f}:<12\n")
-            
-            # 找出最稳定的类别（差异最小的Top 10）
-            consistent_classes = sorted(f1_diffs.items(), key=lambda x: x[1])[:10]
-            
-            f.write("\n差异最小的10个类别:\n")
-            f.write(f"{'类别ID':<10} {'训练集F1':<12} {'验证集F1':<12} {'测试集F1':<12} {'最小差异':<12}\n")
-            
-            for cls, diff in consistent_classes:
-                train_f1 = compare_results[cls]["Train"]["f1"]
-                val_f1 = compare_results[cls]["Validation"]["f1"]
-                test_f1 = compare_results[cls]["Test"]["f1"]
-                
-                f.write(f"{cls:<10} {train_f1:.4f}:<12 {val_f1:.4f}:<12 {test_f1:.4f}:<12 {diff:.4f}:<12\n")
-            
-            # 计算过拟合和欠拟合情况
-            f.write("\n过拟合和欠拟合类别分析:\n")
-            
-            # 过拟合类别：训练集F1远高于测试集F1
-            overfitting_threshold = 0.2  # 设定阈值
-            overfitting_classes = []
-            
-            for cls in compare_results.keys():
-                train_f1 = compare_results[cls]["Train"]["f1"]
-                test_f1 = compare_results[cls]["Test"]["f1"]
-                
-                if train_f1 - test_f1 > overfitting_threshold:
-                    overfitting_classes.append((cls, train_f1, test_f1, train_f1 - test_f1))
-            
-            overfitting_classes.sort(key=lambda x: x[3], reverse=True)  # 按差异排序
-            
-            if overfitting_classes:
-                f.write("\n可能存在过拟合的类别 (训练F1 - 测试F1 > 0.2):\n")
-                f.write(f"{'类别ID':<10} {'训练集F1':<12} {'测试集F1':<12} {'差异':<12} {'样本数':<12}\n")
-                
-                for cls, train_f1, test_f1, diff in overfitting_classes[:10]:  # 只显示前10个
-                    samples = compare_results[cls]["Train"]["samples"]
-                    f.write(f"{cls:<10} {train_f1:.4f}:<12 {test_f1:.4f}:<12 {diff:.4f}:<12 {samples}:<12\n")
-            else:
-                f.write("\n没有发现明显过拟合的类别\n")
-            
-            # 欠拟合类别：训练集和测试集F1都很低
-            underfitting_threshold = 0.5  # 设定阈值
-            underfitting_classes = []
-            
-            for cls in compare_results.keys():
-                train_f1 = compare_results[cls]["Train"]["f1"]
-                test_f1 = compare_results[cls]["Test"]["f1"]
-                
-                if train_f1 < underfitting_threshold and test_f1 < underfitting_threshold:
-                    underfitting_classes.append((cls, train_f1, test_f1, compare_results[cls]["Train"]["samples"]))
-            
-            underfitting_classes.sort(key=lambda x: (x[1] + x[2])/2)  # 按平均F1排序
-            
-            if underfitting_classes:
-                f.write("\n可能存在欠拟合的类别 (训练F1 < 0.5 且 测试F1 < 0.5):\n")
-                f.write(f"{'类别ID':<10} {'训练集F1':<12} {'测试集F1':<12} {'样本数':<12}\n")
-                
-                for cls, train_f1, test_f1, samples in underfitting_classes[:10]:  # 只显示前10个
-                    f.write(f"{cls:<10} {train_f1:.4f}:<12 {test_f1:.4f}:<12 {samples}:<12\n")
-            else:
-                f.write("\n没有发现明显欠拟合的类别\n")
-    
-        print(f"类别一致性分析已保存至{consistency_analysis_path}")
-    
-    print(f"评估完成，结果摘要已保存至{summary_path}")
+    print(f"评估结果摘要已保存至: {summary_path}")
     
     return train_results, val_results, test_results, best_model_path
 
@@ -629,7 +536,7 @@ def main():
         }
         
         # 运行贝叶斯优化
-        study, best_params = run_bayesian_optimization(
+        study, best_params, best_model_dir = run_bayesian_optimization(
             data_loaders=data_loaders,
             input_dim=dataset_dict['feature_dim'],
             num_classes=config['num_class'],
