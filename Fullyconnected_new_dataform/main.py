@@ -170,7 +170,7 @@ def load_datasets(config):
             valid_patient_ids=valid_patient_ids,
             test_patient_ids=test_patient_ids,
             apply_normalization=config.get('norm', True),
-            scaler_path = config.get('scaler_path', None)
+            scaler_path = config.get('scaler_path', None),
             save_scaler=config.get('save_scaler', True),
             save_dir=config['save_dir'],
             config=config  # 传递完整的配置
