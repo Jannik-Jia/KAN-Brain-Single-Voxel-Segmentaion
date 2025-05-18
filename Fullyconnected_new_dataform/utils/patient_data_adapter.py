@@ -109,6 +109,8 @@ class PatientDataLoaderWrapper:
         """
         self.dataloader = dataloader
         self.dataset = dataloader.dataset
+        # 添加这一行来传递batch_size属性
+        self.batch_size = dataloader.batch_size
     
     def __len__(self):
         """返回数据加载器长度"""
