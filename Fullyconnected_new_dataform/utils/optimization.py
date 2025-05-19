@@ -498,12 +498,6 @@ def run_bayesian_optimization(data_loaders, input_dim, num_classes, device, para
         multivariate=True                         # 使用多变量采样
     )
     
-    # 对于大量试验，可以考虑使用分组采样
-    if n_trials >= 50 and 'model_type' in param_space:
-        sampler = optuna.samplers.GroupSampler(
-            sampler, 
-            group="model_type"  # 按模型类型分组
-        )
     
     # 创建研究
     study = optuna.create_study(
