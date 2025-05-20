@@ -12,7 +12,8 @@ import argparse
 import torch
 import torch.serialization
 import numpy as np
-from data.mat_loader import load_external_mat_data, BrainVoxelMatDataset
+from data.mat_loader import load_external_mat_data, BrainVoxelMatDataset, process_train38_data, create_dataloaders_from_mat
+
 
 # 设置PyTorch序列化安全变量 - 添加这部分
 try:
@@ -39,7 +40,6 @@ from torch.utils.data import DataLoader
 # 导入自定义模块
 from config import load_config
 from models import get_model
-from data import BrainVoxelDataset, load_multiclass_data
 from utils.metrics import evaluate_model
 from utils.visualization import visualize_dataset_distribution
 
@@ -112,52 +112,35 @@ def convert_onehot_to_indices(labels_onehot):
 
 
 
+# 替换load_datasets函数
 def load_datasets(config):
     """加载数据集"""
     print("开始加载数据集...")
     
-    # 确保数据目录存在且不为None
-    if 'data_dirs' not in config or not all(key in config['data_dirs'] and config['data_dirs'][key] is not None 
-                                         for key in ['train_dir', 'test_dir', 'val_dir']):
-        print("配置中数据目录不完整，尝试使用命令行参数中的路径...")
-        
-        # 使用命令行参数中的路径重建data_dirs
-        config['data_dirs'] = {
-            'train_dir': config.get('train_dir'),
-            'test_dir': config.get('test_dir'),
-            'val_dir': config.get('val_dir')
-        }
+    # 检查配置中是否有mat_file_path
+    if 'mat_file_path' not in config or not config['mat_file_path']:
+        raise ValueError("配置中缺少'mat_file_path'，请在配置中指定TRAIN38.mat文件路径")
     
-    # 最终检查确保所有路径都存在
-    for key, path in config['data_dirs'].items():
-        if path is None:
-            raise ValueError(f"错误: {key} 路径为None，请检查配置文件或命令行参数")
-        if not os.path.exists(path):
-            raise ValueError(f"错误: {key} 路径不存在: {path}")
-        print(f"使用 {key}: {path}")
-    
-    # 继续原有的数据加载流程...
-    dataset_dict = load_multiclass_data(
-        config['data_dirs'],
-        apply_pca_flag=config.get('apply_pca', False),
-        n_components=config.get('n_pca', 0),
-        norm=config.get('norm', True)
+    # 处理TRAIN38.mat数据
+    dataset_dict = process_train38_data(
+        mat_file_path=config['mat_file_path'],
+        test_size=config.get('test_size', 0.01),
+        random_state=config.get('random_seed', 666)
     )
     
-    # 创建数据集
-    train_dataset = BrainVoxelDataset(dataset_dict['train_samples'], dataset_dict['train_labels'])
-    test_dataset = BrainVoxelDataset(dataset_dict['test_samples'], dataset_dict['test_labels'])
-    val_dataset = BrainVoxelDataset(dataset_dict['val_samples'], dataset_dict['val_labels'])
-    
     # 创建数据加载器
-    train_loader = DataLoader(train_dataset, batch_size=config.get('batch_size', 128), shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=config.get('batch_size', 128), shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=config.get('batch_size', 128), shuffle=False)
+    dataloaders = create_dataloaders_from_mat(
+        dataset_dict,
+        batch_size=config.get('batch_size', 128),
+        shuffle_train=False  # 评估时不需要打乱数据
+    )
     
-    print(f"数据加载完成! 共载入 {len(train_dataset)} 个训练样本，{len(val_dataset)} 个验证样本，{len(test_dataset)} 个测试样本")
+    print(f"数据加载完成! 共载入 {len(dataset_dict['train_samples'])} 个训练样本，"
+          f"{len(dataset_dict['val_samples'])} 个验证样本，"
+          f"{len(dataset_dict['test_samples'])} 个测试样本")
     print(f"特征维度: {dataset_dict['feature_dim']}")
     
-    return dataset_dict, train_loader, val_loader, test_loader
+    return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']
 
 
 

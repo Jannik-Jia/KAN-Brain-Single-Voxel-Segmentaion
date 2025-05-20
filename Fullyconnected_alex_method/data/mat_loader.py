@@ -24,7 +24,7 @@ class BrainVoxelMatDataset(Dataset):
         
         参数:
             data: 特征数据，形状为(n_samples, feature_dim)
-            labels: 标签数据，形状为(n_samples, num_classes)，one-hot编码
+            labels: 标签数据，形状为(n_samples, num_classes)，one-hot编码或索引
         """
         super(BrainVoxelMatDataset, self).__init__()
         self.data = data
@@ -47,19 +47,6 @@ class BrainVoxelMatDataset(Dataset):
             
         y = torch.LongTensor([int(y)])[0]
         return x, y
-
-def convert_onehot_to_indices(labels_onehot):
-    """
-    将one-hot编码的标签转换为索引
-    
-    参数:
-        labels_onehot: One-hot编码的标签，形状为(n_samples, num_classes)
-        
-    返回:
-        labels_indices: 类别索引，形状为(n_samples,)
-    """
-    return np.argmax(labels_onehot, axis=1)
-
 
 def load_mat_data(mat_file_path):
     """
@@ -108,7 +95,7 @@ def process_train38_data(mat_file_path, test_size=0.01, random_state=666, scaler
     arrays = load_mat_data(mat_file_path)
     train_data = arrays['data']
     train_region = arrays['region']
-    prob_idx = arrays['prob_idx']
+    prob_idx = arrays['prob_idx'].flatten()  # 确保是一维数组
     
     # 根据prob_idx分割数据
     train_set_idx = np.where(prob_idx != 38)[0]

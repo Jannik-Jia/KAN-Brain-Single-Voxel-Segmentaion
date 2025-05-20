@@ -40,7 +40,6 @@ import matplotlib.pyplot as plt
 # 导入自定义模块
 from config import load_config, save_config
 from models import get_model
-from data import BrainVoxelDataset, load_multiclass_data
 from train import train_brain_voxel_mlp_multiclass
 from eval import evaluate_model_detailed  # 保留兼容性包装
 from utils.metrics import evaluate_model, calculate_class_weights, get_best_model, compare_class_performance
@@ -127,39 +126,43 @@ def setup_environment(config):
     return device
 
 def load_datasets(config):
-    """加载数据集"""
+    """加载数据集（从.mat文件）"""
     print("开始加载数据集...")
     
-    dataset_dict = load_multiclass_data(
-        config['data_dirs'],
-        apply_pca_flag=config['apply_pca'],
-        n_components=config['n_pca'],
-        norm=config['norm']
+    # 检查配置中是否有mat_file_path
+    if 'mat_file_path' not in config or not config['mat_file_path']:
+        raise ValueError("配置中缺少'mat_file_path'，请在配置中指定TRAIN38.mat文件路径")
+    
+    # 导入mat_loader模块
+    from data.mat_loader import process_train38_data, create_dataloaders_from_mat
+    
+    # 处理TRAIN38.mat数据
+    scaler_save_path = os.path.join(config['save_dir'], "scaler.joblib")
+    dataset_dict = process_train38_data(
+        mat_file_path=config['mat_file_path'],
+        test_size=config.get('test_size', 0.01),
+        random_state=config['random_seed'],
+        scaler_save_path=scaler_save_path
     )
     
-    # 创建数据集
-    train_dataset = BrainVoxelDataset(dataset_dict['train_samples'], dataset_dict['train_labels'])
-    test_dataset = BrainVoxelDataset(dataset_dict['test_samples'], dataset_dict['test_labels'])
-    val_dataset = BrainVoxelDataset(dataset_dict['val_samples'], dataset_dict['val_labels'])
-    
     # 创建数据加载器
-    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=config['batch_size'], shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False)
+    dataloaders = create_dataloaders_from_mat(
+        dataset_dict,
+        batch_size=config['batch_size'],
+        shuffle_train=True
+    )
     
-    print(f"数据加载完成! 共载入 {len(train_dataset)} 个训练样本，{len(val_dataset)} 个验证样本，{len(test_dataset)} 个测试样本")
+    # 更新配置
+    config['feature_dim'] = dataset_dict['feature_dim']
+    config['num_class'] = dataset_dict['num_classes']
+    config['scaler'] = dataset_dict['scaler']
+    
+    print(f"数据加载完成! 共载入 {len(dataset_dict['train_samples'])} 个训练样本，"
+          f"{len(dataset_dict['val_samples'])} 个验证样本，"
+          f"{len(dataset_dict['test_samples'])} 个测试样本")
     print(f"特征维度: {dataset_dict['feature_dim']}")
     
-    # 可视化数据分布 - 在nohup模式下可能不需要
-    try:
-        visualize_dataset_distribution(
-            dataset_dict,
-            save_path=os.path.join(config['save_dir'], "dataset_distribution.png")
-        )
-    except Exception as e:
-        print(f"可视化数据分布时出错: {e}")
-    
-    return dataset_dict, train_loader, val_loader, test_loader
+    return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']
 
 def create_or_optimize_model(config, dataset_dict, train_loader, val_loader, device):
     """创建模型或通过贝叶斯优化找到最佳参数"""

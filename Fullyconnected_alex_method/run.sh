@@ -1,35 +1,44 @@
 #!/bin/bash
+
 # 设置环境变量
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 export CUDA_VISIBLE_DEVICES=0
 # 禁用所有进度条
 export PYTHONIOENCODING=utf-8
 export PYTHONUNBUFFERED=1
+
 # 创建预处理脚本
 cat > prepare_env.py << 'EOL'
 import torch
 import torch.serialization
 import numpy as np
 import sys
+
 # 禁用tqdm进度条
 import tqdm
 tqdm.tqdm = lambda *args, **kwargs: args[0]
+
 print(f"PyTorch version: {torch.__version__}")
 print(f"NumPy version: {np.__version__}")
 print("禁用tqdm进度条")
 sys.stdout.flush()
+
 try:
     torch.serialization.add_safe_globals([np.core.multiarray.scalar])
     print("Successfully added numpy.core.multiarray.scalar to safe globals")
 except Exception as e:
     print(f"Warning: Could not add safe globals: {e}")
 EOL
+
 # 运行预处理脚本
 python prepare_env.py
+
 # 实验名称
 EXPERIMENT_NAME="BrainVoxel_MLP_MAT_$(date +%Y%m%d_%H%M%S)"
+
 # 创建日志目录
 mkdir -p logs
+
 # 运行代码 - 使用mat格式
 nohup python -u main.py \
     --experiment_name $EXPERIMENT_NAME \
@@ -52,8 +61,8 @@ nohup python -u main.py \
     --log_dir "./logs" \
     --run_bayesian_opt \
     --n_trials 30 \
-    --use_mat_format \
     > logs/${EXPERIMENT_NAME}.log 2>&1 &
+
 PID=$!
 echo "Started experiment $EXPERIMENT_NAME. PID: $PID"
 echo "Check logs with: tail -f logs/${EXPERIMENT_NAME}.log"

@@ -15,14 +15,6 @@ CONFIG = {
     'random_seed': 666,
     'device': 0,  # -1表示CPU，>=0表示使用对应索引的GPU
     
-    # 数据路径和处理设置
-    'data_dirs': {
-        'train_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/train",
-        'test_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/test",
-        'val_dir': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/restructured/val"
-    },
-
-
 
     # 添加mat文件相关配置
     'mat_file_path': None,  # TRAIN38.mat文件路径
