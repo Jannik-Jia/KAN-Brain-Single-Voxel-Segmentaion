@@ -48,7 +48,6 @@ from utils.visualization import visualize_dataset_distribution, visualize_traini
 from utils.optimization import run_bayesian_optimization
 from utils.model_io import safe_load_model, load_model_with_architecture  # 添加新的导入
 
-
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='BrainVoxel MLP Training')
@@ -98,12 +97,13 @@ def parse_args():
     parser.add_argument('--save_dir', type=str, default=None, help='保存目录')
     parser.add_argument('--log_dir', type=str, default=None, help='日志目录')
     parser.add_argument('--old_serialization', action='store_true', help='使用旧的PyTorch序列化格式')
-
+    
     # 添加mat文件相关参数
     parser.add_argument('--mat_file_path', type=str, required=True, help='TRAIN38.mat文件路径')
     parser.add_argument('--test_size', type=float, default=0.01, help='测试集比例')
     parser.add_argument('--demo_mat_path', type=str, default=None, help='用于评估的DEMO38.mat文件路径')
-    
+    # 添加这个缺失的参数
+    parser.add_argument('--use_mat_format', action='store_true', help='是否使用mat文件格式')
     
     return parser.parse_args()
 
