@@ -22,8 +22,8 @@ nohup python -u train_best_params.py \
     --save_dir "./results" \
     --log_dir "./logs" \
     --seed 666 \
-    --save_every 1 \     # 每个epoch保存一次
-    --eval_every 2 \     # 每个epoch评估一次
+    --save_every 1 \
+    --eval_every 2 \
     > logs/${EXPERIMENT_NAME}.log 2>&1 &
 
 PID=$!
