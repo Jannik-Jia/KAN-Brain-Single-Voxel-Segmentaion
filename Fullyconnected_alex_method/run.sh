@@ -39,7 +39,7 @@ EXPERIMENT_NAME="BrainVoxel_MLP_MAT_$(date +%Y%m%d_%H%M%S)"
 # 创建日志目录
 mkdir -p logs
 
-# 运行代码 - 使用mat格式 - 从config.py读取默认配置
+# 运行代码 - 使用config.py中的默认配置，仅传递必要参数
 nohup python -u main.py \
     --experiment_name $EXPERIMENT_NAME \
     --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat" \

@@ -38,7 +38,7 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
 # 导入自定义模块
-from config import load_config, save_config
+from models.config import load_config, save_config
 from models import get_model
 from train import train_brain_voxel_mlp_multiclass
 from data.mat_loader import load_and_process_data
