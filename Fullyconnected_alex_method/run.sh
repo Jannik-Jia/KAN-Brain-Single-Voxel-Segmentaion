@@ -34,23 +34,27 @@ EOL
 python prepare_env.py
 
 # 实验名称
-EXPERIMENT_NAME="BrainVoxel_MLP_MAT_$(date +%Y%m%d_%H%M%S)"
+EXPERIMENT_NAME="BrainVoxel_MLP_MAT_$(date +%Y%m%d_%H%M%S)_BAYES"
 
 # 创建日志目录
 mkdir -p logs
 
-# 运行代码 - 使用config.py中的默认配置，仅传递必要参数
+# 运行代码 - 明确指定贝叶斯优化参数
 nohup python -u main.py \
     --experiment_name $EXPERIMENT_NAME \
     --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat" \
     --demo_mat_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/DEMO38.mat" \
+    --batch_size 128 \
+    --epochs 30 \
     --device 0 \
     --old_serialization \
     --save_dir "./results" \
     --log_dir "./logs" \
+    --run_bayesian_opt true \
+    --n_trials 50 \
     > logs/${EXPERIMENT_NAME}.log 2>&1 &
 
 PID=$!
-echo "Started experiment $EXPERIMENT_NAME. PID: $PID"
+echo "Started experiment $EXPERIMENT_NAME with Bayesian optimization. PID: $PID"
 echo "Check logs with: tail -f logs/${EXPERIMENT_NAME}.log"
 echo "Or monitor: watch -n 1 'tail -n 20 logs/${EXPERIMENT_NAME}.log'"
