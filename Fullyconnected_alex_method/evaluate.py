@@ -13,7 +13,7 @@ import torch
 import torch.serialization
 import numpy as np
 from data.mat_loader import load_external_mat_data, BrainVoxelMatDataset, process_train38_data, create_dataloaders_from_mat
-
+from data.mat_loader import load_and_process_data
 
 # 设置PyTorch序列化安全变量 - 添加这部分
 try:
@@ -117,45 +117,6 @@ def load_datasets(config, model_path=None):
     from data import load_and_process_data
     return load_and_process_data(config, mode='eval', model_path=model_path)
 
-
-
-def load_mat_evaluation_data(config, model_path):
-    """从mat文件加载评估数据"""
-    # 首先尝试加载与模型一起保存的scaler
-    try:
-        from utils.model_io import load_model_with_architecture
-        _, _, scaler = load_model_with_architecture(
-            model_path=model_path,
-            device='cpu',  # 只需要scaler，不需要模型
-            load_scaler=True
-        )
-    except Exception as e:
-        print(f"加载scaler时出错: {e}")
-        scaler = None
-        
-    # 然后从配置的路径加载mat数据
-    if not config.get('mat_file_path'):
-        raise ValueError("配置中缺少'mat_file_path'，请指定要评估的mat文件路径")
-    
-    data_dict = load_external_mat_data(
-        mat_file_path=config['mat_file_path'],
-        scaler=scaler
-    )
-    
-    # 创建数据集和加载器
-    from torch.utils.data import DataLoader
-    
-    if data_dict['labels'] is not None:
-        # 如果有标签，创建评估数据集
-        dataset = BrainVoxelMatDataset(data_dict['data'], data_dict['labels'])
-        loader = DataLoader(dataset, batch_size=config.get('batch_size', 128), shuffle=False)
-        
-        return dataset, loader
-    else:
-        # 如果没有标签，只能做前向传播，不能评估
-        print("警告: 加载的mat文件没有标签数据，无法评估模型性能")
-        return None, None
-    
     
 
 def load_model_from_checkpoint(model_path, device):

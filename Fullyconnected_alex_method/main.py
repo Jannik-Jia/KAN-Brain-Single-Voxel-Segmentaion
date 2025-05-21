@@ -41,6 +41,7 @@ import matplotlib.pyplot as plt
 from config import load_config, save_config
 from models import get_model
 from train import train_brain_voxel_mlp_multiclass
+from data.mat_loader import load_and_process_data
 from utils.metrics import evaluate_model, calculate_class_weights, get_best_model, compare_class_performance
 from utils.visualization import visualize_dataset_distribution, visualize_training_curves
 from utils.optimization import run_bayesian_optimization

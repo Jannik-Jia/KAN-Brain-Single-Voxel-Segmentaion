@@ -76,13 +76,13 @@ def load_mat_data(mat_file_path):
     
     return arrays
 
-def process_train38_data(mat_file_path, test_size=0.01, random_state=666, scaler_save_path=None):
+def process_train38_data(mat_file_path, config, random_state=666, scaler_save_path=None):
     """
-    处理TRAIN38.mat数据，分割为训练集、验证集和测试集
+    处理TRAIN38.mat数据，根据指定的患者ID分割为训练集、验证集和测试集
     
     参数:
         mat_file_path: TRAIN38.mat文件路径
-        test_size: 测试集比例
+        config: 配置字典，包含患者ID的配置
         random_state: 随机种子
         scaler_save_path: scaler保存路径，None表示不保存
     
@@ -95,27 +95,83 @@ def process_train38_data(mat_file_path, test_size=0.01, random_state=666, scaler
     arrays = load_mat_data(mat_file_path)
     train_data = arrays['data']
     train_region = arrays['region']
-    prob_idx = arrays['prob_idx'].flatten()  # 确保是一维数组
     
-    # 根据prob_idx分割数据
-    train_set_idx = np.where(prob_idx != 38)[0]
-    val_set_idx = np.where(prob_idx == 38)[0]
+    # 确保prob_idx是整数类型，与配置中的患者ID匹配
+    prob_idx = arrays['prob_idx'].flatten()
+    # 转换为整数类型 - 这是关键修改点
+    prob_idx = prob_idx.astype(int)
     
-    # 提取训练集和验证集
-    train_set_data = train_data[train_set_idx, :]
-    train_set_region = train_region[train_set_idx, :]
-    val_data = train_data[val_set_idx, :]
-    val_label = train_region[val_set_idx, :]
+    # 获取配置中的患者ID
+    dataset_split = config.get('dataset_split', {})
+    train_patients = dataset_split.get('train_patients', [])
+    val_patients = dataset_split.get('val_patients', [])
+    test_patients = dataset_split.get('test_patients', [])
     
-    print(f"训练集数据形状: {train_set_data.shape}")
-    print(f"验证集数据形状: {val_data.shape}")
-    
-    # 进一步分割训练集，留出一小部分作为测试集
-    X_train, X_test, y_train, y_test = train_test_split(
-        train_set_data, train_set_region, 
-        test_size=test_size, 
-        random_state=random_state
-    )
+    # 如果未指定患者ID，使用旧的按比例分割方法
+    if not train_patients and not val_patients and not test_patients:
+        print("未指定患者ID，使用默认的比例分割方法")
+        # 按原来的比例分割
+        train_set_idx = np.where(prob_idx != 38)[0]
+        val_set_idx = np.where(prob_idx == 38)[0]
+        
+        # 提取训练集和验证集
+        train_set_data = train_data[train_set_idx, :]
+        train_set_region = train_region[train_set_idx, :]
+        val_data = train_data[val_set_idx, :]
+        val_label = train_region[val_set_idx, :]
+        
+        # 分割训练集，留出一小部分作为测试集
+        X_train, X_test, y_train, y_test = train_test_split(
+            train_set_data, train_set_region, 
+            test_size=config.get('test_size', 0.01), 
+            random_state=random_state
+        )
+    else:
+        print(f"使用指定的患者ID分割数据集:")
+        print(f"  - 训练集患者ID: {train_patients}")
+        print(f"  - 验证集患者ID: {val_patients}")
+        print(f"  - 测试集患者ID: {test_patients}")
+        
+        # 根据患者ID分割数据
+        # 这里使用已转换为整数的prob_idx进行比较
+        train_set_idx = np.array([i for i, p in enumerate(prob_idx) if p in train_patients])
+        val_set_idx = np.array([i for i, p in enumerate(prob_idx) if p in val_patients])
+        test_set_idx = np.array([i for i, p in enumerate(prob_idx) if p in test_patients])
+        
+        # 打印分割信息
+        print(f"数据分割情况:")
+        print(f"  - 训练集样本索引数量: {len(train_set_idx)}")
+        print(f"  - 验证集样本索引数量: {len(val_set_idx)}")
+        print(f"  - 测试集样本索引数量: {len(test_set_idx)}")
+        
+        # 如果任何集合为空，发出警告
+        if len(train_set_idx) == 0:
+            print("警告: 训练集为空！请检查训练集患者ID是否正确。")
+        if len(val_set_idx) == 0:
+            print("警告: 验证集为空！请检查验证集患者ID是否正确。")
+        if len(test_set_idx) == 0:
+            print("警告: 测试集为空！请检查测试集患者ID是否正确。")
+        
+        # 提取各个数据集
+        X_train = train_data[train_set_idx, :]
+        y_train = train_region[train_set_idx, :]
+        
+        val_data = train_data[val_set_idx, :]
+        val_label = train_region[val_set_idx, :]
+        
+        X_test = train_data[test_set_idx, :]
+        y_test = train_region[test_set_idx, :]
+        
+        print(f"数据集分割完成:")
+        print(f"  - 训练集样本数: {len(X_train)}")
+        print(f"  - 验证集样本数: {len(val_data)}")
+        print(f"  - 测试集样本数: {len(X_test)}")
+        
+        # 记录为空的集合
+        if len(X_train) == 0 or len(val_data) == 0 or len(X_test) == 0:
+            print("错误：至少有一个数据集为空。请检查患者ID配置。")
+            # 可以在这里选择抛出异常或使用备选方案
+            raise ValueError("数据集分割失败：至少有一个数据集为空")
     
     # 应用StandardScaler
     scaler = StandardScaler()
@@ -225,7 +281,7 @@ def load_and_process_data(config, mode='train', model_path=None):
     统一的数据加载与处理函数，用于训练和评估
     
     参数:
-        config: 配置字典，至少包含mat_file_path
+        config: 配置字典，至少包含mat_file_path和患者ID配置
         mode: 'train'表示训练模式，会拟合scaler; 'eval'表示评估模式，会加载已有scaler
         model_path: 在'eval'模式下，可以提供模型路径以加载与之关联的scaler
     
@@ -276,9 +332,10 @@ def load_and_process_data(config, mode='train', model_path=None):
         if 'save_dir' in config:
             scaler_save_path = os.path.join(config['save_dir'], "scaler.joblib")
         
+        # 修改：传递完整配置
         dataset_dict = process_train38_data(
             mat_file_path=config['mat_file_path'],
-            test_size=config.get('test_size', 0.01),
+            config=config,  # 传递完整配置
             random_state=config.get('random_seed', 666),
             scaler_save_path=scaler_save_path
         )
@@ -352,3 +409,4 @@ def load_and_process_data(config, mode='train', model_path=None):
     print(f"特征维度: {dataset_dict['feature_dim']}")
     
     return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']
+

@@ -39,28 +39,15 @@ EXPERIMENT_NAME="BrainVoxel_MLP_MAT_$(date +%Y%m%d_%H%M%S)"
 # 创建日志目录
 mkdir -p logs
 
-# 运行代码 - 使用mat格式
+# 运行代码 - 使用mat格式 - 从config.py读取默认配置
 nohup python -u main.py \
     --experiment_name $EXPERIMENT_NAME \
     --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat" \
     --demo_mat_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/DEMO38.mat" \
-    --batch_size 128 \
-    --epochs 30 \
     --device 0 \
-    --model_type "base_mlp" \
-    --hidden_units "4096,4096,4096,4096" \
-    --activation "swish" \
-    --dropout_rate 0.5 \
-    --lr 1e-5 \
-    --weight_decay 1e-5 \
-    --optimizer "adamw" \
-    --use_lr_scheduler \
-    --lr_scheduler_type "cosine" \
     --old_serialization \
     --save_dir "./results" \
     --log_dir "./logs" \
-    --run_bayesian_opt \
-    --n_trials 30 \
     > logs/${EXPERIMENT_NAME}.log 2>&1 &
 
 PID=$!

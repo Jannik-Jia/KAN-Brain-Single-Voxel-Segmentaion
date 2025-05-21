@@ -15,11 +15,17 @@ CONFIG = {
     'random_seed': 666,
     'device': 0,  # -1表示CPU，>=0表示使用对应索引的GPU
     
-
     # 添加mat文件相关配置
     'mat_file_path': None,  # TRAIN38.mat文件路径
     'test_size': 0.01,      # 从训练集中分割出测试集的比例
     'demo_mat_path': None,  # 用于评估的DEMO38.mat文件路径
+
+    # 添加患者ID配置 - 自定义数据集分割
+    'dataset_split': {
+        'train_patients': [28, 5, 25, 30, 34, 32, 33, 11, 12, 20, 29, 17, 37, 7, 26, 1, 36, 14, 19, 3, 35, 31, 22, 8],
+        'val_patients': [4, 24, 9, 15, 16, 18, 2],
+        'test_patients': [38, 6, 21, 13, 10, 23, 27]
+    },
 
     'apply_pca': False,  # 是否应用PCA降维
     'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
@@ -35,7 +41,7 @@ CONFIG = {
     'model_type': 'base_mlp',  # 'base_mlp', 'deep_mlp', 'residual_mlp'
     'hidden_units': [4096, 4096, 4096, 4096],  # MLP隐藏层大小
     'dropout_rate': 0.5,        # Dropout率
-    'activation': 'relu',       # 激活函数: 'relu', 'gelu', 'swish'
+    'activation': 'swish',       # 激活函数: 'relu', 'gelu', 'swish'
     
     # 训练参数
     'epochs': 30,        # 训练轮数
