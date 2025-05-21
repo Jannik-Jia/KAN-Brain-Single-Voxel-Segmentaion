@@ -41,7 +41,6 @@ import matplotlib.pyplot as plt
 from config import load_config, save_config
 from models import get_model
 from train import train_brain_voxel_mlp_multiclass
-from eval import evaluate_model_detailed  # 保留兼容性包装
 from utils.metrics import evaluate_model, calculate_class_weights, get_best_model, compare_class_performance
 from utils.visualization import visualize_dataset_distribution, visualize_training_curves
 from utils.optimization import run_bayesian_optimization
@@ -57,12 +56,6 @@ def parse_args():
     parser.add_argument('--device', type=int, default=None, help='使用的设备（-1表示CPU）')
     parser.add_argument('--seed', type=int, default=None, help='随机种子')
     
-    # 数据参数
-    parser.add_argument('--train_dir', type=str, default=None, help='训练数据目录')
-    parser.add_argument('--test_dir', type=str, default=None, help='测试数据目录')
-    parser.add_argument('--val_dir', type=str, default=None, help='验证数据目录')
-    parser.add_argument('--apply_pca', action='store_true', help='是否应用PCA降维')
-    parser.add_argument('--n_pca', type=int, default=None, help='PCA保留的主成分数量')
     
     # 模型参数
     parser.add_argument('--model_type', type=str, default=None, 
@@ -101,8 +94,6 @@ def parse_args():
     parser.add_argument('--mat_file_path', type=str, required=True, help='TRAIN38.mat文件路径')
     parser.add_argument('--test_size', type=float, default=0.01, help='测试集比例')
     parser.add_argument('--demo_mat_path', type=str, default=None, help='用于评估的DEMO38.mat文件路径')
-    # 添加这个缺失的参数
-    parser.add_argument('--use_mat_format', action='store_true', help='是否使用mat文件格式')
     
     return parser.parse_args()
 
@@ -125,44 +116,6 @@ def setup_environment(config):
     
     return device
 
-def load_datasets(config):
-    """加载数据集（从.mat文件）"""
-    print("开始加载数据集...")
-    
-    # 检查配置中是否有mat_file_path
-    if 'mat_file_path' not in config or not config['mat_file_path']:
-        raise ValueError("配置中缺少'mat_file_path'，请在配置中指定TRAIN38.mat文件路径")
-    
-    # 导入mat_loader模块
-    from data.mat_loader import process_train38_data, create_dataloaders_from_mat
-    
-    # 处理TRAIN38.mat数据
-    scaler_save_path = os.path.join(config['save_dir'], "scaler.joblib")
-    dataset_dict = process_train38_data(
-        mat_file_path=config['mat_file_path'],
-        test_size=config.get('test_size', 0.01),
-        random_state=config['random_seed'],
-        scaler_save_path=scaler_save_path
-    )
-    
-    # 创建数据加载器
-    dataloaders = create_dataloaders_from_mat(
-        dataset_dict,
-        batch_size=config['batch_size'],
-        shuffle_train=True
-    )
-    
-    # 更新配置
-    config['feature_dim'] = dataset_dict['feature_dim']
-    config['num_class'] = dataset_dict['num_classes']
-    config['scaler'] = dataset_dict['scaler']
-    
-    print(f"数据加载完成! 共载入 {len(dataset_dict['train_samples'])} 个训练样本，"
-          f"{len(dataset_dict['val_samples'])} 个验证样本，"
-          f"{len(dataset_dict['test_samples'])} 个测试样本")
-    print(f"特征维度: {dataset_dict['feature_dim']}")
-    
-    return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']
 
 def create_or_optimize_model(config, dataset_dict, train_loader, val_loader, device):
     """创建模型或通过贝叶斯优化找到最佳参数"""
@@ -533,32 +486,11 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     return train_results, val_results, test_results, best_model_path
 
 
-def load_datasets_wrapper(config):
-    """根据配置选择数据加载方式"""
-    # 检查是否使用mat文件格式
-
-    print("使用.mat文件格式加载数据...")
-    from data.mat_loader import process_train38_data, create_dataloaders_from_mat
-    
-    # 处理TRAIN38.mat数据
-    scaler_save_path = os.path.join(config['save_dir'], "scaler.joblib")
-    dataset_dict = process_train38_data(
-        mat_file_path=config['mat_file_path'],
-        test_size=config.get('test_size', 0.01),
-        random_state=config['random_seed'],
-        scaler_save_path=scaler_save_path
-    )
-    
-    # 创建数据加载器
-    dataloaders = create_dataloaders_from_mat(
-        dataset_dict,
-        batch_size=config['batch_size'],
-        shuffle_train=True
-    )
-    
-    return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']
-
-
+def load_datasets(config):
+    """加载数据集（从.mat文件）"""
+    # 使用通用加载函数，训练模式
+    from data import load_and_process_data
+    return load_and_process_data(config, mode='train')
 
 def main():
     """主函数"""

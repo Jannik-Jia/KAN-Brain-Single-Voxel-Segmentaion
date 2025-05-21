@@ -230,8 +230,9 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                         save_path=save_name,
                         lr_scheduler=lr_scheduler,
                         use_old_zipfile_serialization=use_old_zipfile_serialization,
-                        scaler=config.get('scaler', None)  # 从配置中获取scaler
+                        scaler=config.get('scaler')  # 确保传递scaler
                     )
+                    
                     print(f"已保存模型及完整架构信息到: {save_path_full}")
 
                     

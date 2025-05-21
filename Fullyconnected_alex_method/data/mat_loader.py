@@ -217,3 +217,138 @@ def create_dataloaders_from_mat(dataset_dict, batch_size=128, shuffle_train=True
         'test': test_loader,
         'val': val_loader
     }
+
+
+
+def load_and_process_data(config, mode='train', model_path=None):
+    """
+    统一的数据加载与处理函数，用于训练和评估
+    
+    参数:
+        config: 配置字典，至少包含mat_file_path
+        mode: 'train'表示训练模式，会拟合scaler; 'eval'表示评估模式，会加载已有scaler
+        model_path: 在'eval'模式下，可以提供模型路径以加载与之关联的scaler
+    
+    返回:
+        dataset_dict: 数据集字典
+        train_loader: 训练数据加载器
+        val_loader: 验证数据加载器
+        test_loader: 测试数据加载器
+    """
+    print(f"开始加载数据集 (模式: {mode})...")
+    
+    # 检查配置中是否有mat_file_path
+    if 'mat_file_path' not in config or not config['mat_file_path']:
+        raise ValueError("配置中缺少'mat_file_path'，请在配置中指定TRAIN38.mat文件路径")
+    
+    scaler = None
+    
+    # 评估模式：尝试加载现有scaler
+    if mode == 'eval' and model_path:
+        try:
+            # 尝试从模型加载scaler
+            import joblib
+            from utils.model_io import load_model_with_architecture
+            
+            _, checkpoint, loaded_scaler = load_model_with_architecture(
+                model_path=model_path,
+                device='cpu',  # 只需要scaler，不需要模型加载到GPU
+                load_scaler=True
+            )
+            
+            if loaded_scaler:
+                scaler = loaded_scaler
+                print(f"从模型加载了scaler: {model_path}")
+            else:
+                # 尝试从模型目录加载scaler.joblib
+                scaler_path = os.path.join(os.path.dirname(model_path), "scaler.joblib")
+                if os.path.exists(scaler_path):
+                    scaler = joblib.load(scaler_path)
+                    print(f"从目录加载了scaler: {scaler_path}")
+        except Exception as e:
+            print(f"加载scaler时出错: {e}")
+            print("将重新创建scaler")
+    
+    # 训练模式：处理数据并创建新scaler
+    if mode == 'train' or scaler is None:
+        # 处理TRAIN38.mat数据
+        scaler_save_path = None
+        if 'save_dir' in config:
+            scaler_save_path = os.path.join(config['save_dir'], "scaler.joblib")
+        
+        dataset_dict = process_train38_data(
+            mat_file_path=config['mat_file_path'],
+            test_size=config.get('test_size', 0.01),
+            random_state=config.get('random_seed', 666),
+            scaler_save_path=scaler_save_path
+        )
+        
+        # 保存scaler到配置
+        if 'scaler' not in config:
+            config['scaler'] = dataset_dict['scaler']
+    
+    # 评估模式且scaler已加载：使用现有scaler处理数据
+    elif mode == 'eval' and scaler:
+        # 加载数据
+        arrays = load_mat_data(config['mat_file_path'])
+        train_data = arrays['data']
+        train_region = arrays['region']
+        prob_idx = arrays['prob_idx'].flatten()  # 确保是一维数组
+        
+        # 根据prob_idx分割数据
+        train_set_idx = np.where(prob_idx != 38)[0]
+        val_set_idx = np.where(prob_idx == 38)[0]
+        
+        # 提取训练集和验证集
+        train_set_data = train_data[train_set_idx, :]
+        train_set_region = train_region[train_set_idx, :]
+        val_data = train_data[val_set_idx, :]
+        val_label = train_region[val_set_idx, :]
+        
+        # 进一步分割训练集，留出一小部分作为测试集
+        X_train, X_test, y_train, y_test = train_test_split(
+            train_set_data, train_set_region, 
+            test_size=config.get('test_size', 0.01), 
+            random_state=config.get('random_seed', 666)
+        )
+        
+        # 使用加载的scaler进行变换
+        X_train_scaled = scaler.transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        val_data_scaled = scaler.transform(val_data)
+        
+        # 创建数据集字典
+        dataset_dict = {
+            'train_samples': X_train_scaled,
+            'train_labels': y_train,
+            'test_samples': X_test_scaled,
+            'test_labels': y_test,
+            'val_samples': val_data_scaled,
+            'val_labels': val_label,
+            'feature_dim': X_train.shape[1],
+            'scaler': scaler,
+            'num_classes': y_train.shape[1] if len(y_train.shape) > 1 else len(np.unique(y_train))
+        }
+        
+        # 保存scaler到配置
+        if 'scaler' not in config:
+            config['scaler'] = scaler
+    
+    # 创建数据加载器
+    shuffle_train = True if mode == 'train' else False
+    dataloaders = create_dataloaders_from_mat(
+        dataset_dict,
+        batch_size=config.get('batch_size', 128),
+        shuffle_train=shuffle_train
+    )
+    
+    # 更新配置
+    config['feature_dim'] = dataset_dict['feature_dim']
+    config['num_class'] = dataset_dict['num_classes']
+    
+    print(f"数据加载完成! 共载入 {len(dataset_dict['train_samples'])} 个训练样本，"
+          f"{len(dataset_dict['val_samples'])} 个验证样本，"
+          f"{len(dataset_dict['test_samples'])} 个测试样本")
+    print(f"特征维度: {dataset_dict['feature_dim']}")
+    
+    return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']

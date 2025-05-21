@@ -111,37 +111,11 @@ def convert_onehot_to_indices(labels_onehot):
     return np.argmax(labels_onehot, axis=1)
 
 
-
-# 替换load_datasets函数
-def load_datasets(config):
-    """加载数据集"""
-    print("开始加载数据集...")
-    
-    # 检查配置中是否有mat_file_path
-    if 'mat_file_path' not in config or not config['mat_file_path']:
-        raise ValueError("配置中缺少'mat_file_path'，请在配置中指定TRAIN38.mat文件路径")
-    
-    # 处理TRAIN38.mat数据
-    dataset_dict = process_train38_data(
-        mat_file_path=config['mat_file_path'],
-        test_size=config.get('test_size', 0.01),
-        random_state=config.get('random_seed', 666)
-    )
-    
-    # 创建数据加载器
-    dataloaders = create_dataloaders_from_mat(
-        dataset_dict,
-        batch_size=config.get('batch_size', 128),
-        shuffle_train=False  # 评估时不需要打乱数据
-    )
-    
-    print(f"数据加载完成! 共载入 {len(dataset_dict['train_samples'])} 个训练样本，"
-          f"{len(dataset_dict['val_samples'])} 个验证样本，"
-          f"{len(dataset_dict['test_samples'])} 个测试样本")
-    print(f"特征维度: {dataset_dict['feature_dim']}")
-    
-    return dataset_dict, dataloaders['train'], dataloaders['val'], dataloaders['test']
-
+def load_datasets(config, model_path=None):
+    """加载数据集（从.mat文件）"""
+    # 使用通用加载函数，评估模式
+    from data import load_and_process_data
+    return load_and_process_data(config, mode='eval', model_path=model_path)
 
 
 
@@ -372,7 +346,8 @@ def main():
     device = setup_environment(config)
     
     # 加载数据集
-    dataset_dict, train_loader, val_loader, test_loader = load_datasets(config)
+    dataset_dict, train_loader, val_loader, test_loader = load_datasets(config, args.model_path)
+    
     
     # 加载模型
     print(f"\n加载模型: {args.model_path}")
@@ -386,12 +361,6 @@ def main():
         # 加载模型
         model, checkpoint = load_model_from_checkpoint(
             model_path=args.model_path,
-            model_type=model_type,
-            input_dim=dataset_dict['feature_dim'],
-            hidden_dims=hidden_dims,
-            num_classes=config.get('num_class', 102),
-            dropout_rate=dropout_rate,
-            activation=activation,
             device=device
         )
         
