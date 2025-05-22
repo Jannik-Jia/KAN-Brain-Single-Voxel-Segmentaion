@@ -94,7 +94,7 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
         # 统计
         running_loss += loss.item()
         _, predicted = outputs.max(1)
-        valid_mask = target != -1  # 忽略背景(-1)的准确率计算
+        valid_mask = target != 0  # 忽略背景(-1)的准确率计算
         total += valid_mask.sum().item()
         correct += (predicted[valid_mask] == target[valid_mask]).sum().item()
         
@@ -128,7 +128,7 @@ def validate(model, val_loader, criterion, device):
             _, predicted = outputs.max(1)
             
             # 只评估非背景像素
-            valid_mask = target != -1
+            valid_mask = target != 0
             all_preds.extend(predicted[valid_mask].cpu().numpy())
             all_targets.extend(target[valid_mask].cpu().numpy())
     
@@ -225,7 +225,7 @@ def main():
     )
     
     # 创建损失函数
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
     
     # 训练配置
     config = {

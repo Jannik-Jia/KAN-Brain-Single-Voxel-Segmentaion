@@ -18,31 +18,21 @@ from sklearn.metrics import (
 )
 
 def calculate_class_weights(train_labels, num_classes=102):
-    """
-    计算类别权重，解决不平衡问题
+    """修复后的权重计算函数"""
+    if len(train_labels.shape) > 1 and train_labels.shape[1] > 1:
+        labels_indices = np.argmax(train_labels, axis=1)
+    else:
+        labels_indices = train_labels.flatten()
     
-    参数:
-        train_labels: 训练集标签
-        num_classes: 类别数量
+    class_counts = np.bincount(labels_indices.astype(int), minlength=num_classes)
+    total_samples = len(labels_indices)
+    weights = np.zeros(num_classes, dtype=np.float32)
     
-    返回:
-        weights: 类别权重张量
-    """
-    # 统计每个类别的样本数
-    class_counts = {}
-    for i in range(1, num_classes+1):  # 原始标签从1开始到102
-        class_counts[i] = np.sum(train_labels == i)
-    
-    # 创建权重数组
-    weights = np.zeros(num_classes)
-    
-    # 计算权重（反比于频率）
-    for i in range(1, num_classes+1):
-        count = max(class_counts.get(i, 0), 1)  # 避免除零
-        weights[i-1] = 1.0 / count  # 权重索引从0开始
-    
-    # 归一化权重
-    weights = weights / weights.sum() * len(weights)
+    for i in range(num_classes):
+        if i == 0 or class_counts[i] == 0:  # 背景或零样本
+            weights[i] = 0.0
+        else:
+            weights[i] = total_samples / (num_classes * class_counts[i])
     
     return torch.FloatTensor(weights)
 
@@ -266,7 +256,7 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             _, preds = torch.max(output, 1)
             
             # 只评估非背景像素
-            valid_mask = target != -1
+            valid_mask = target != 0
             all_preds.extend(preds[valid_mask].cpu().numpy())
             all_targets.extend(target[valid_mask].cpu().numpy())
             all_probs.extend(probs[valid_mask].cpu().numpy())

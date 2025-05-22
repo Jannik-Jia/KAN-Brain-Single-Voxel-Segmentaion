@@ -174,7 +174,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         )
     
     # 定义损失函数
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=0)  # 忽略背景像素
     
     # 训练模型 - 简化版本，只训练几个epoch用于评估
     val_f1_values = []
@@ -202,7 +202,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
                 _, preds = torch.max(output, 1)
                 
                 # 只评估非背景像素
-                valid_mask = target != -1
+                valid_mask = target != 0
                 all_preds.extend(preds[valid_mask].cpu().numpy())
                 all_targets.extend(target[valid_mask].cpu().numpy())
         

@@ -36,6 +36,7 @@ CONFIG = {
     'dataset_name': 'BrainVoxel',
     'feature_dim': 341,  # 原始特征维度
     'num_class': 102,    # 类别数量
+    'ignore_index': 0, # 背景标签是0
     
     # 模型架构参数
     'model_type': 'base_mlp',  # 'base_mlp', 'deep_mlp', 'residual_mlp'

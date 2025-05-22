@@ -207,7 +207,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     class_weights = calculate_class_weights(dataset_dict['train_labels'], config['num_class']).to(device)
     
     # 创建损失函数
-    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-1)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=0)
     
     # 创建优化器
     if config['optimizer'] == 'adam':

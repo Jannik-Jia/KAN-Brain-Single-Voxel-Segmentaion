@@ -120,7 +120,7 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                 # 累计损失和准确率
                 avg_loss += loss.item()
                 _, pred = torch.max(out, dim=1)
-                valid_mask = target != -1  # 忽略背景(-1)的准确率计算
+                valid_mask = target != 0  # 忽略背景(0)的准确率计算
                 train_acc += (pred[valid_mask] == target[valid_mask]).sum().item()
                 valid_count += valid_mask.sum().item()
                 
@@ -160,7 +160,7 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                         _, pred = torch.max(out, dim=1)
                         
                         # 收集有效预测（非背景）
-                        valid_mask = target != -1
+                        valid_mask = target != 0
                         all_preds.extend(pred[valid_mask].cpu().numpy())
                         all_targets.extend(target[valid_mask].cpu().numpy())
                         val_acc += (pred[valid_mask] == target[valid_mask]).sum().item()
