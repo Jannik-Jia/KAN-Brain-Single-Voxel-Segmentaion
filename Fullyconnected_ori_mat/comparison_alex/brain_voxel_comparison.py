@@ -45,7 +45,12 @@ class MemoryEfficientDataLoader:
         self.shuffle = shuffle
         
         # 获取原始数据引用（不复制，节省内存）
-        self.raw_data = mat_arrays['data'].transpose() if 'data' in mat_arrays else mat_arrays['data'].T
+        # 使用预处理后的转置数据
+        if 'data_transposed' in mat_arrays:
+            self.raw_data = mat_arrays['data_transposed']
+        else:
+            # 兼容旧版本，但这种情况不应该发生
+            self.raw_data = mat_arrays['data'].transpose() if 'data' in mat_arrays else mat_arrays['data'].T
         
         print(f"DataLoader创建:")
         print(f"  数据索引数量: {len(data_indices)}")
@@ -92,7 +97,12 @@ class MemoryEfficientIndexDataLoader:
         self.shuffle = shuffle
         
         # 获取原始数据引用
-        self.raw_data = mat_arrays['data'].transpose() if 'data' in mat_arrays else mat_arrays['data'].T
+        # 使用预处理后的转置数据
+        if 'data_transposed' in mat_arrays:
+            self.raw_data = mat_arrays['data_transposed']
+        else:
+            # 兼容旧版本，但这种情况不应该发生
+            self.raw_data = mat_arrays['data'].transpose() if 'data' in mat_arrays else mat_arrays['data'].T
         
         # 处理标签：one-hot -> 索引
         if len(labels.shape) > 1 and labels.shape[1] > 1:
