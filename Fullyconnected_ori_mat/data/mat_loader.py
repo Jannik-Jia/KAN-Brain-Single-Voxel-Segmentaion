@@ -14,19 +14,42 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
-class BrainVoxelMatDataset(Dataset):
-    """
-    基于.mat文件的脑体素数据集类
-    """
-    def __init__(self, data, labels):
-        """
-        初始化数据集
+# class BrainVoxelMatDataset(Dataset):
+#     """
+#     基于.mat文件的脑体素数据集类
+#     """
+#     def __init__(self, data, labels):
+#         """
+#         初始化数据集
         
-        参数:
-            data: 特征数据，形状为(n_samples, feature_dim)
-            labels: 标签数据，形状为(n_samples, num_classes)，one-hot编码或索引
-        """
-        super(BrainVoxelMatDataset, self).__init__()
+#         参数:
+#             data: 特征数据，形状为(n_samples, feature_dim)
+#             labels: 标签数据，形状为(n_samples, num_classes)，one-hot编码或索引
+#         """
+#         super(BrainVoxelMatDataset, self).__init__()
+#         self.data = data
+#         self.labels = labels
+        
+#     def __len__(self):
+#         return len(self.data)
+    
+#     def __getitem__(self, idx):
+#         x = self.data[idx]
+#         x = torch.FloatTensor(x)
+        
+#         # 处理标签 - 根据输入类型判断处理方式
+#         if len(self.labels.shape) > 1 and self.labels.shape[1] > 1:
+#             # one-hot编码，转换为索引
+#             y = np.argmax(self.labels[idx])
+#         else:
+#             # 已经是索引形式
+#             y = self.labels[idx]
+            
+#         y = torch.LongTensor([int(y)])[0]
+#         return x, y
+
+class BrainVoxelMatDataset(Dataset):
+    def __init__(self, data, labels):
         self.data = data
         self.labels = labels
         
@@ -37,17 +60,17 @@ class BrainVoxelMatDataset(Dataset):
         x = self.data[idx]
         x = torch.FloatTensor(x)
         
-        # 处理标签 - 根据输入类型判断处理方式
+        # 简化标签处理：直接使用argmax，不做任何转换
         if len(self.labels.shape) > 1 and self.labels.shape[1] > 1:
             # one-hot编码，转换为索引
-            y = np.argmax(self.labels[idx])
+            y = np.argmax(self.labels[idx])  # 得到0-101的索引
         else:
             # 已经是索引形式
             y = self.labels[idx]
             
+        # 不做任何标签转换！直接使用0-101
         y = torch.LongTensor([int(y)])[0]
         return x, y
-
 def load_mat_data(mat_file_path):
     """
     从.mat文件加载数据

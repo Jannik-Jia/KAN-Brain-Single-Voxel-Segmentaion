@@ -108,6 +108,7 @@ def load_config(config_file=None):
     
     return config
 
+
 def _auto_detect_data_format(config):
     """
     自动检测数据格式并设置相应参数
@@ -120,9 +121,9 @@ def _auto_detect_data_format(config):
         # 确保MAT格式的相关配置
         if config.get('label_format') == 'auto':
             config['label_format'] = 'mat'
-            
-        # 两种格式都使用相同的背景标签索引
-        config['ignore_index'] = -1  # 训练时背景标签都是-1
+        
+        # 简化方案：不使用ignore_index
+        config['ignore_index'] = None  # 修改：不忽略任何标签
         
     # 否则检查是否有传统的数据目录
     elif config.get('data_dirs') and all(
@@ -135,18 +136,59 @@ def _auto_detect_data_format(config):
         # 确保原版格式的相关配置
         if config.get('label_format') == 'auto':
             config['label_format'] = 'original'
-            
-        # 设置背景标签索引
-        config['ignore_index'] = -1  # 原版格式背景标签也是-1
+        
+        # 简化方案：不使用ignore_index
+        config['ignore_index'] = None  # 修改：不忽略任何标签
         
     else:
         print("警告: 未检测到有效的数据源配置")
         print("请设置 'mat_file_path' 或完整的 'data_dirs'")
-        
-    # 补充说明标签格式
+    
+    # 修改：更新标签格式说明
     print("标签格式说明:")
-    print("- 数据中: 0=背景, 1-102=有效类别")
-    print("- 训练时: -1=背景(忽略), 0-101=有效类别")
+    print("- 数据中: 0=背景, 1-101=有效类别")  
+    print("- 训练时: 0=背景, 1-101=有效类别 (所有类别都参与训练)")
+    print("- 模型输出: 102个类别 (0-101)")
+
+# def _auto_detect_data_format(config):
+#     """
+#     自动检测数据格式并设置相应参数
+#     """
+#     # 如果设置了mat_file_path且文件存在，优先使用MAT格式
+#     if config.get('mat_file_path') and os.path.exists(config['mat_file_path']):
+#         print(f"检测到MAT文件: {config['mat_file_path']}")
+#         print("将使用MAT数据加载格式")
+        
+#         # 确保MAT格式的相关配置
+#         if config.get('label_format') == 'auto':
+#             config['label_format'] = 'mat'
+            
+#         # 两种格式都使用相同的背景标签索引
+#         config['ignore_index'] = -1  # 训练时背景标签都是-1
+        
+#     # 否则检查是否有传统的数据目录
+#     elif config.get('data_dirs') and all(
+#         config['data_dirs'].get(key) and os.path.exists(config['data_dirs'][key]) 
+#         for key in ['train_dir', 'test_dir', 'val_dir']
+#     ):
+#         print("检测到传统数据目录格式")
+#         print("将使用原版数据加载格式")
+        
+#         # 确保原版格式的相关配置
+#         if config.get('label_format') == 'auto':
+#             config['label_format'] = 'original'
+            
+#         # 设置背景标签索引
+#         config['ignore_index'] = -1  # 原版格式背景标签也是-1
+        
+#     else:
+#         print("警告: 未检测到有效的数据源配置")
+#         print("请设置 'mat_file_path' 或完整的 'data_dirs'")
+        
+#     # 补充说明标签格式
+#     print("标签格式说明:")
+#     print("- 数据中: 0=背景, 1-102=有效类别")
+#     print("- 训练时: -1=背景(忽略), 0-101=有效类别")
 
 def save_config(config, filepath):
     """

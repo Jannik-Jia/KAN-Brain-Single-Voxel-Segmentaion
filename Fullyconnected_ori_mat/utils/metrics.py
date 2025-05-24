@@ -17,41 +17,77 @@ from sklearn.metrics import (
     recall_score, cohen_kappa_score, confusion_matrix, classification_report
 )
 
-def calculate_class_weights(train_labels, num_classes=102, ignore_index=-1):
+# def calculate_class_weights(train_labels, num_classes=102, ignore_index=-1):
+#     """
+#     计算类别权重，解决不平衡问题，兼容两种标签格式
+#     """
+#     # 1. 先将标签转换为训练时使用的格式
+#     if len(train_labels.shape) > 1 and train_labels.shape[1] > 1:
+#         # One-hot格式，转换为索引
+#         labels_indices = np.argmax(train_labels, axis=1)  # 0-101
+        
+#         # 应用与dataset相同的转换逻辑
+#         background_mask = labels_indices == 0  # 找到背景标签
+#         labels_indices = labels_indices - 1    # 1-101 -> 0-100
+#         labels_indices[background_mask] = ignore_index  # 背景 -> -1
+#     else:
+#         # 已经是索引格式
+#         labels_indices = train_labels.flatten()
+    
+#     # 2. 只统计非忽略标签
+#     valid_labels = labels_indices[labels_indices != ignore_index]
+    
+#     # 3. 统计有效类别的分布（0-100，共101个类别）
+#     actual_num_classes = num_classes - 1  # 101个有效类别
+#     class_counts = np.bincount(valid_labels.astype(int), minlength=actual_num_classes)
+    
+#     # 4. 计算权重（只为有效类别计算）
+#     total_samples = len(valid_labels)
+#     weights = np.zeros(actual_num_classes, dtype=np.float32)
+    
+#     for i in range(actual_num_classes):
+#         if class_counts[i] > 0:
+#             weights[i] = total_samples / (actual_num_classes * class_counts[i])
+#         else:
+#             weights[i] = 0.0
+    
+#     return torch.FloatTensor(weights)
+
+
+
+def calculate_class_weights(train_labels, num_classes=102, ignore_index=None):
     """
-    计算类别权重，解决不平衡问题，兼容两种标签格式
-    
-    参数:
-        train_labels: 训练集标签
-        num_classes: 类别数量
-        ignore_index: 背景标签索引（-1 for 原版, 0 for MAT）
-    
-    返回:
-        weights: 类别权重张量
+    计算类别权重，包括背景类别，完全模拟notebook
     """
     # 处理one-hot编码的标签
     if len(train_labels.shape) > 1 and train_labels.shape[1] > 1:
-        labels_indices = np.argmax(train_labels, axis=1)
+        labels_indices = np.argmax(train_labels, axis=1)  # 0-101
     else:
         labels_indices = train_labels.flatten()
     
-    # 统计每个类别的样本数
+    # 统计所有类别（包括背景）
     class_counts = np.bincount(labels_indices.astype(int), minlength=num_classes)
     total_samples = len(labels_indices)
     weights = np.zeros(num_classes, dtype=np.float32)
     
-    # 计算权重（反比于频率）
+    # 为所有类别计算权重
     for i in range(num_classes):
-        if i == ignore_index or class_counts[i] == 0:  # 背景或零样本
-            weights[i] = 0.0
-        else:
+        if class_counts[i] > 0:
             weights[i] = total_samples / (num_classes * class_counts[i])
+        else:
+            weights[i] = 0.0
+    
+    print(f"类别权重计算完成:")
+    print(f"  权重范围: {np.min(weights[weights > 0]):.4f} - {np.max(weights):.4f}")
+    print(f"  背景类别权重: {weights[0]:.4f}")
+    print(f"  零权重类别数: {np.sum(weights == 0)}")
     
     return torch.FloatTensor(weights)
 
+
 def evaluate_model(model, data_loader, device, result_path=None, dataset_name="", 
                    class_names=None, detailed=True, plot=True, disable_progress=True, 
-                   show_class_metrics=True, ignore_index=-1):
+                   show_class_metrics=True, ignore_index=None):
     """
     评估模型性能并可选生成详细报告，兼容两种数据格式
     
@@ -87,11 +123,10 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             probs = torch.softmax(output, dim=1)
             _, preds = torch.max(output, 1)
             
-            # 只评估非背景像素
-            valid_mask = target != ignore_index
-            all_preds.extend(preds[valid_mask].cpu().numpy())
-            all_targets.extend(target[valid_mask].cpu().numpy())
-            all_probs.extend(probs[valid_mask].cpu().numpy())
+            # 评估所有样本（移除ignore_index过滤）
+            all_preds.extend(preds.cpu().numpy())
+            all_targets.extend(target.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
     
     # 转换为numpy数组
     all_preds = np.array(all_preds)
@@ -99,7 +134,7 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     all_probs = np.array(all_probs)
     
     if len(all_preds) == 0 or len(all_targets) == 0:
-        print(f"警告: {dataset_name}集中没有有效样本")
+        print(f"警告: {dataset_name}集中没有样本")  # 修改警告信息
         return {
             'accuracy': 0.0,
             'balanced_accuracy': 0.0,
@@ -218,7 +253,6 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
         with open(report_file, 'w') as f:
             f.write(f"模型在{dataset_name}集上的评估结果\n")
             f.write("="*50 + "\n\n")
-            f.write(f"背景标签索引: {ignore_index}\n")
             f.write(f"样本数量: {len(all_targets)}\n")
             f.write(f"类别数量: {class_count}\n\n")
             
@@ -344,6 +378,302 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     }
     
     return result
+
+# def evaluate_model(model, data_loader, device, result_path=None, dataset_name="", 
+#                    class_names=None, detailed=True, plot=True, disable_progress=True, 
+#                    show_class_metrics=True, ignore_index=-1):
+#     """
+#     评估模型性能并可选生成详细报告，兼容两种数据格式
+    
+#     参数:
+#         model: 训练好的模型
+#         data_loader: 数据加载器
+#         device: 计算设备
+#         result_path: 结果保存路径，None表示不保存
+#         dataset_name: 数据集名称 ("train", "val", "test")
+#         class_names: 类别名称列表
+#         detailed: 是否生成详细评估报告
+#         plot: 是否生成可视化图表
+#         disable_progress: 是否禁用进度条
+#         show_class_metrics: 是否显示每个类别的指标
+#         ignore_index: 背景标签索引（-1 for 原版, 0 for MAT）
+    
+#     返回:
+#         评估结果字典
+#     """
+#     model.eval()
+#     all_preds = []
+#     all_targets = []
+#     all_probs = []  # 存储预测概率
+    
+#     desc = f"评估{dataset_name}集" if dataset_name else "评估中"
+#     print(f"开始{desc}... (背景标签索引: {ignore_index})")
+    
+#     with torch.no_grad():
+#         loader_iterator = data_loader if disable_progress else tqdm(data_loader, desc=desc)
+#         for data, target in loader_iterator:
+#             data, target = data.to(device), target.to(device)
+#             output = model(data)
+#             probs = torch.softmax(output, dim=1)
+#             _, preds = torch.max(output, 1)
+            
+#             # 只评估非背景像素
+#             valid_mask = target != ignore_index
+#             all_preds.extend(preds[valid_mask].cpu().numpy())
+#             all_targets.extend(target[valid_mask].cpu().numpy())
+#             all_probs.extend(probs[valid_mask].cpu().numpy())
+    
+#     # 转换为numpy数组
+#     all_preds = np.array(all_preds)
+#     all_targets = np.array(all_targets)
+#     all_probs = np.array(all_probs)
+    
+#     if len(all_preds) == 0 or len(all_targets) == 0:
+#         print(f"警告: {dataset_name}集中没有有效样本")
+#         return {
+#             'accuracy': 0.0,
+#             'balanced_accuracy': 0.0,
+#             'f1_macro': 0.0,
+#             'f1_weighted': 0.0,
+#             'kappa': 0.0,
+#             'class_precision': np.array([]),
+#             'class_recall': np.array([]),
+#             'class_f1': np.array([]),
+#             'class_samples': np.array([]),
+#             'unique_classes': np.array([]),
+#             'confusion_matrix': np.array([]),
+#             'predictions': all_preds,
+#             'targets': all_targets,
+#             'probabilities': all_probs
+#         }
+    
+#     # 获取唯一类别
+#     unique_classes = np.unique(all_targets)
+#     class_count = len(unique_classes)
+    
+#     # 计算主要评估指标
+#     accuracy = accuracy_score(all_targets, all_preds)
+#     balanced_acc = balanced_accuracy_score(all_targets, all_preds)
+#     f1_macro = f1_score(all_targets, all_preds, average='macro')
+#     f1_weighted = f1_score(all_targets, all_preds, average='weighted')
+#     kappa = cohen_kappa_score(all_targets, all_preds)
+    
+#     # 计算每个类的精确率、召回率和F1分数
+#     class_precision = precision_score(all_targets, all_preds, average=None, zero_division=0, labels=unique_classes)
+#     class_recall = recall_score(all_targets, all_preds, average=None, zero_division=0, labels=unique_classes)
+#     class_f1 = f1_score(all_targets, all_preds, average=None, zero_division=0, labels=unique_classes)
+    
+#     # 计算每个类别的样本数
+#     class_samples = np.bincount(all_targets.astype(np.int64), minlength=int(np.max(unique_classes))+1)
+#     class_samples = class_samples[unique_classes]
+    
+#     # 打印基本评估结果
+#     print(f"\n{'-'*50}")
+#     print(f"{dataset_name}集评估结果:")
+#     print(f"样本数量: {len(all_targets)}")
+#     print(f"类别数量: {class_count}")
+#     print(f"准确率: {accuracy:.4f}")
+#     print(f"平衡准确率: {balanced_acc:.4f}")
+#     print(f"宏平均F1分数: {f1_macro:.4f}")
+#     print(f"加权F1分数: {f1_weighted:.4f}")
+#     print(f"Kappa系数: {kappa:.4f}")
+    
+#     # 统计类别表现
+#     if len(class_f1) > 0:
+#         best_class_idx = np.argmax(class_f1)
+#         worst_class_idx = np.argmin(class_f1)
+#         best_class = unique_classes[best_class_idx]
+#         worst_class = unique_classes[worst_class_idx]
+        
+#         print(f"\n类别表现摘要:")
+#         print(f"表现最好的类别: 类别{best_class} (F1={class_f1[best_class_idx]:.4f}, 样本数={class_samples[best_class_idx]})")
+#         print(f"表现最差的类别: 类别{worst_class} (F1={class_f1[worst_class_idx]:.4f}, 样本数={class_samples[worst_class_idx]})")
+    
+#     # 如果需要显示每个标签的指标
+#     if show_class_metrics and len(unique_classes) > 0:
+#         print(f"\n{'-'*50}")
+#         print(f"{dataset_name}集每个标签的F1分数:")
+#         print(f"{'标签ID':<8}{'样本数':<10}{'精确率':<10}{'召回率':<10}{'F1分数':<10}")
+        
+#         # 创建类别指标字典
+#         class_metrics = {}
+#         for idx, cls in enumerate(unique_classes):
+#             class_metrics[cls] = {
+#                 'samples': class_samples[idx],
+#                 'precision': class_precision[idx],
+#                 'recall': class_recall[idx],
+#                 'f1': class_f1[idx]
+#             }
+        
+#         # 确定显示范围
+#         max_label = np.max(unique_classes)
+#         min_label = np.min(unique_classes)
+        
+#         # 显示所有出现的类别
+#         for label in range(int(min_label), int(max_label) + 1):
+#             if label in class_metrics:
+#                 # 数据集中存在此标签
+#                 metrics = class_metrics[label]
+#                 print(f"{label:<8}{metrics['samples']:<10}{metrics['precision']:.4f}{'':6}{metrics['recall']:.4f}{'':6}{metrics['f1']:.4f}")
+#             elif label != ignore_index:  # 不显示背景标签
+#                 # 数据集中不存在此标签（但不是背景标签）
+#                 print(f"{label:<8}{'0':<10}{'N/A':<10}{'N/A':<10}{'N/A':<10}")
+        
+#         # 添加标签分布信息
+#         non_zero_classes = np.sum(class_samples > 0)
+#         total_possible_classes = int(max_label) - int(min_label) + 1
+#         if ignore_index >= min_label and ignore_index <= max_label:
+#             total_possible_classes -= 1  # 排除背景标签
+#         zero_classes = total_possible_classes - non_zero_classes
+        
+#         print(f"\n标签分布统计:")
+#         print(f"可能的标签数量: {total_possible_classes}")
+#         print(f"有样本的标签数量: {non_zero_classes}")
+#         print(f"无样本的标签数量: {zero_classes}")
+    
+#     # 计算混淆矩阵
+#     conf_matrix = confusion_matrix(all_targets, all_preds, labels=unique_classes)
+    
+#     # 如果需要生成详细报告
+#     if detailed and result_path:
+#         # 确保结果路径存在
+#         os.makedirs(result_path, exist_ok=True)
+        
+#         # 生成分类报告
+#         target_names = class_names if class_names else [f"Class {i}" for i in unique_classes]
+#         report = classification_report(all_targets, all_preds, labels=unique_classes, target_names=target_names)
+        
+#         # 保存详细评估报告
+#         report_file = os.path.join(result_path, f"{dataset_name}_evaluation_report.txt")
+#         with open(report_file, 'w') as f:
+#             f.write(f"模型在{dataset_name}集上的评估结果\n")
+#             f.write("="*50 + "\n\n")
+#             f.write(f"背景标签索引: {ignore_index}\n")
+#             f.write(f"样本数量: {len(all_targets)}\n")
+#             f.write(f"类别数量: {class_count}\n\n")
+            
+#             f.write("主要评估指标:\n")
+#             f.write(f"准确率: {accuracy:.4f}\n")
+#             f.write(f"平衡准确率: {balanced_acc:.4f}\n")
+#             f.write(f"宏平均F1分数: {f1_macro:.4f}\n")
+#             f.write(f"加权F1分数: {f1_weighted:.4f}\n")
+#             f.write(f"Kappa系数: {kappa:.4f}\n\n")
+            
+#             f.write("分类报告:\n")
+#             f.write(report)
+            
+#             f.write("\n每个类别的详细指标:\n")
+#             f.write(f"{'类别ID':<10} {'样本数':<10} {'精确率':<10} {'召回率':<10} {'F1分数':<10}\n")
+#             for i, cls in enumerate(unique_classes):
+#                 f.write(f"{cls:<10} {class_samples[i]:<10} {class_precision[i]:.4f}:<10 {class_recall[i]:.4f}:<10 {class_f1[i]:.4f}:<10\n")
+        
+#         # 保存CSV格式的类别性能
+#         csv_file = os.path.join(result_path, f"{dataset_name}_class_metrics.csv")
+#         with open(csv_file, 'w') as f:
+#             f.write("Class,SampleCount,Precision,Recall,F1Score\n")
+#             for i, cls in enumerate(unique_classes):
+#                 f.write(f"{cls},{class_samples[i]},{class_precision[i]:.6f},{class_recall[i]:.6f},{class_f1[i]:.6f}\n")
+        
+#         # 保存预测概率和真实标签
+#         np.savez(
+#             os.path.join(result_path, f"{dataset_name}_predictions.npz"),
+#             predictions=all_preds,
+#             targets=all_targets,
+#             probabilities=all_probs,
+#             classes=unique_classes
+#         )
+        
+#         # 保存主要评估指标为CSV
+#         metrics_file = os.path.join(result_path, f"{dataset_name}_metrics.csv")
+#         with open(metrics_file, 'w') as f:
+#             f.write("Metric,Value\n")
+#             f.write(f"accuracy,{accuracy:.6f}\n")
+#             f.write(f"balanced_accuracy,{balanced_acc:.6f}\n")
+#             f.write(f"f1_macro,{f1_macro:.6f}\n")
+#             f.write(f"f1_weighted,{f1_weighted:.6f}\n")
+#             f.write(f"kappa,{kappa:.6f}\n")
+#             f.write(f"num_samples,{len(all_targets)}\n")
+#             f.write(f"num_classes,{class_count}\n")
+#             f.write(f"ignore_index,{ignore_index}\n")
+        
+#         # 如果需要生成可视化
+#         if plot and len(conf_matrix) > 0:
+#             try:
+#                 # 混淆矩阵可视化
+#                 plt.figure(figsize=(12, 10))
+#                 # 使用对数缩放
+#                 conf_mat_log = np.log1p(conf_matrix)  # log(1+x)以处理零值
+#                 mask = conf_matrix == 0
+#                 # 绘制混淆矩阵热图
+#                 sns.heatmap(conf_mat_log, annot=False, fmt='d', cmap='Blues', mask=mask)
+#                 plt.xlabel('Predicted Label')
+#                 plt.ylabel('True Label')
+#                 plt.title(f'Confusion Matrix - {dataset_name} set (log scale)')
+#                 plt.savefig(os.path.join(result_path, f"{dataset_name}_confusion_matrix.png"))
+#                 plt.close()
+                
+#                 # 类别F1分数可视化
+#                 if len(class_f1) > 0:
+#                     plt.figure(figsize=(15, 6))
+                    
+#                     # 按F1分数排序
+#                     sorted_indices = np.argsort(class_f1)
+#                     # 选择最好和最差的20个类别（如果可用）
+#                     num_to_show = min(20, len(sorted_indices))
+#                     worst_indices = sorted_indices[:num_to_show]
+#                     best_indices = sorted_indices[-num_to_show:]
+                    
+#                     # 绘制最差类别
+#                     plt.subplot(1, 2, 1)
+#                     bars = plt.barh(range(len(worst_indices)), class_f1[worst_indices])
+#                     plt.yticks(range(len(worst_indices)), [f"Class {unique_classes[i]}" for i in worst_indices])
+#                     plt.xlabel('F1 Score')
+#                     plt.title('Worst Performing Classes')
+#                     plt.grid(True, axis='x')
+                    
+#                     # 为每个柱状图添加样本数量标注
+#                     for i, bar in enumerate(bars):
+#                         plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2, 
+#                                  f"n={class_samples[worst_indices[i]]}", va='center')
+                    
+#                     # 绘制最好类别
+#                     plt.subplot(1, 2, 2)
+#                     bars = plt.barh(range(len(best_indices)), class_f1[best_indices])
+#                     plt.yticks(range(len(best_indices)), [f"Class {unique_classes[i]}" for i in best_indices])
+#                     plt.xlabel('F1 Score')
+#                     plt.title('Best Performing Classes')
+#                     plt.grid(True, axis='x')
+                    
+#                     # 为每个柱状图添加样本数量标注
+#                     for i, bar in enumerate(bars):
+#                         plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2, 
+#                                  f"n={class_samples[best_indices[i]]}", va='center')
+                    
+#                     plt.tight_layout()
+#                     plt.savefig(os.path.join(result_path, f"{dataset_name}_class_performance.png"))
+#                     plt.close()
+#             except Exception as e:
+#                 print(f"生成可视化图表时出错: {e}")
+    
+#     # 返回评估结果字典
+#     result = {
+#         'accuracy': accuracy,
+#         'balanced_accuracy': balanced_acc,
+#         'f1_macro': f1_macro,
+#         'f1_weighted': f1_weighted,
+#         'kappa': kappa,
+#         'class_precision': class_precision,
+#         'class_recall': class_recall,
+#         'class_f1': class_f1,
+#         'class_samples': class_samples,
+#         'unique_classes': unique_classes,
+#         'confusion_matrix': conf_matrix,
+#         'predictions': all_preds,
+#         'targets': all_targets,
+#         'probabilities': all_probs
+#     }
+    
+#     return result
 
 # 保留原版函数以确保向后兼容
 def compare_class_performance(results_list, dataset_names, result_path=None):

@@ -120,16 +120,20 @@ def setup_environment(config):
     
     return device
 
+
+
+
 def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, test_loader, device):
     """训练和评估模型"""
-    # 根据数据格式确定背景标签索引
-    ignore_index = config.get('ignore_index', -1 if not is_mat_format(config) else 0)
+   
+    # 计算类别权重（包括背景类别，处理不平衡问题）
+    class_weights = calculate_class_weights(
+        dataset_dict['train_labels'], 
+        config['num_class']  # 这里应该是102
+    ).to(device)
     
-    # 计算类别权重（处理不平衡问题）
-    class_weights = calculate_class_weights(dataset_dict['train_labels'], config['num_class']).to(device)
-    
-    # 创建损失函数
-    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=ignore_index)
+    # 创建损失函数 - 移除ignore_index参数
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     
     # 创建优化器
     if config['optimizer'] == 'adam':
@@ -137,7 +141,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     else:  # adamw
         optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
     
-    # 创建学习率调度器
+    # 创建学习率调度器 - 这部分保持不变
     lr_scheduler = None
     if config['use_lr_scheduler']:
         if config['lr_scheduler_type'] == 'cosine':
@@ -176,7 +180,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     print("\n开始训练模型...")
     print(f"总轮数: {config['epochs']}, 批大小: {config['batch_size']}, 学习率: {config['lr']}")
     print(f"数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}")
-    print(f"背景标签索引: {ignore_index}")
+    print(f"类别数量: {config['num_class']} (包括背景)")  # 修改这个提示信息
 
     # 训练模型
     training_results = train_brain_voxel_mlp_multiclass(
@@ -193,8 +197,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         use_old_zipfile_serialization=config.get('use_old_zipfile_serialization', True),
         experiment_name=config.get('experiment_name', time.strftime("%Y%m%d_%H%M%S")),
         config=config,
-        normalization_params=normalization_params,
-        ignore_index=ignore_index  # 传递背景标签索引
+        normalization_params=normalization_params
+        # ignore_index=ignore_index  # 传递背景标签索引
     )
     
     # 可视化训练过程
@@ -238,8 +242,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True,
-        ignore_index=ignore_index
+        show_class_metrics=True
+        # ignore_index=ignore_index
     )
 
     # 在验证集上评估
@@ -253,8 +257,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True,
-        ignore_index=ignore_index
+        show_class_metrics=True
+        # ignore_index=ignore_index
     )
 
     # 在测试集上评估
@@ -268,8 +272,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True,
-        ignore_index=ignore_index
+        show_class_metrics=True
+        # ignore_index=ignore_index
     )
     
     # 保存评估结果摘要
@@ -279,7 +283,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         f.write("="*50 + "\n\n")
         
         f.write(f"数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}\n")
-        f.write(f"背景标签索引: {ignore_index}\n\n")
+        # f.write(f"背景标签索引: {ignore_index}\n\n")
         
         f.write("训练集结果:\n")
         f.write(f"  准确率: {train_results['accuracy']:.4f}\n")
@@ -317,6 +321,205 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     print(f"评估完成，结果摘要已保存至{summary_path}")
     
     return train_results, val_results, test_results, best_model_path
+
+
+# def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, test_loader, device):
+#     """训练和评估模型"""
+#     # 根据数据格式确定背景标签索引
+#     ignore_index = config.get('ignore_index', -1 if not is_mat_format(config) else 0)
+    
+#     # 计算类别权重（处理不平衡问题）
+#     class_weights = calculate_class_weights(dataset_dict['train_labels'], config['num_class']).to(device)
+    
+#     # 创建损失函数
+#     criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=ignore_index)
+    
+#     # 创建优化器
+#     if config['optimizer'] == 'adam':
+#         optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
+#     else:  # adamw
+#         optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
+    
+#     # 创建学习率调度器
+#     lr_scheduler = None
+#     if config['use_lr_scheduler']:
+#         if config['lr_scheduler_type'] == 'cosine':
+#             lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
+#         elif config['lr_scheduler_type'] == 'multistep':
+#             lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+#                 optimizer, milestones=config['lr_milestones'], gamma=config['lr_gamma']
+#             )
+#         elif config['lr_scheduler_type'] == 'plateau':
+#             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+#                 optimizer, mode='max', factor=config['lr_gamma'], patience=5, verbose=True
+#             )
+
+#     # 计算标准化参数
+#     normalization_params = None
+#     if config['norm']:
+#         # 从数据集中获取标准化参数
+#         if 'train_samples' in dataset_dict:
+#             train_samples = dataset_dict['train_samples']
+#             mean = np.mean(train_samples, axis=0)
+#             std = np.std(train_samples, axis=0)
+#             # 避免除零
+#             std[std == 0] = 1e-10
+            
+#             # 创建标准化参数字典
+#             normalization_params = {
+#                 'mean': mean.tolist(),  # 转为列表以确保可JSON序列化
+#                 'std': std.tolist()
+#             }
+            
+#             print("已计算标准化参数")
+#         else:
+#             print("警告: 无法计算标准化参数，因为没有找到训练样本")
+
+#     # 开始训练
+#     print("\n开始训练模型...")
+#     print(f"总轮数: {config['epochs']}, 批大小: {config['batch_size']}, 学习率: {config['lr']}")
+#     print(f"数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}")
+#     print(f"背景标签索引: {ignore_index}")
+
+#     # 训练模型
+#     training_results = train_brain_voxel_mlp_multiclass(
+#         model=model,
+#         train_loader=train_loader,
+#         val_loader=val_loader,
+#         criterion=criterion,
+#         optimizer=optimizer,
+#         device=device,
+#         num_epochs=config['epochs'],
+#         val_epoch=config['val_epochs'],
+#         save_path=config['save_dir'],
+#         lr_scheduler=lr_scheduler,
+#         use_old_zipfile_serialization=config.get('use_old_zipfile_serialization', True),
+#         experiment_name=config.get('experiment_name', time.strftime("%Y%m%d_%H%M%S")),
+#         config=config,
+#         normalization_params=normalization_params,
+#         ignore_index=ignore_index  # 传递背景标签索引
+#     )
+    
+#     # 可视化训练过程
+#     try:
+#         visualize_training_curves(
+#             training_results,
+#             save_path=os.path.join(config['save_dir'], "training_curves.png")
+#         )
+#     except Exception as e:
+#         print(f"可视化训练曲线时出错: {e}")
+        
+#     # 获取最佳模型
+#     try:
+#         best_model_path = get_best_model(
+#             training_results['val_f1_macro_list'],
+#             training_results['val_epoch_list'],
+#             config['save_dir'],
+#             metric='f1'
+#         )
+        
+#         # 使用安全加载工具
+#         checkpoint = safe_load_model(best_model_path, device)
+#         model.load_state_dict(checkpoint['state_dict'])
+#         print(f"成功加载最佳模型: {os.path.basename(best_model_path)}")
+        
+#     except Exception as e:
+#         print(f"加载最佳模型时出错: {e}")
+#         print("将使用当前模型继续评估")
+
+#     # 评估模型
+#     print("\n使用最佳模型进行评估...")
+
+#     # 在训练集上评估
+#     print("\n在训练集上评估...")
+#     train_results = evaluate_model(
+#         model=model,
+#         data_loader=train_loader,
+#         device=device,
+#         result_path=config['save_dir'],
+#         dataset_name="train",
+#         detailed=True,
+#         plot=True,
+#         disable_progress=True,
+#         show_class_metrics=True,
+#         ignore_index=ignore_index
+#     )
+
+#     # 在验证集上评估
+#     print("\n在验证集上评估...")
+#     val_results = evaluate_model(
+#         model=model,
+#         data_loader=val_loader,
+#         device=device,
+#         result_path=config['save_dir'],
+#         dataset_name="val",
+#         detailed=True,
+#         plot=True,
+#         disable_progress=True,
+#         show_class_metrics=True,
+#         ignore_index=ignore_index
+#     )
+
+#     # 在测试集上评估
+#     print("\n在测试集上评估...")
+#     test_results = evaluate_model(
+#         model=model,
+#         data_loader=test_loader,
+#         device=device,
+#         result_path=config['save_dir'],
+#         dataset_name="test",
+#         detailed=True,
+#         plot=True,
+#         disable_progress=True,
+#         show_class_metrics=True,
+#         ignore_index=ignore_index
+#     )
+    
+#     # 保存评估结果摘要
+#     summary_path = os.path.join(config['save_dir'], "evaluation_summary.txt")
+#     with open(summary_path, 'w') as f:
+#         f.write("评估结果摘要\n")
+#         f.write("="*50 + "\n\n")
+        
+#         f.write(f"数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}\n")
+#         f.write(f"背景标签索引: {ignore_index}\n\n")
+        
+#         f.write("训练集结果:\n")
+#         f.write(f"  准确率: {train_results['accuracy']:.4f}\n")
+#         f.write(f"  宏平均F1: {train_results['f1_macro']:.4f}\n")
+#         f.write(f"  平衡准确率: {train_results['balanced_accuracy']:.4f}\n")
+#         f.write(f"  Kappa系数: {train_results['kappa']:.4f}\n\n")
+        
+#         f.write("验证集结果:\n")
+#         f.write(f"  准确率: {val_results['accuracy']:.4f}\n")
+#         f.write(f"  宏平均F1: {val_results['f1_macro']:.4f}\n")
+#         f.write(f"  平衡准确率: {val_results['balanced_accuracy']:.4f}\n")
+#         f.write(f"  Kappa系数: {val_results['kappa']:.4f}\n\n")
+        
+#         f.write("测试集结果:\n")
+#         f.write(f"  准确率: {test_results['accuracy']:.4f}\n")
+#         f.write(f"  宏平均F1: {test_results['f1_macro']:.4f}\n")
+#         f.write(f"  平衡准确率: {test_results['balanced_accuracy']:.4f}\n")
+#         f.write(f"  Kappa系数: {test_results['kappa']:.4f}\n\n")
+        
+#         f.write(f"模型: {config['model_type']}\n")
+#         f.write(f"隐藏层: {config['hidden_units']}\n")
+#         f.write(f"激活函数: {config['activation']}\n")
+#         f.write(f"Dropout率: {config['dropout_rate']}\n")
+#         f.write(f"优化器: {config['optimizer']}\n")
+#         f.write(f"学习率: {config['lr']}\n")
+#         f.write(f"权重衰减: {config['weight_decay']}\n")
+    
+#     # 比较训练集、验证集和测试集中的类别性能
+#     compare_results = compare_class_performance(
+#         results_list=[train_results, val_results, test_results],
+#         dataset_names=["Train", "Validation", "Test"],
+#         result_path=config['save_dir']
+#     )
+    
+#     print(f"评估完成，结果摘要已保存至{summary_path}")
+    
+#     return train_results, val_results, test_results, best_model_path
 
 def main():
     """主函数"""

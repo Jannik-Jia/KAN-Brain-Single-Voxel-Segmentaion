@@ -64,7 +64,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     # 配置信息
     epochs = config.get('epochs', 30) if config else 30
     # 确保epochs至少为5，防止t_max参数出错
-    train_epochs = max(5, min(epochs, 10))  # 贝叶斯优化时使用较少的epoch，但至少5轮
+    train_epochs = max(5, min(epochs, 15))  # 贝叶斯优化时使用较少的epoch，但至少5轮
     
     # ===== 共享参数空间（所有架构通用）=====
     # 这些参数对所有架构保持一致
@@ -174,7 +174,8 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         )
     
     # 定义损失函数
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    criterion = torch.nn.CrossEntropyLoss()
     
     # 训练模型 - 简化版本，只训练几个epoch用于评估
     val_f1_values = []
@@ -200,11 +201,12 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
                 data, target = data.to(device), target.to(device)
                 output = model(data)
                 _, preds = torch.max(output, 1)
-                
-                # 只评估非背景像素
-                valid_mask = target != -1
-                all_preds.extend(preds[valid_mask].cpu().numpy())
-                all_targets.extend(target[valid_mask].cpu().numpy())
+                all_preds.extend(preds.cpu().numpy())
+                all_targets.extend(target.cpu().numpy())
+                # # 只评估非背景像素
+                # valid_mask = target != -1
+                # all_preds.extend(preds[valid_mask].cpu().numpy())
+                # all_targets.extend(target[valid_mask].cpu().numpy())
         
         # 计算F1分数
         val_f1_macro = f1_score(all_targets, all_preds, average='macro')
