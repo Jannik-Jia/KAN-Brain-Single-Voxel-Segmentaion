@@ -26,54 +26,48 @@ class OriginalStyleMLP(nn.Module):
     完全复制原始notebook的MLP架构
     包含L2正则化 (kernel_regularizer=tf.keras.regularizers.l2(0.00001))
     """
-    def __init__(self, input_dim=341, hidden_dims=[4096, 4096, 4096, 4096],
+    def __init__(self, input_dim=341, hidden_dims=[4096, 4096, 4096, 4096], 
                  num_classes=102, dropout_rate=0.5, l2_lambda=1e-5):
         super(OriginalStyleMLP, self).__init__()
-
+        
         self.input_dim = input_dim
-        # 确保 hidden_dims 始终是一个列表
         self.hidden_dims = hidden_dims if isinstance(hidden_dims, list) else [hidden_dims]
         self.num_classes = num_classes
         self.dropout_rate = dropout_rate
         self.l2_lambda = l2_lambda
-
+        
         layers = []
-
+        
         # 输入层到第一个隐藏层
         layers.append(nn.Linear(input_dim, self.hidden_dims[0]))
         layers.append(nn.ReLU())
         layers.append(nn.Dropout(dropout_rate))
-
+        
         # 中间隐藏层
         for i in range(len(self.hidden_dims) - 1):
             layers.append(nn.Linear(self.hidden_dims[i], self.hidden_dims[i+1]))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout_rate))
-
+        
         # 输出层 (对应原始的activation='softmax')
         layers.append(nn.Linear(self.hidden_dims[-1], num_classes))
-
+        
         self.network = nn.Sequential(*layers)
-
-        # 打印模型信息 (可选，但有助于调试)
-        # total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        # print(f"    Model: Input {input_dim} -> Hidden {self.hidden_dims} -> Output {num_classes}")
-        # print(f"    Trainable Parameters: {total_params:,}")
-
+        
+        # 打印模型信息
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f"    Model: {self.hidden_dims} -> {num_classes}")
+        print(f"    Parameters: {total_params:,}")
+        
     def forward(self, x):
         return self.network(x)
-
+    
     def get_l2_loss(self):
-        """
-        计算L2正则化损失，仅应用于nn.Linear层的权重 (weights)。
-        这对应于Keras中kernel_regularizer的行为。
-        """
-        l2_loss = 0.0
-        if self.l2_lambda > 0: # 仅当l2_lambda大于0时计算
-            for module in self.network.modules(): # 遍历Sequential中的所有模块
-                if isinstance(module, nn.Linear):
-                    # module.weight 即为 nn.Linear 层的权重张量
-                    l2_loss += torch.norm(module.weight, p=2) ** 2
+        """计算L2正则化损失，对应原始的kernel_regularizer"""
+        l2_loss = 0
+        for param in self.parameters():
+            if param.requires_grad:
+                l2_loss += torch.norm(param, 2) ** 2
         return self.l2_lambda * l2_loss
 
 def load_original_data(mat_file_path, test_size=0.01, random_state=42):
@@ -275,7 +269,7 @@ def run_coupling_experiment(mat_file_path, output_dir="./coupling_test_results",
     # 固定参数 (与原始notebook一致)
     fixed_params = {
         'batch_size': 128,    # 原始: batch_size = 128
-        'epochs': 25,         # 快速测试 (原始: no_epochs = 25)
+        'epochs': 12,         # 快速测试 (原始: no_epochs = 25)
         'dropout_rate': 0.5,  # 原始: Dropout(0.5)
         'input_dim': data['input_dim'],  # 341
         'num_classes': 102,   # 原始: no_classes = 102
@@ -512,4 +506,77 @@ def analyze_and_save_results(results, experiment_log, output_dir, timestamp):
         for arch_name in analysis['best_configs']:
             config = analysis['best_configs'][arch_name]
             f.write(f"{arch_name}:\n")
-            f.write(f"  最佳学习率
+            f.write(f"  最佳学习率: {config['best_lr']:.0e}\n")
+            f.write(f"  最佳F1分数: {config['best_f1']:.4f}\n")
+            f.write(f"  性能方差: {config['variance']:.6f}\n")
+            f.write(f"  性能范围: {config['range']:.4f}\n\n")
+        
+        f.write("耦合分析:\n")
+        f.write("-" * 30 + "\n")
+        f.write(f"耦合强度: {coupling_strength}\n")
+        f.write(f"平均方差: {avg_variance:.6f}\n")
+        f.write(f"平均范围: {avg_range:.4f}\n")
+        f.write(f"优化建议: {recommendation}\n\n")
+        
+        if overall_best_config:
+            arch, lr = overall_best_config
+            f.write(f"推荐配置: {arch} 架构 + {lr:.0e} 学习率\n")
+            f.write(f"预期F1分数: {overall_best_f1:.4f}\n\n")
+        
+        f.write("实验详情:\n")
+        f.write("-" * 30 + "\n")
+        for log_entry in experiment_log:
+            if log_entry.get('success', False):
+                f.write(f"{log_entry['experiment']}: F1={log_entry['best_f1']:.4f}, "
+                       f"时间={log_entry['training_time']:.1f}s\n")
+            else:
+                f.write(f"{log_entry['experiment']}: 失败 - {log_entry.get('error', 'Unknown')}\n")
+    
+    print(f"\n💾 结果已保存:")
+    print(f"   详细结果: {results_file}")
+    print(f"   分析报告: {report_file}")
+    
+    return analysis
+
+def main():
+    """主函数"""
+    parser = argparse.ArgumentParser(description='脑体素分类架构-超参数耦合验证')
+    parser.add_argument('--mat_file_path', type=str, required=True, help='TRAIN38.mat文件路径')
+    parser.add_argument('--output_dir', type=str, default='./coupling_test_results', help='结果输出目录')
+    parser.add_argument('--device', type=str, default='auto', help='计算设备 (cuda/cpu/auto)')
+    
+    args = parser.parse_args()
+    
+    # 确定设备
+    if args.device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    else:
+        device = args.device
+    
+    print(f"使用设备: {device}")
+    if device == 'cuda':
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"显存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    
+    # 检查文件是否存在
+    if not os.path.exists(args.mat_file_path):
+        print(f"错误: 数据文件不存在: {args.mat_file_path}")
+        sys.exit(1)
+    
+    # 运行实验
+    try:
+        results = run_coupling_experiment(
+            mat_file_path=args.mat_file_path,
+            output_dir=args.output_dir,
+            device=device
+        )
+        print(f"\n✅ 耦合测试实验成功完成!")
+        
+    except Exception as e:
+        print(f"\n❌ 实验失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
