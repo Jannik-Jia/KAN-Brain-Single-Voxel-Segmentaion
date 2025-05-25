@@ -127,13 +127,14 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     """训练和评估模型"""
    
     # 计算类别权重（包括背景类别，处理不平衡问题）
-    class_weights = calculate_class_weights(
-        dataset_dict['train_labels'], 
-        config['num_class']  # 这里应该是102
-    ).to(device)
+    # class_weights = calculate_class_weights(
+    #     dataset_dict['train_labels'], 
+    #     config['num_class']  # 这里应该是102
+    # ).to(device)
     
     # 创建损失函数 - 移除ignore_index参数
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss() 
     
     # 创建优化器
     if config['optimizer'] == 'adam':
