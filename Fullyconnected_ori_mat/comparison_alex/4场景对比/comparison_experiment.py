@@ -300,7 +300,9 @@ def calculate_weights_fn_robust(labels_for_weights_tensor, num_effective_classes
     weights_np[counts_np == 0] = 1.0  # 未见过的类默认权重为1
     
     print(f"  Sample class counts (first 10): {counts_np[:min(10, len(counts_np))]}")
-    print(f"  Sample weights (first 10): {weights_np[:min(10, len(weights_np))]:.4f}")
+    sample_weights = weights_np[:min(10, len(weights_np))]
+    weights_str = ', '.join([f"{w:.4f}" for w in sample_weights])
+    print(f"  Sample weights (first 10): [{weights_str}]")
     
     return torch.FloatTensor(weights_np).to(DEVICE)
 
