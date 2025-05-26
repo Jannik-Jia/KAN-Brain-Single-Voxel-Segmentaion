@@ -240,6 +240,7 @@ def create_scaler_from_full_training_set(data_transposed, train_indices):
     
     return scaler
 
+
 class FixedDataLoader:
     """
     修复的数据加载器
@@ -422,6 +423,70 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
     print(f"  训练批次数: {len(train_loader)}")
     print(f"  验证批次数: {len(val_loader)}")
     
+    # ===== 新增：确定训练集中的有效类别 =====
+    print("\n=== 分析训练集类别分布 ===")
+    if use_index_labels:
+        train_valid_labels = data_dict['train_labels']
+        if len(train_valid_labels.shape) > 1:
+            train_valid_labels = np.argmax(train_valid_labels, axis=1)
+        # 转换为索引格式
+        background_mask = train_valid_labels == 0
+        train_valid_labels = train_valid_labels - 1
+        train_valid_labels[background_mask] = -1
+        
+        # 找出有效类别
+        valid_classes = np.unique(train_valid_labels)
+        valid_classes = valid_classes[valid_classes >= 0]  # 排除背景-1
+    else:
+        train_valid_labels = np.argmax(data_dict['train_labels'], axis=1)
+        valid_classes = np.unique(train_valid_labels)
+    
+    print(f"训练集中存在的类别数: {len(valid_classes)}/{num_classes}")
+    print(f"有效类别范围: {np.min(valid_classes)} - {np.max(valid_classes)}")
+    
+    # ===== 新增：详细类别统计信息 =====
+    print(f"\n详细类别统计:")
+    if use_index_labels:
+        labels_to_check = train_valid_labels[train_valid_labels >= 0]
+    else:
+        labels_to_check = train_valid_labels
+
+    unique_labels, counts = np.unique(labels_to_check, return_counts=True)
+    total_valid_samples = len(labels_to_check)
+
+    print(f"类别分布 (前20个最多的类别):")
+    # 按样本数排序
+    sorted_indices = np.argsort(counts)[::-1]  # 降序
+    for i in range(min(20, len(unique_labels))):
+        idx = sorted_indices[i]
+        label, count = unique_labels[idx], counts[idx]
+        percentage = count / total_valid_samples * 100
+        print(f"  类别 {label:3d}: {count:8,} 样本 ({percentage:6.2f}%)")
+
+    if len(unique_labels) > 20:
+        print(f"  ... 还有 {len(unique_labels)-20} 个类别")
+
+    # 找出缺失的类别
+    all_possible_classes = set(range(num_classes))
+    present_classes = set(unique_labels)
+    missing_classes = all_possible_classes - present_classes
+    
+    if missing_classes:
+        missing_list = sorted(list(missing_classes))
+        print(f"\n训练集中缺失的类别:")
+        if len(missing_list) <= 30:
+            print(f"  {missing_list}")
+        else:
+            print(f"  前30个: {missing_list[:30]}")
+            print(f"  ... 还有 {len(missing_list)-30} 个")
+        print(f"缺失类别总数: {len(missing_classes)}")
+        
+        # 计算有效类别占比
+        coverage = len(present_classes) / num_classes * 100
+        print(f"类别覆盖率: {coverage:.1f}% ({len(present_classes)}/{num_classes})")
+    else:
+        print(f"\n✓ 所有 {num_classes} 个类别在训练集中都存在")
+    
     # 计算类别权重
     if use_index_labels:
         class_weights = calculate_class_weights_fixed(
@@ -441,7 +506,7 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
     )
     model = model.to(device)
     
-    print(f"模型参数数量: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"\n模型参数数量: {sum(p.numel() for p in model.parameters()):,}")
     
     # 优化器
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -503,11 +568,13 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
             if batch_idx % 100 == 0:
                 torch.cuda.empty_cache()
         
-        # 计算训练指标
+        # ===== 修改：计算训练指标 =====
         avg_train_loss = epoch_train_loss / len(train_loader)
         if len(all_train_true) > 0:
             train_acc = accuracy_score(all_train_true, all_train_preds)
-            train_f1 = f1_score(all_train_true, all_train_preds, average='macro')
+            # 使用有效类别计算F1
+            train_f1 = calculate_valid_f1_score(all_train_true, all_train_preds, 
+                                              valid_classes, average='macro')
         else:
             train_acc = train_f1 = 0.0
         
@@ -544,11 +611,13 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
                 total_loss = classification_loss + l2_loss
                 epoch_val_loss += total_loss.item()
         
-        # 计算验证指标
+        # ===== 修改：计算验证指标 =====
         avg_val_loss = epoch_val_loss / len(val_loader)
         if len(all_val_true) > 0:
             val_acc = accuracy_score(all_val_true, all_val_preds)
-            val_f1 = f1_score(all_val_true, all_val_preds, average='macro')
+            # 使用有效类别计算F1
+            val_f1 = calculate_valid_f1_score(all_val_true, all_val_preds, 
+                                            valid_classes, average='macro')
             val_kappa = cohen_kappa_score(all_val_true, all_val_preds)
         else:
             val_acc = val_f1 = val_kappa = 0.0
@@ -570,7 +639,8 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_f1': val_f1,
-                'history': history
+                'history': history,
+                'valid_classes': valid_classes  # 保存有效类别信息
             }, os.path.join(save_path, model_name))
             print(f"  -> 保存最佳模型 (F1: {val_f1:.4f})")
         
@@ -591,6 +661,7 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
     print(f"最佳F1分数: {best_f1:.4f} (第{best_epoch}轮)")
     print(f"对应准确率: {best_acc:.4f}")
     print(f"对应Kappa: {best_kappa:.4f}")
+    print(f"有效类别数: {len(valid_classes)}/{num_classes}")
     
     return {
         'history': history,
@@ -598,9 +669,57 @@ def train_fixed_model(data_dict, device='cuda:0', save_path='./fixed_results',
         'best_epoch': best_epoch,
         'best_acc': best_acc,
         'best_kappa': best_kappa,
-        'training_time': training_time
+        'training_time': training_time,
+        'valid_classes': valid_classes,
+        'class_coverage': len(valid_classes) / num_classes
     }
 
+def calculate_valid_f1_score(y_true, y_pred, valid_classes=None, average='macro'):
+    """
+    只对训练集中实际存在的类别计算F1分数
+    """
+    if valid_classes is None:
+        # 如果没有指定有效类别，使用所有出现的类别
+        valid_classes = np.unique(y_true)
+        valid_classes = valid_classes[valid_classes >= 0]  # 排除背景-1
+    
+    if len(valid_classes) == 0:
+        return 0.0
+    
+    # 计算每个有效类别的F1分数
+    f1_scores = []
+    weights = []
+    
+    for cls in valid_classes:
+        cls_true = (np.array(y_true) == cls).astype(int)
+        cls_pred = (np.array(y_pred) == cls).astype(int)
+        
+        tp = np.sum(cls_true & cls_pred)
+        fp = np.sum((1 - cls_true) & cls_pred)
+        fn = np.sum(cls_true & (1 - cls_pred))
+        
+        if tp + fp + fn == 0:
+            continue  # 跳过完全没有预测和真值的类别
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        f1_scores.append(f1)
+        weights.append(np.sum(cls_true))  # 该类别的样本数作为权重
+    
+    if len(f1_scores) == 0:
+        return 0.0
+    
+    if average == 'macro':
+        return np.mean(f1_scores)
+    elif average == 'weighted':
+        if sum(weights) == 0:
+            return 0.0
+        return np.average(f1_scores, weights=weights)
+    else:
+        return np.mean(f1_scores)  # 默认macro
+    
 def main():
     """主函数"""
     print("=== 修复版本的内存友好训练 ===")
