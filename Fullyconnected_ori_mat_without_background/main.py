@@ -131,7 +131,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         config['num_class']
     ).to(device)
     
-    criterion = nn.CrossEntropyLoss() 
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     
     # 创建优化器
     if config['optimizer'] == 'adam':
