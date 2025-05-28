@@ -60,22 +60,17 @@ class BrainVoxelMatDataset(Dataset):
         x = self.data[idx]
         x = torch.FloatTensor(x)
         
+        # 简化标签处理：直接使用argmax，不做任何转换
         if len(self.labels.shape) > 1 and self.labels.shape[1] > 1:
-            y = np.argmax(self.labels[idx])  # 得到1-102
+            # one-hot编码，转换为索引
+            y = np.argmax(self.labels[idx])  # 得到0-101的索引
         else:
-            y = self.labels[idx]  # 得到1-102
+            # 已经是索引形式
+            y = self.labels[idx]
             
-        # 🔧 关键修复：标签映射 1-102 → 0-101
-        if y >= 1:  # 确保是有效标签
-            y = y - 1  # 1-102 → 0-101
-        else:
-            # 理论上不应该出现，因为背景已过滤
-            print(f"警告: 发现异常标签值 {y}")
-            y = 0
-            
+        # 不做任何标签转换！直接使用0-101
         y = torch.LongTensor([int(y)])[0]
         return x, y
-
 def load_mat_data(mat_file_path):
     """
     从.mat文件加载数据
@@ -104,40 +99,18 @@ def load_mat_data(mat_file_path):
     
     return arrays
 
-
-def validate_filtered_data(train_data, train_labels, description=""):
-    """验证过滤后数据的完整性"""
-    print(f"\n=== {description} 数据验证 ===")
-    
-    if len(train_labels.shape) > 1:
-        labels = np.argmax(train_labels, axis=1)
-    else:
-        labels = train_labels.flatten()
-    
-    unique_labels = np.unique(labels)
-    print(f"标签范围: {np.min(unique_labels)} - {np.max(unique_labels)}")
-    print(f"标签数量: {len(unique_labels)}")
-    print(f"样本总数: {len(train_data)}")
-    
-    # 检查是否还有标签0
-    if 0 in unique_labels:
-        print("⚠️  警告: 仍存在背景标签0")
-    else:
-        print("✅ 确认: 已成功过滤背景标签")
-    
-    # 检查标签连续性
-    expected_range = set(range(1, 103))  # 1-102
-    actual_labels = set(unique_labels)
-    missing_labels = expected_range - actual_labels
-    if missing_labels:
-        print(f"⚠️  缺失的标签: {sorted(missing_labels)}")
-    
-    return True
-
-
 def process_train38_data(mat_file_path, config, random_state=666, scaler_save_path=None):
     """
     处理TRAIN38.mat数据，根据指定的患者ID分割为训练集、验证集和测试集
+    
+    参数:
+        mat_file_path: TRAIN38.mat文件路径
+        config: 配置字典，包含患者ID的配置
+        random_state: 随机种子
+        scaler_save_path: scaler保存路径，None表示不保存
+    
+    返回:
+        dataset_dict: 包含数据集和处理信息的字典
     """
     print("处理TRAIN38.mat数据...")
     
@@ -146,73 +119,84 @@ def process_train38_data(mat_file_path, config, random_state=666, scaler_save_pa
     train_data = arrays['data']
     train_region = arrays['region']
     
-    # 【第1步：添加背景过滤逻辑】
+    # 确保prob_idx是整数类型，与配置中的患者ID匹配
     prob_idx = arrays['prob_idx'].flatten()
+    # 转换为整数类型 - 这是关键修改点
     prob_idx = prob_idx.astype(int)
     
-    # 新增：过滤背景像素
-    print("过滤背景像素...")
-    if len(train_region.shape) > 1 and train_region.shape[1] > 1:
-        # one-hot格式，获取标签索引
-        label_indices = np.argmax(train_region, axis=1)
+    # 获取配置中的患者ID
+    dataset_split = config.get('dataset_split', {})
+    train_patients = dataset_split.get('train_patients', [])
+    val_patients = dataset_split.get('val_patients', [])
+    test_patients = dataset_split.get('test_patients', [])
+    
+    # 如果未指定患者ID，使用旧的按比例分割方法
+    if not train_patients and not val_patients and not test_patients:
+        print("未指定患者ID，使用默认的比例分割方法")
+        # 按原来的比例分割
+        train_set_idx = np.where(prob_idx != 38)[0]
+        val_set_idx = np.where(prob_idx == 38)[0]
+        
+        # 提取训练集和验证集
+        train_set_data = train_data[train_set_idx, :]
+        train_set_region = train_region[train_set_idx, :]
+        val_data = train_data[val_set_idx, :]
+        val_label = train_region[val_set_idx, :]
+        
+        # 分割训练集，留出一小部分作为测试集
+        X_train, X_test, y_train, y_test = train_test_split(
+            train_set_data, train_set_region, 
+            test_size=config.get('test_size', 0.01), 
+            random_state=random_state
+        )
     else:
-        # 已经是索引格式
-        label_indices = train_region.flatten()
-
-    # 找出背景像素（标签0）
-    background_mask = (label_indices == 0)
-    valid_mask = ~background_mask
-
-    print(f"总样本数: {len(train_data)}")
-    print(f"背景像素数: {np.sum(background_mask)} ({np.sum(background_mask)/len(train_data)*100:.2f}%)")
-    print(f"有效像素数: {np.sum(valid_mask)} ({np.sum(valid_mask)/len(train_data)*100:.2f}%)")
-
-    # 过滤掉背景像素
-    train_data = train_data[valid_mask]
-    train_region = train_region[valid_mask]
-    prob_idx = prob_idx[valid_mask]  # 同时过滤患者ID
-
-    print(f"过滤后数据形状: {train_data.shape}, {train_region.shape}")
+        print(f"使用指定的患者ID分割数据集:")
+        print(f"  - 训练集患者ID: {train_patients}")
+        print(f"  - 验证集患者ID: {val_patients}")
+        print(f"  - 测试集患者ID: {test_patients}")
+        
+        # 根据患者ID分割数据
+        # 这里使用已转换为整数的prob_idx进行比较
+        train_set_idx = np.array([i for i, p in enumerate(prob_idx) if p in train_patients])
+        val_set_idx = np.array([i for i, p in enumerate(prob_idx) if p in val_patients])
+        test_set_idx = np.array([i for i, p in enumerate(prob_idx) if p in test_patients])
+        
+        # 打印分割信息
+        print(f"数据分割情况:")
+        print(f"  - 训练集样本索引数量: {len(train_set_idx)}")
+        print(f"  - 验证集样本索引数量: {len(val_set_idx)}")
+        print(f"  - 测试集样本索引数量: {len(test_set_idx)}")
+        
+        # 如果任何集合为空，发出警告
+        if len(train_set_idx) == 0:
+            print("警告: 训练集为空！请检查训练集患者ID是否正确。")
+        if len(val_set_idx) == 0:
+            print("警告: 验证集为空！请检查验证集患者ID是否正确。")
+        if len(test_set_idx) == 0:
+            print("警告: 测试集为空！请检查测试集患者ID是否正确。")
+        
+        # 提取各个数据集
+        X_train = train_data[train_set_idx, :]
+        y_train = train_region[train_set_idx, :]
+        
+        val_data = train_data[val_set_idx, :]
+        val_label = train_region[val_set_idx, :]
+        
+        X_test = train_data[test_set_idx, :]
+        y_test = train_region[test_set_idx, :]
+        
+        print(f"数据集分割完成:")
+        print(f"  - 训练集样本数: {len(X_train)}")
+        print(f"  - 验证集样本数: {len(val_data)}")
+        print(f"  - 测试集样本数: {len(X_test)}")
+        
+        # 记录为空的集合
+        if len(X_train) == 0 or len(val_data) == 0 or len(X_test) == 0:
+            print("错误：至少有一个数据集为空。请检查患者ID配置。")
+            # 可以在这里选择抛出异常或使用备选方案
+            raise ValueError("数据集分割失败：至少有一个数据集为空")
     
-    # 【第2步：在这里添加过滤后的验证】
-    validate_filtered_data(train_data, train_region, "过滤后的完整数据")
-    
-    # 🔧 修改：新的数据分割逻辑
-    print("使用新的数据分割策略:")
-    print("  - 测试集: prob_idx == 38")
-    print("  - 训练集和验证集: prob_idx != 38，按6:2随机分割")
-    
-    # 分离测试集（prob_idx == 38）
-    test_set_idx = np.where(prob_idx == 38)[0]
-    X_test = train_data[test_set_idx, :]
-    y_test = train_region[test_set_idx, :]
-    
-    # 获取非38号的数据用于训练和验证
-    train_val_set_idx = np.where(prob_idx != 38)[0]
-    train_val_data = train_data[train_val_set_idx, :]
-    train_val_region = train_region[train_val_set_idx, :]
-    
-    # 将非38号数据按6:2随机分割为训练集和验证集
-    # test_size=0.25 表示验证集占25%，即2/(6+2)=0.25
-    X_train, val_data, y_train, val_label = train_test_split(
-        train_val_data, train_val_region,
-        test_size=0.25,  # 验证集占25% (2/8)
-        random_state=random_state,
-        shuffle=True  # 确保打乱
-    )
-    
-    print(f"数据集分割完成:")
-    print(f"  - 训练集样本数: {len(X_train)} (约75%)")
-    print(f"  - 验证集样本数: {len(val_data)} (约25%)")
-    print(f"  - 测试集样本数: {len(X_test)} (prob_idx==38)")
-    
-    # 【第3步：在数据分割完成后添加验证】
-    print("\n验证分割后的数据集...")
-    validate_filtered_data(X_train, y_train, "训练集")
-    validate_filtered_data(val_data, val_label, "验证集")  
-    validate_filtered_data(X_test, y_test, "测试集")
-    
-    # 应用StandardScaler（原有逻辑保持不变）
+    # 应用StandardScaler
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
@@ -224,7 +208,7 @@ def process_train38_data(mat_file_path, config, random_state=666, scaler_save_pa
         joblib.dump(scaler, scaler_save_path)
         print(f"Scaler已保存到: {scaler_save_path}")
     
-    # 创建数据集字典（原有逻辑保持不变）
+    # 创建数据集字典
     dataset_dict = {
         'train_samples': X_train_scaled,
         'train_labels': y_train,
