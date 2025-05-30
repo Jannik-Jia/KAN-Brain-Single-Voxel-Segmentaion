@@ -24,11 +24,18 @@ CONFIG = {
     },
     
     # 方式2：MAT文件格式（如果设置了mat_file_path，将优先使用这种方式）
-    'mat_file_path': None,  # 例如: "/path/to/TRAIN38.mat"
-    'test_size': 0.01,      # 从训练集中分割出测试集的比例
-    'demo_mat_path': None,  # 用于评估的DEMO38.mat文件路径
+
+    'mat_file_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat", 
+    'test_size': 0.01,      # 从训练集中分割出测试集的比例（仅在随机划分模式下使用）
+    'demo_mat_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/DEMO38.mat",  # 用于评估的DEMO38.mat文件路径
     
-    # MAT文件的患者ID配置 - 自定义数据集分割
+    # 🔧 新增：固定测试集配置（MAT格式专用）
+    'test_prob_idx': [13, 23, 38],     # 固定测试集的prob_idx列表，例如: [13, 23, 38]
+                               # 设为None则使用原有的随机划分模式
+    'train_val_ratio': 0.75,   # 在排除测试集后，训练集在训练+验证中的比例
+                               # 0.75表示训练:验证 = 3:1 (75%:25%)
+    
+    # MAT文件的患者ID配置 - 自定义数据集分割（已废弃，建议使用test_prob_idx）
     'dataset_split': {
         'train_patients': [28, 5, 25, 30, 34, 32, 33, 11, 12, 20, 29, 17, 37, 7, 26, 1, 36, 14, 19, 3, 35, 31, 22, 8],
         'val_patients': [4, 24, 9, 15, 16, 18, 2],
@@ -108,7 +115,6 @@ def load_config(config_file=None):
     
     return config
 
-
 def _auto_detect_data_format(config):
     """
     自动检测数据格式并设置相应参数
@@ -117,6 +123,14 @@ def _auto_detect_data_format(config):
     if config.get('mat_file_path') and os.path.exists(config['mat_file_path']):
         print(f"检测到MAT文件: {config['mat_file_path']}")
         print("将使用MAT数据加载格式")
+        
+        # 🔧 新增：检查测试集划分模式
+        if config.get('test_prob_idx') is not None:
+            print(f"🎯 使用固定prob_idx测试集划分模式")
+            print(f"  测试集prob_idx: {config['test_prob_idx']}")
+            print(f"  训练/验证比例: {config.get('train_val_ratio', 0.75):.2f}/{1-config.get('train_val_ratio', 0.75):.2f}")
+        else:
+            print(f"🎲 使用随机测试集划分模式（原有方式）")
         
         # 确保MAT格式的相关配置
         if config.get('label_format') == 'auto':
@@ -132,6 +146,10 @@ def _auto_detect_data_format(config):
     ):
         print("检测到传统数据目录格式")
         print("将使用原版数据加载格式")
+        
+        # 原版格式不支持固定prob_idx，给出提示
+        if config.get('test_prob_idx') is not None:
+            print("⚠️ 警告: 原版数据格式不支持test_prob_idx配置，该配置将被忽略")
         
         # 确保原版格式的相关配置
         if config.get('label_format') == 'auto':
@@ -149,48 +167,7 @@ def _auto_detect_data_format(config):
     print('- 原始数据: 0=背景, 1-102=有效类别')
     print('- 处理后数据: 1-102=有效类别 (背景已过滤)')  
     print('- 训练时: 0-101=有效类别 (映射后)')
-    print("- 训练时: 0=背景, 1-101=有效类别 (所有类别都参与训练)")
     print("- 模型输出: 102个类别 (0-101)")
-
-# def _auto_detect_data_format(config):
-#     """
-#     自动检测数据格式并设置相应参数
-#     """
-#     # 如果设置了mat_file_path且文件存在，优先使用MAT格式
-#     if config.get('mat_file_path') and os.path.exists(config['mat_file_path']):
-#         print(f"检测到MAT文件: {config['mat_file_path']}")
-#         print("将使用MAT数据加载格式")
-        
-#         # 确保MAT格式的相关配置
-#         if config.get('label_format') == 'auto':
-#             config['label_format'] = 'mat'
-            
-#         # 两种格式都使用相同的背景标签索引
-#         config['ignore_index'] = -1  # 训练时背景标签都是-1
-        
-#     # 否则检查是否有传统的数据目录
-#     elif config.get('data_dirs') and all(
-#         config['data_dirs'].get(key) and os.path.exists(config['data_dirs'][key]) 
-#         for key in ['train_dir', 'test_dir', 'val_dir']
-#     ):
-#         print("检测到传统数据目录格式")
-#         print("将使用原版数据加载格式")
-        
-#         # 确保原版格式的相关配置
-#         if config.get('label_format') == 'auto':
-#             config['label_format'] = 'original'
-            
-#         # 设置背景标签索引
-#         config['ignore_index'] = -1  # 原版格式背景标签也是-1
-        
-#     else:
-#         print("警告: 未检测到有效的数据源配置")
-#         print("请设置 'mat_file_path' 或完整的 'data_dirs'")
-        
-#     # 补充说明标签格式
-#     print("标签格式说明:")
-#     print("- 数据中: 0=背景, 1-102=有效类别")
-#     print("- 训练时: -1=背景(忽略), 0-101=有效类别")
 
 def save_config(config, filepath):
     """
@@ -239,3 +216,135 @@ def is_original_format(config):
     检查是否使用原版格式
     """
     return get_data_format(config) == 'original'
+
+def get_data_split_mode(config):
+    """
+    🔧 新增：获取数据划分模式
+    
+    返回:
+        'fixed_test': 使用固定prob_idx测试集
+        'random': 使用随机划分
+        'legacy': 使用原有的dataset_split配置（已废弃）
+    """
+    if is_mat_format(config):
+        if config.get('test_prob_idx') is not None:
+            return 'fixed_test'
+        else:
+            return 'random'
+    else:
+        return 'legacy'
+
+def validate_config(config):
+    """
+    🔧 新增：验证配置的有效性
+    
+    参数:
+        config: 配置字典
+    
+    返回:
+        bool: 配置是否有效
+    """
+    errors = []
+    warnings = []
+    
+    # 检查基本配置
+    if not config.get('mat_file_path') and not all(config.get('data_dirs', {}).values()):
+        errors.append("必须设置 'mat_file_path' 或完整的 'data_dirs'")
+    
+    # 检查固定测试集配置
+    if config.get('test_prob_idx') is not None:
+        if not is_mat_format(config):
+            warnings.append("test_prob_idx只在MAT格式下有效，当前配置将被忽略")
+        elif not isinstance(config['test_prob_idx'], list):
+            errors.append("test_prob_idx必须是一个列表")
+        elif len(config['test_prob_idx']) == 0:
+            warnings.append("test_prob_idx是空列表，将使用随机划分模式")
+    
+    # 检查训练验证比例
+    train_val_ratio = config.get('train_val_ratio', 0.75)
+    if not 0 < train_val_ratio < 1:
+        errors.append(f"train_val_ratio必须在0和1之间，当前值: {train_val_ratio}")
+    
+    # 输出结果
+    if errors:
+        print("❌ 配置验证失败:")
+        for error in errors:
+            print(f"  - {error}")
+        return False
+    
+    if warnings:
+        print("⚠️ 配置警告:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    
+    print("✅ 配置验证通过")
+    return True
+
+# 🔧 新增：预设配置模板
+PRESET_CONFIGS = {
+    'default_fixed_test': {
+        'test_prob_idx': [13, 23, 38],
+        'train_val_ratio': 0.75,
+        'description': '默认固定测试集配置：prob_idx [13,23,38] 作为测试集，75%训练25%验证'
+    },
+    'small_test_set': {
+        'test_prob_idx': [38],
+        'train_val_ratio': 0.8,
+        'description': '小测试集配置：仅prob_idx 38作为测试集，80%训练20%验证'
+    },
+    'large_test_set': {
+        'test_prob_idx': [6, 10, 13, 21, 23, 27, 38],
+        'train_val_ratio': 0.75,
+        'description': '大测试集配置：多个prob_idx作为测试集，75%训练25%验证'
+    },
+    'random_split': {
+        'test_prob_idx': None,
+        'train_val_ratio': 0.75,
+        'description': '随机划分模式：使用原有的随机划分逻辑'
+    }
+}
+
+def apply_preset_config(config, preset_name):
+    """
+    🔧 新增：应用预设配置
+    
+    参数:
+        config: 当前配置字典
+        preset_name: 预设配置名称
+    
+    返回:
+        bool: 是否成功应用
+    """
+    if preset_name not in PRESET_CONFIGS:
+        print(f"❌ 未知的预设配置: {preset_name}")
+        print(f"可用的预设配置: {list(PRESET_CONFIGS.keys())}")
+        return False
+    
+    preset = PRESET_CONFIGS[preset_name]
+    config.update({
+        'test_prob_idx': preset['test_prob_idx'],
+        'train_val_ratio': preset['train_val_ratio']
+    })
+    
+    print(f"✅ 已应用预设配置: {preset_name}")
+    print(f"   {preset['description']}")
+    return True
+
+def print_data_split_info(config):
+    """
+    🔧 新增：打印数据划分信息
+    """
+    print("\n📊 数据划分配置信息:")
+    print(f"  数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}")
+    
+    split_mode = get_data_split_mode(config)
+    if split_mode == 'fixed_test':
+        print(f"  划分模式: 固定prob_idx测试集")
+        print(f"  测试集prob_idx: {config['test_prob_idx']}")
+        print(f"  训练/验证比例: {config.get('train_val_ratio', 0.75):.2f}/{1-config.get('train_val_ratio', 0.75):.2f}")
+    elif split_mode == 'random':
+        print(f"  划分模式: 随机划分")
+        print(f"  测试集比例: {config.get('test_size', 0.01):.2f}")
+    else:
+        print(f"  划分模式: 原版格式（使用数据目录）")
+    print()
