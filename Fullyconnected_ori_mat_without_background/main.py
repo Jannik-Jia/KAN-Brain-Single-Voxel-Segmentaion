@@ -14,7 +14,8 @@ import argparse
 import torch
 import torch.nn as nn
 import numpy as np
-
+from utils.label_processing import create_criterion_with_background_config, get_label_info_string
+from config import print_background_config_info,validate_config
 # 设置PyTorch序列化安全变量
 try:
     safe_globals = [
@@ -66,6 +67,14 @@ def parse_args():
     parser.add_argument('--apply_pca', action='store_true', help='是否应用PCA降维')
     parser.add_argument('--n_pca', type=int, default=None, help='PCA保留的主成分数量')
     
+    # 🔧 新增：背景处理参数
+    parser.add_argument('--filter_background', type=lambda x: x.lower() == 'true', default=None, 
+                        help='是否过滤背景像素 (True/False)')
+    parser.add_argument('--include_background_in_classes', type=lambda x: x.lower() == 'true', default=None,
+                        help='是否将背景作为分类类别 (True/False)')
+    parser.add_argument('--background_label_target', type=int, default=None,
+                        help='训练时的背景标签值 (-1表示ignore)')
+    
     # 模型参数
     parser.add_argument('--model_type', type=str, default=None, 
                         choices=['base_mlp', 'deep_mlp', 'residual_mlp'], 
@@ -84,6 +93,7 @@ def parse_args():
     parser.add_argument('--weight_decay', type=float, default=None, help='权重衰减')
     parser.add_argument('--optimizer', type=str, default=None, 
                         choices=['adam', 'adamw'], help='优化器')
+    parser.add_argument('--num_class', type=int, default=None, help='类别数量')  # 🔧 新增
     
     # 学习率调度参数
     parser.add_argument('--use_lr_scheduler', action='store_true', help='是否使用学习率调度')
@@ -123,15 +133,34 @@ def setup_environment(config):
 
 
 
+# 在文件顶部添加导入
+from utils.label_processing import create_criterion_with_background_config, get_label_info_string
+from config import print_background_config_info
+
+# 修改 train_and_evaluate 函数
 def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, test_loader, device):
     """训练和评估模型"""
-   
+    
+    # 🔧 新增：打印背景处理配置信息
+    print_background_config_info(config)
+    
+    # 🔧 修改：使用新的类别权重计算（考虑背景处理）
     class_weights = calculate_class_weights(
         dataset_dict['train_labels'], 
-        config['num_class']
+        config['num_class'],
+        config  
     ).to(device)
     
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # 🔧 修改：使用新的损失函数创建方法
+    criterion = create_criterion_with_background_config(config, class_weights)
+    
+    # 打印损失函数信息
+    ignore_idx = getattr(criterion, 'ignore_index', None)
+    print(f"📊 损失函数配置:")
+    print(f"  类型: CrossEntropyLoss")
+    print(f"  类别权重: {'是' if class_weights is not None else '否'}")
+    print(f"  ignore_index: {ignore_idx if ignore_idx is not None else '无'}")
+    print(f"  标签处理: {get_label_info_string(config)}")
     
     # 创建优化器
     if config['optimizer'] == 'adam':
@@ -178,7 +207,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     print("\n开始训练模型...")
     print(f"总轮数: {config['epochs']}, 批大小: {config['batch_size']}, 学习率: {config['lr']}")
     print(f"数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}")
-    print(f"类别数量: {config['num_class']} (背景已过滤)")  
+    print(f"类别数量: {config['num_class']} ({get_label_info_string(config)})")  # 🔧 修改输出信息
+    
     # 训练模型
     training_results = train_brain_voxel_mlp_multiclass(
         model=model,
@@ -197,7 +227,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         normalization_params=normalization_params
     )
     
-    # 可视化训练过程
+    # 可视化训练过程 - 保持不变
     try:
         visualize_training_curves(
             training_results,
@@ -206,7 +236,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
     except Exception as e:
         print(f"可视化训练曲线时出错: {e}")
         
-    # 获取最佳模型
+    # 获取最佳模型 - 保持不变
     try:
         best_model_path = get_best_model(
             training_results['val_f1_macro_list'],
@@ -224,7 +254,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         print(f"加载最佳模型时出错: {e}")
         print("将使用当前模型继续评估")
 
-    # 评估模型
+    # 评估模型 - 传递config参数
     print("\n使用最佳模型进行评估...")
 
     # 在训练集上评估
@@ -238,7 +268,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True
+        show_class_metrics=True,
+        config=config  # 🔧 新增：传递config参数
     )
 
     # 在验证集上评估
@@ -252,7 +283,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True
+        show_class_metrics=True,
+        config=config  # 🔧 新增：传递config参数
     )
 
     # 在测试集上评估
@@ -266,7 +298,8 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         detailed=True,
         plot=True,
         disable_progress=True,
-        show_class_metrics=True
+        show_class_metrics=True,
+        config=config  # 🔧 新增：传递config参数
     )
     
     # 保存评估结果摘要
@@ -276,7 +309,7 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         f.write("="*50 + "\n\n")
         
         f.write(f"数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}\n")
-        f.write(f"数据处理: 背景像素已在加载阶段过滤\n\n")
+        f.write(f"背景处理: {get_label_info_string(config)}\n\n")  # 🔧 新增背景处理信息
         
         f.write("训练集结果:\n")
         f.write(f"  准确率: {train_results['accuracy']:.4f}\n")
@@ -303,8 +336,12 @@ def train_and_evaluate(config, model, dataset_dict, train_loader, val_loader, te
         f.write(f"优化器: {config['optimizer']}\n")
         f.write(f"学习率: {config['lr']}\n")
         f.write(f"权重衰减: {config['weight_decay']}\n")
+        # 🔧 新增背景处理配置信息
+        f.write(f"背景处理模式: {'过滤背景' if config.get('filter_background', True) else '保留背景'}\n")
+        if not config.get('filter_background', True):
+            f.write(f"背景分类: {'是' if config.get('include_background_in_classes', False) else '否'}\n")
     
-    # 比较训练集、验证集和测试集中的类别性能
+    # 比较训练集、验证集和测试集中的类别性能 - 保持不变
     compare_results = compare_class_performance(
         results_list=[train_results, val_results, test_results],
         dataset_names=["Train", "Validation", "Test"],
@@ -527,7 +564,7 @@ def main():
         if value is not None:
             if key == 'hidden_units' and isinstance(value, str):
                 config[key] = [int(x) for x in value.split(',')]
-            elif key in config:  # 只更新配置中存在的键
+            elif key in config or key in ['filter_background', 'include_background_in_classes', 'background_label_target']:  # 🔧 新增背景参数
                 config[key] = value
             elif key in ['train_dir', 'test_dir', 'val_dir']:
                 # 处理数据目录
@@ -535,10 +572,30 @@ def main():
                     config['data_dirs'] = {}
                 config['data_dirs'][key] = value
     
+    # 🔧 新增：验证和应用背景配置
+    if not validate_config(config):
+        print("❌ 配置验证失败，请检查背景处理配置")
+        return
+    
+    # 🔧 新增：更新类别数量（如果背景作为分类类别）
+    if not config.get('filter_background', True) and config.get('include_background_in_classes', False):
+        if config.get('num_class', 102) != 103:
+            print("⚠️ 背景作为分类类别时，自动设置num_class=103")
+            config['num_class'] = 103
+    
     # 设置实验名称
     if not config.get('experiment_name'):
         data_format = 'MAT' if is_mat_format(config) else 'Original'
-        config['experiment_name'] = f"{config['model_name']}_{data_format}_{time.strftime('%Y%m%d_%H%M%S')}"
+        bg_suffix = ""
+        if not config.get('filter_background', True):
+            if config.get('include_background_in_classes', False):
+                bg_suffix = "_BGClass"
+            else:
+                bg_suffix = "_BGIgnore"
+        else:
+            bg_suffix = "_BGFilter"
+        config['experiment_name'] = f"{config['model_name']}_{data_format}{bg_suffix}_{time.strftime('%Y%m%d_%H%M%S')}"
+    
     
     # 创建保存目录
     save_dir = os.path.join(config['save_dir'], config['experiment_name'])

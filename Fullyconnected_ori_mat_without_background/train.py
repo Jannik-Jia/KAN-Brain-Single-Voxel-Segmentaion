@@ -12,14 +12,17 @@ import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import f1_score, cohen_kappa_score, balanced_accuracy_score
 import sys
+from utils.label_processing import get_ignore_index, get_label_info_string
 
+# 在文件顶部添加导入
+from utils.label_processing import get_ignore_index, get_label_info_string
 
 def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion, optimizer, device, 
                           num_epochs=100, val_epoch=1, save_path="./Results",
                           lr_scheduler=None, use_old_zipfile_serialization=True, experiment_name=None,
                           config=None, normalization_params=None):
     """
-    训练脑体素MLP多分类模型，兼容两种数据格式
+    训练脑体素MLP多分类模型，支持可配置的背景处理
     
     参数:
         model: MLP模型
@@ -48,6 +51,10 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
     # 实验名称用于区分不同实验的保存文件
     if experiment_name is None:
         experiment_name = time.strftime("%Y%m%d_%H%M%S")
+    
+    # 🔧 新增：获取背景处理信息
+    ignore_index = get_ignore_index(config) if config else None
+    label_info = get_label_info_string(config) if config else "标准处理"
     
     # 初始化统计变量
     loss_list = []
@@ -78,7 +85,8 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
         f.write(f"Total epochs: {num_epochs}, Validation frequency: {val_epoch}\n")
         f.write(f"Train samples: {train_num}, Validation samples: {val_num}\n")
         f.write(f"Batch size: {train_loader.batch_size}\n")
-        f.write(f"Data: Background pixels filtered out during loading\n\n")  # ← 新的说明
+        f.write(f"Background processing: {label_info}\n")  # 🔧 新增背景处理信息
+        f.write(f"Loss function ignore_index: {ignore_index}\n\n")  # 🔧 新增ignore信息
         f.write("Epoch,Train_Loss,Train_Acc,Train_F1,Val_Acc,Val_F1,Val_Kappa,Val_BalAcc,LR\n")
     
     # 创建CSV日志
@@ -116,13 +124,27 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                 # 累计损失和准确率
                 avg_loss += loss.item()
                 _, pred = torch.max(out, dim=1)
-                # 移除valid_mask逻辑，所有样本都参与计算
-                train_acc += (pred == target).sum().item()  # ← 简化：所有样本
-                valid_count += target.size(0)  # ← 简化：所有样本都有效
                 
-                # 收集预测和目标用于计算F1等指标
-                train_all_preds.extend(pred.cpu().numpy())  # ← 简化：所有预测
-                train_all_targets.extend(target.cpu().numpy())  # ← 简化：所有目标
+                # 🔧 修改：考虑ignore_index的准确率计算
+                if ignore_index is not None:
+                    # 只计算非ignore标签的准确率
+                    valid_mask = (target != ignore_index)
+                    if valid_mask.sum() > 0:
+                        train_acc += (pred[valid_mask] == target[valid_mask]).sum().item()
+                        valid_count += valid_mask.sum().item()
+                        
+                        # 收集有效的预测和目标
+                        train_all_preds.extend(pred[valid_mask].cpu().numpy())
+                        train_all_targets.extend(target[valid_mask].cpu().numpy())
+                else:
+                    # 所有样本都参与计算
+                    train_acc += (pred == target).sum().item()
+                    valid_count += target.size(0)
+                    
+                    # 收集预测和目标用于计算F1等指标
+                    train_all_preds.extend(pred.cpu().numpy())
+                    train_all_targets.extend(target.cpu().numpy())
+            
             # 计算本轮平均损失和准确率
             loss_list.append(avg_loss / batch_num)
             acc_list.append(train_acc / valid_count if valid_count > 0 else 0)
@@ -158,11 +180,21 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                         out = model(data)
                         _, pred = torch.max(out, dim=1)
                         
-                        # 收集所有预测（包括背景）
-                        all_preds.extend(pred.cpu().numpy())  # ← 简化：所有预测
-                        all_targets.extend(target.cpu().numpy())  # ← 简化：所有目标
-                        val_acc += (pred == target).sum().item()  # ← 简化：所有样本
-                        valid_count += target.size(0)  # ← 简化：所有样本都有效
+                        # 🔧 修改：考虑ignore_index的验证计算
+                        if ignore_index is not None:
+                            # 只计算非ignore标签
+                            valid_mask = (target != ignore_index)
+                            if valid_mask.sum() > 0:
+                                all_preds.extend(pred[valid_mask].cpu().numpy())
+                                all_targets.extend(target[valid_mask].cpu().numpy())
+                                val_acc += (pred[valid_mask] == target[valid_mask]).sum().item()
+                                valid_count += valid_mask.sum().item()
+                        else:
+                            # 所有样本都参与计算
+                            all_preds.extend(pred.cpu().numpy())
+                            all_targets.extend(target.cpu().numpy())
+                            val_acc += (pred == target).sum().item()
+                            valid_count += target.size(0)
                                 
                 # 计算全面的评估指标
                 if len(all_preds) > 0 and len(all_targets) > 0:
@@ -209,13 +241,13 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                     'lr_list': lr_list,
                     'last_epoch': e+1,
                     'train_time': time.time() - train_st,
-                    'num_classes': config.get('num_class'), # ← 可以添加这个信息
-                    'background_filtered': True  # ← 更新标志
+                    'num_classes': config.get('num_class') if config else None,
+                    'background_processed': label_info,  # 🔧 新增背景处理信息
+                    'ignore_index': ignore_index  # 🔧 新增ignore信息
                 }
                 
-                # 使用新的保存函数保存模型及其完整架构
+                # 其余保存逻辑保持不变...
                 try:
-                    # 如果没有提供配置对象，创建一个基本配置
                     if config is None:
                         config = {
                             'model_type': model.__class__.__name__,
@@ -307,4 +339,3 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
         'lr_list': lr_list,
         'last_epoch': e+1
     }
-

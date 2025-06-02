@@ -42,6 +42,13 @@ CONFIG = {
         'test_patients': [38, 6, 21, 13, 10, 23, 27]
     },
     
+
+    # 背景像素处理配置
+    'filter_background': True,          # 是否过滤背景像素（默认True保持向后兼容）
+    'background_label_original': 0,     # 原始数据中的背景标签值
+    'background_label_target': -1,      # 训练时的背景标签值（-1表示ignore，仅在filter_background=False时使用）
+    'include_background_in_classes': False,  # 是否将背景作为一个分类类别（仅在filter_background=False时使用）
+
     'apply_pca': False,  # 是否应用PCA降维
     'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
     'norm': True,        # 是否进行数据标准化
@@ -265,7 +272,10 @@ def validate_config(config):
     if not 0 < train_val_ratio < 1:
         errors.append(f"train_val_ratio必须在0和1之间，当前值: {train_val_ratio}")
     
-    # 输出结果
+    # 新增：验证背景处理配置
+    if not validate_background_config(config):
+        return False
+    
     if errors:
         print("❌ 配置验证失败:")
         for error in errors:
@@ -279,6 +289,108 @@ def validate_config(config):
     
     print("✅ 配置验证通过")
     return True
+
+
+def validate_background_config(config):
+    """
+    验证背景处理配置的有效性
+    
+    参数:
+        config: 配置字典
+    
+    返回:
+        bool: 配置是否有效
+    """
+    errors = []
+    warnings = []
+    
+    filter_bg = config.get('filter_background', True)
+    bg_target = config.get('background_label_target', -1)
+    include_bg = config.get('include_background_in_classes', False)
+    num_classes = config.get('num_class', 102)
+    
+    if filter_bg:
+        # 过滤背景模式
+        if num_classes != 102:
+            warnings.append(f"过滤背景模式下，num_class应为102，当前为{num_classes}")
+        if include_bg:
+            warnings.append("过滤背景模式下，include_background_in_classes将被忽略")
+    else:
+        # 保留背景模式
+        if include_bg:
+            # 背景作为分类类别
+            if num_classes != 103:
+                errors.append(f"包含背景分类模式下，num_class应为103，当前为{num_classes}")
+            if bg_target != 0:
+                warnings.append(f"包含背景分类模式下，background_label_target应为0，当前为{bg_target}")
+        else:
+            # 背景被忽略
+            if num_classes != 102:
+                warnings.append(f"忽略背景模式下，num_class应为102，当前为{num_classes}")
+            if bg_target != -1:
+                warnings.append(f"忽略背景模式下，background_label_target应为-1，当前为{bg_target}")
+    
+    # 输出结果
+    if errors:
+        print("❌ 背景配置验证失败:")
+        for error in errors:
+            print(f"  - {error}")
+        return False
+    
+    if warnings:
+        print("⚠️ 背景配置警告:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    
+    return True
+
+def get_effective_num_classes(config):
+    """
+    获取实际的类别数量
+    
+    返回:
+        int: 实际类别数量
+    """
+    if config.get('filter_background', True):
+        return 102  # 过滤背景：1-102 → 0-101
+    else:
+        if config.get('include_background_in_classes', False):
+            return 103  # 包含背景：0-102 → 0-102
+        else:
+            return 102  # 忽略背景：0→-1, 1-102 → 0-101
+
+def print_background_config_info(config):
+    """
+    打印背景处理配置信息
+    """
+    print("\n🎯 背景处理配置:")
+    filter_bg = config.get('filter_background', True)
+    
+    if filter_bg:
+        print("  模式: 过滤背景像素（当前默认）")
+        print("  处理: 在数据加载阶段移除background=0的样本")
+        print("  标签映射: 1-102 → 0-101")
+        print("  模型输出: 102个类别")
+        print("  损失函数: CrossEntropyLoss（无ignore_index）")
+    else:
+        include_bg = config.get('include_background_in_classes', False)
+        bg_target = config.get('background_label_target', -1)
+        
+        print("  模式: 保留背景像素")
+        if include_bg:
+            print("  处理: 背景作为第0类进行分类")
+            print("  标签映射: 0-102 → 0-102")
+            print("  模型输出: 103个类别")
+            print("  损失函数: CrossEntropyLoss（无ignore_index）")
+        else:
+            print("  处理: 背景像素在训练时被忽略")
+            print("  标签映射: 0→-1, 1-102→0-101")
+            print("  模型输出: 102个类别")
+            print("  损失函数: CrossEntropyLoss（ignore_index=-1）")
+    
+    print(f"  实际类别数: {get_effective_num_classes(config)}")
+    print()
+
 
 # 🔧 新增：预设配置模板
 PRESET_CONFIGS = {

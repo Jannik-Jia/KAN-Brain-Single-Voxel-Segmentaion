@@ -35,11 +35,36 @@ python prepare_env.py
 
 # 创建日志目录
 mkdir -p logs
-
 echo "=========================================="
 echo "脑体素分类训练脚本 - 集成版本"
 echo "支持原版格式和MAT格式数据"
+echo "支持可配置的背景处理"
 echo "=========================================="
+
+# 🔧 新增：背景处理选项
+echo "请选择背景处理模式:"
+echo "1) 过滤背景 (默认，保持向后兼容)"
+echo "2) 保留背景但忽略 (背景→ignore_index=-1)"
+echo "3) 背景作为分类类别 (103个类别)"
+read -p "请输入选择 (1/2/3, 默认1): " bg_choice
+
+case $bg_choice in
+    2)
+        echo "使用保留背景但忽略模式"
+        BG_PARAMS="--filter_background False --include_background_in_classes False --background_label_target -1"
+        EXPERIMENT_SUFFIX="_BGIgnore"
+        ;;
+    3)
+        echo "使用背景作为分类类别模式"
+        BG_PARAMS="--filter_background False --include_background_in_classes True --background_label_target 0 --num_class 103"
+        EXPERIMENT_SUFFIX="_BGClass"
+        ;;
+    *)
+        echo "使用过滤背景模式（默认）"
+        BG_PARAMS="--filter_background True"
+        EXPERIMENT_SUFFIX="_BGFilter"
+        ;;
+esac
 
 # 检查用户选择的数据格式
 echo "请选择数据格式:"
@@ -66,7 +91,7 @@ esac
 # 根据数据格式设置参数
 if [ "$DATA_FORMAT" = "original" ]; then
     # 原版格式参数
-    EXPERIMENT_NAME="BrainVoxel_MLP_Original_$(date +%Y%m%d_%H%M%S)"
+    EXPERIMENT_NAME="BrainVoxel_MLP_Original${EXPERIMENT_SUFFIX}_$(date +%Y%m%d_%H%M%S)"
     
     # 检查是否启用贝叶斯优化
     read -p "是否启用贝叶斯优化? (y/n, 默认y): " enable_bayes
@@ -98,12 +123,13 @@ if [ "$DATA_FORMAT" = "original" ]; then
         --old_serialization \
         --save_dir "./results" \
         --log_dir "./logs" \
+        $BG_PARAMS \
         $BAYES_PARAMS \
         > logs/${EXPERIMENT_NAME}.log 2>&1 &
 
 elif [ "$DATA_FORMAT" = "mat" ]; then
     # MAT格式参数
-    EXPERIMENT_NAME="BrainVoxel_MLP_MAT_$(date +%Y%m%d_%H%M%S)"
+    EXPERIMENT_NAME="BrainVoxel_MLP_MAT${EXPERIMENT_SUFFIX}_$(date +%Y%m%d_%H%M%S)"
     
     # 检查是否启用贝叶斯优化
     read -p "是否启用贝叶斯优化? (y/n, 默认y): " enable_bayes
@@ -135,12 +161,13 @@ elif [ "$DATA_FORMAT" = "mat" ]; then
         --old_serialization \
         --save_dir "./results" \
         --log_dir "./logs" \
+        $BG_PARAMS \
         $BAYES_PARAMS \
         > logs/${EXPERIMENT_NAME}.log 2>&1 &
 
 else
     # 自动检测格式
-    EXPERIMENT_NAME="BrainVoxel_MLP_Auto_$(date +%Y%m%d_%H%M%S)"
+    EXPERIMENT_NAME="BrainVoxel_MLP_Auto${EXPERIMENT_SUFFIX}_$(date +%Y%m%d_%H%M%S)"
     
     # 检查是否启用贝叶斯优化
     read -p "是否启用贝叶斯优化? (y/n, 默认y): " enable_bayes
@@ -165,6 +192,7 @@ else
         --old_serialization \
         --save_dir "./results" \
         --log_dir "./logs" \
+        $BG_PARAMS \
         $BAYES_PARAMS \
         > logs/${EXPERIMENT_NAME}.log 2>&1 &
 fi
@@ -175,6 +203,7 @@ echo "实验启动成功!"
 echo "实验名称: $EXPERIMENT_NAME"
 echo "进程ID: $PID"
 echo "数据格式: $DATA_FORMAT"
+echo "背景处理参数: $BG_PARAMS"
 echo "=========================================="
 echo ""
 echo "监控命令:"

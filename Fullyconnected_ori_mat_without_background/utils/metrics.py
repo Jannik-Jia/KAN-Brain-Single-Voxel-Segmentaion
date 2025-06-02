@@ -16,25 +16,47 @@ from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, f1_score, precision_score, 
     recall_score, cohen_kappa_score, confusion_matrix, classification_report
 )
+from utils.label_processing import get_ignore_index, get_label_info_string
 
 
 
 
-
-def calculate_class_weights(train_labels, num_classes=102):
+def calculate_class_weights(train_labels, num_classes=102, config=None):
     """
-    计算类别权重，基于过滤后的数据（标签范围1-102）
+    计算类别权重，支持可配置的背景处理
+    
+    参数:
+        train_labels: 训练标签
+        num_classes: 类别数量
+        config: 配置字典，用于确定背景处理方式
+    
+    返回:
+        torch.FloatTensor: 类别权重
     """
     # 处理one-hot编码的标签
     if len(train_labels.shape) > 1 and train_labels.shape[1] > 1:
-        labels_indices = np.argmax(train_labels, axis=1)  # 得到1-102
+        labels_indices = np.argmax(train_labels, axis=1)
     else:
         labels_indices = train_labels.flatten()
     
+    # 🔧 新增：根据配置过滤ignore标签
+    if config:
+        ignore_index = get_ignore_index(config)
+        if ignore_index is not None:
+            # 过滤掉ignore标签
+            valid_mask = (labels_indices != ignore_index)
+            labels_indices = labels_indices[valid_mask]
+            print(f"权重计算 - 过滤了 {(~valid_mask).sum()} 个ignore标签")
+    
     print(f"权重计算 - 标签范围: {np.min(labels_indices)} - {np.max(labels_indices)}")
     
-    # 统计标签1-102的分布，创建长度为103的数组，然后取[1:]切片
-    class_counts = np.bincount(labels_indices.astype(int), minlength=103)[1:]  # 跳过索引0
+    # 统计标签分布，创建足够长的数组
+    max_label = max(np.max(labels_indices), num_classes - 1)
+    class_counts = np.bincount(labels_indices.astype(int), minlength=max_label + 1)
+    
+    # 只取前num_classes个类别的计数
+    class_counts = class_counts[:num_classes]
+    
     total_samples = len(labels_indices)
     weights = np.zeros(num_classes, dtype=np.float32)
     
@@ -54,9 +76,9 @@ def calculate_class_weights(train_labels, num_classes=102):
 
 def evaluate_model(model, data_loader, device, result_path=None, dataset_name="", 
                    class_names=None, detailed=True, plot=True, disable_progress=True, 
-                   show_class_metrics=True):
+                   show_class_metrics=True, config=None):
     """
-    评估模型性能并可选生成详细报告，兼容两种数据格式
+    评估模型性能并可选生成详细报告，支持可配置的背景处理
     
     参数:
         model: 训练好的模型
@@ -69,6 +91,7 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
         plot: 是否生成可视化图表
         disable_progress: 是否禁用进度条
         show_class_metrics: 是否显示每个类别的指标
+        config: 配置字典，用于确定背景处理方式
     
     返回:
         评估结果字典
@@ -77,6 +100,10 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     all_preds = []
     all_targets = []
     all_probs = []  # 存储预测概率
+    
+    # 🔧 新增：获取背景处理信息
+    ignore_index = get_ignore_index(config) if config else None
+    label_info = get_label_info_string(config) if config else "标准处理"
     
     desc = f"评估{dataset_name}集" if dataset_name else "评估中"
     
@@ -88,9 +115,19 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             probs = torch.softmax(output, dim=1)
             _, preds = torch.max(output, 1)
             
-            all_preds.extend(preds.cpu().numpy())
-            all_targets.extend(target.cpu().numpy())
-            all_probs.extend(probs.cpu().numpy())
+            # 🔧 修改：考虑ignore_index的样本过滤
+            if ignore_index is not None:
+                # 只保留非ignore标签的样本
+                valid_mask = (target != ignore_index)
+                if valid_mask.sum() > 0:
+                    all_preds.extend(preds[valid_mask].cpu().numpy())
+                    all_targets.extend(target[valid_mask].cpu().numpy())
+                    all_probs.extend(probs[valid_mask].cpu().numpy())
+            else:
+                # 保留所有样本
+                all_preds.extend(preds.cpu().numpy())
+                all_targets.extend(target.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
     
     # 转换为numpy数组
     all_preds = np.array(all_preds)
@@ -98,7 +135,7 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     all_probs = np.array(all_probs)
     
     if len(all_preds) == 0 or len(all_targets) == 0:
-        print(f"警告: {dataset_name}集中没有样本")  # 修改警告信息
+        print(f"警告: {dataset_name}集中没有有效样本")  # 🔧 修改警告信息
         return {
             'accuracy': 0.0,
             'balanced_accuracy': 0.0,
@@ -141,6 +178,9 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     print(f"{dataset_name}集评估结果:")
     print(f"样本数量: {len(all_targets)}")
     print(f"类别数量: {class_count}")
+    print(f"背景处理: {label_info}")  # 🔧 新增背景处理信息
+    if ignore_index is not None:
+        print(f"ignore_index: {ignore_index} (已在评估中过滤)")
     print(f"准确率: {accuracy:.4f}")
     print(f"平衡准确率: {balanced_acc:.4f}")
     print(f"宏平均F1分数: {f1_macro:.4f}")
@@ -215,7 +255,11 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             f.write(f"模型在{dataset_name}集上的评估结果\n")
             f.write("="*50 + "\n\n")
             f.write(f"样本数量: {len(all_targets)}\n")
-            f.write(f"类别数量: {class_count}\n\n")
+            f.write(f"类别数量: {class_count}\n")
+            f.write(f"背景处理: {label_info}\n")  # 🔧 新增背景处理信息
+            if ignore_index is not None:
+                f.write(f"ignore_index: {ignore_index} (已过滤)\n")
+            f.write("\n")
             
             f.write("主要评估指标:\n")
             f.write(f"准确率: {accuracy:.4f}\n")
@@ -259,8 +303,11 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
             f.write(f"kappa,{kappa:.6f}\n")
             f.write(f"num_samples,{len(all_targets)}\n")
             f.write(f"num_classes,{class_count}\n")
+            f.write(f"background_processing,{label_info}\n")  # 🔧 新增背景处理信息
+            if ignore_index is not None:
+                f.write(f"ignore_index,{ignore_index}\n")
         
-        # 如果需要生成可视化
+        # 可视化部分保持不变...
         if plot and len(conf_matrix) > 0:
             try:
                 # 混淆矩阵可视化
@@ -338,6 +385,7 @@ def evaluate_model(model, data_loader, device, result_path=None, dataset_name=""
     }
     
     return result
+
 
 # 保留原版函数以确保向后兼容
 def compare_class_performance(results_list, dataset_names, result_path=None):

@@ -12,6 +12,8 @@ import optuna
 import numpy as np
 from sklearn.metrics import f1_score
 from models import get_model
+from utils.label_processing import create_criterion_with_background_config
+
 
 def create_mlp_model(trial, input_dim, num_classes, param_space=None):
     """
@@ -65,6 +67,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
     epochs = config.get('epochs', 30) if config else 30
     # 确保epochs至少为5，防止t_max参数出错
     train_epochs = max(5, min(epochs, 15))  # 贝叶斯优化时使用较少的epoch，但至少5轮
+    
     
     # ===== 共享参数空间（所有架构通用）=====
     # 这些参数对所有架构保持一致
@@ -173,9 +176,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
             threshold=threshold, verbose=True
         )
     
-    # 定义损失函数
-    # criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = create_criterion_with_background_config(config)
     
     # 训练模型 - 简化版本，只训练几个epoch用于评估
     val_f1_values = []
@@ -196,20 +197,33 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         all_preds = []
         all_targets = []
         
+        # 🔧 修改：考虑ignore_index的验证
+        from utils.label_processing import get_ignore_index
+        ignore_index = get_ignore_index(config) if config else None
+        
         with torch.no_grad():
             for data, target in data_loaders['val']:
                 data, target = data.to(device), target.to(device)
                 output = model(data)
                 _, preds = torch.max(output, 1)
-                all_preds.extend(preds.cpu().numpy())
-                all_targets.extend(target.cpu().numpy())
-                # # 只评估非背景像素
-                # valid_mask = target != -1
-                # all_preds.extend(preds[valid_mask].cpu().numpy())
-                # all_targets.extend(target[valid_mask].cpu().numpy())
+                
+                if ignore_index is not None:
+                    # 只评估非ignore标签
+                    valid_mask = (target != ignore_index)
+                    if valid_mask.sum() > 0:
+                        all_preds.extend(preds[valid_mask].cpu().numpy())
+                        all_targets.extend(target[valid_mask].cpu().numpy())
+                else:
+                    # 评估所有标签
+                    all_preds.extend(preds.cpu().numpy())
+                    all_targets.extend(target.cpu().numpy())
         
         # 计算F1分数
-        val_f1_macro = f1_score(all_targets, all_preds, average='macro')
+        if len(all_preds) > 0 and len(all_targets) > 0:
+            val_f1_macro = f1_score(all_targets, all_preds, average='macro')
+        else:
+            val_f1_macro = 0.0
+            
         val_f1_values.append(val_f1_macro)
         
         # 更新学习率调度器

@@ -13,6 +13,8 @@ import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
+from utils.label_processing import should_filter_background_samples, process_labels_for_training, get_effective_num_classes
+
 
 class BrainVoxelMatDataset(Dataset):
     def __init__(self, data, labels):
@@ -26,19 +28,10 @@ class BrainVoxelMatDataset(Dataset):
         x = self.data[idx]
         x = torch.FloatTensor(x)
         
-        if len(self.labels.shape) > 1 and self.labels.shape[1] > 1:
-            y = np.argmax(self.labels[idx])  # 得到1-102
-        else:
-            y = self.labels[idx]  # 得到1-102
-            
-        # 🔧 关键修复：标签映射 1-102 → 0-101
-        if y >= 1:  # 确保是有效标签
-            y = y - 1  # 1-102 → 0-101
-        else:
-            # 理论上不应该出现，因为背景已过滤
-            print(f"警告: 发现异常标签值 {y}")
-            y = 0
-            
+        # 标签已经在数据加载阶段处理完成，直接使用
+        y = self.labels[idx]
+        
+        # 确保是整数类型
         y = torch.LongTensor([int(y)])[0]
         return x, y
 
@@ -101,18 +94,22 @@ def validate_filtered_data(train_data, train_labels, description=""):
 
 def process_train38_data_with_fixed_test(mat_file_path, config, random_state=666, scaler_save_path=None):
     """
-    处理TRAIN38.mat数据，支持固定prob_idx测试集划分
+    处理TRAIN38.mat数据，支持固定prob_idx测试集划分和可配置的背景处理
     
     参数:
         mat_file_path: .mat文件路径
-        config: 配置字典，应包含'test_prob_idx'列表
+        config: 配置字典，应包含'test_prob_idx'列表和背景处理配置
         random_state: 随机种子
         scaler_save_path: scaler保存路径
     
     返回:
         dataset_dict: 包含训练、验证、测试数据的字典
     """
-    print("🔄 处理TRAIN38.mat数据（固定prob_idx测试集划分）...")
+    print("🔄 处理TRAIN38.mat数据（固定prob_idx测试集划分，可配置背景处理）...")
+    
+    # 获取背景处理配置
+    from utils.label_processing import should_filter_background_samples
+    filter_background = should_filter_background_samples(config)
     
     # 🔧 从配置中读取测试集prob_idx列表
     test_prob_idx = config.get('test_prob_idx', [13, 23, 38])
@@ -121,6 +118,7 @@ def process_train38_data_with_fixed_test(mat_file_path, config, random_state=666
     print(f"📋 配置参数:")
     print(f"  测试集prob_idx: {test_prob_idx}")
     print(f"  训练/验证比例: {train_val_ratio:.2f}/{1-train_val_ratio:.2f}")
+    print(f"  背景处理模式: {'过滤背景' if filter_background else '保留背景'}")
     
     # 🔧 第1步：加载数据
     arrays = load_mat_data(mat_file_path)
@@ -132,32 +130,39 @@ def process_train38_data_with_fixed_test(mat_file_path, config, random_state=666
     print(f"prob_idx范围: {prob_idx.min()} - {prob_idx.max()}")
     print(f"prob_idx唯一值: {sorted(np.unique(prob_idx))}")
     
-    # 🔧 第2步：过滤背景像素（label=0）
-    print("\n🔍 过滤背景像素...")
-    if len(train_region.shape) > 1 and train_region.shape[1] > 1:
-        # one-hot格式，获取标签索引
-        label_indices = np.argmax(train_region, axis=1)
+    # 🔧 第2步：根据配置决定是否过滤背景像素
+    if filter_background:
+        print("\n🔍 过滤背景像素...")
+        if len(train_region.shape) > 1 and train_region.shape[1] > 1:
+            # one-hot格式，获取标签索引
+            label_indices = np.argmax(train_region, axis=1)
+        else:
+            # 已经是索引格式
+            label_indices = train_region.flatten()
+
+        # 找出背景像素（标签0）
+        background_mask = (label_indices == 0)
+        valid_mask = ~background_mask
+
+        print(f"总样本数: {len(train_data)}")
+        print(f"背景像素数: {np.sum(background_mask)} ({np.sum(background_mask)/len(train_data)*100:.2f}%)")
+        print(f"有效像素数: {np.sum(valid_mask)} ({np.sum(valid_mask)/len(train_data)*100:.2f}%)")
+
+        # 过滤掉背景像素
+        train_data = train_data[valid_mask]
+        train_region = train_region[valid_mask]
+        prob_idx = prob_idx[valid_mask]
+
+        print(f"过滤后数据形状: data={train_data.shape}, region={train_region.shape}, prob_idx={prob_idx.shape}")
+        
+        # 🔧 第3步：验证过滤后的数据
+        validate_filtered_data(train_data, train_region, "过滤背景后的完整数据")
     else:
-        # 已经是索引格式
-        label_indices = train_region.flatten()
-
-    # 找出背景像素（标签0）
-    background_mask = (label_indices == 0)
-    valid_mask = ~background_mask
-
-    print(f"总样本数: {len(train_data)}")
-    print(f"背景像素数: {np.sum(background_mask)} ({np.sum(background_mask)/len(train_data)*100:.2f}%)")
-    print(f"有效像素数: {np.sum(valid_mask)} ({np.sum(valid_mask)/len(train_data)*100:.2f}%)")
-
-    # 过滤掉背景像素
-    train_data = train_data[valid_mask]
-    train_region = train_region[valid_mask]
-    prob_idx = prob_idx[valid_mask]
-
-    print(f"过滤后数据形状: data={train_data.shape}, region={train_region.shape}, prob_idx={prob_idx.shape}")
-    
-    # 🔧 第3步：验证过滤后的数据
-    validate_filtered_data(train_data, train_region, "过滤背景后的完整数据")
+        print("\n📋 保留背景像素，所有样本参与训练")
+        print(f"保留数据形状: data={train_data.shape}, region={train_region.shape}, prob_idx={prob_idx.shape}")
+        
+        # 🔧 第3步：验证保留背景的数据
+        validate_filtered_data(train_data, train_region, "包含背景的完整数据")
     
     # 🔧 第4步：按固定prob_idx划分测试集
     print(f"\n📊 按固定prob_idx划分数据集...")
@@ -234,21 +239,58 @@ def process_train38_data_with_fixed_test(mat_file_path, config, random_state=666
         joblib.dump(scaler, scaler_save_path)
         print(f"✅ Scaler已保存到: {scaler_save_path}")
     
-    # 🔧 第9步：创建数据集字典
+    # 🔧 第9步：处理标签格式（新增）
+    print(f"\n🏷️ 处理标签格式...")
+    
+    # 使用统一的标签处理函数
+    from utils.label_processing import process_labels_for_training, get_effective_num_classes
+    
+    # 处理标签 - 注意这里传入的是原始标签（未scaled的）
+    processed_train_labels = process_labels_for_training(y_train, config)
+    processed_val_labels = process_labels_for_training(y_val, config)
+    processed_test_labels = process_labels_for_training(y_test, config)
+    
+    # 获取实际类别数量
+    effective_num_classes = get_effective_num_classes(config)
+    
+    print(f"标签处理完成:")
+    print(f"  训练集标签范围: {processed_train_labels.min()} - {processed_train_labels.max()}")
+    print(f"  验证集标签范围: {processed_val_labels.min()} - {processed_val_labels.max()}")
+    print(f"  测试集标签范围: {processed_test_labels.min()} - {processed_test_labels.max()}")
+    print(f"  实际类别数量: {effective_num_classes}")
+    
+    # 检查是否有ignore标签
+    ignore_count_train = np.sum(processed_train_labels == -1) if not filter_background else 0
+    ignore_count_val = np.sum(processed_val_labels == -1) if not filter_background else 0
+    ignore_count_test = np.sum(processed_test_labels == -1) if not filter_background else 0
+    
+    if not filter_background:
+        print(f"  训练集忽略样本数: {ignore_count_train}")
+        print(f"  验证集忽略样本数: {ignore_count_val}")
+        print(f"  测试集忽略样本数: {ignore_count_test}")
+    
+    # 🔧 第10步：创建数据集字典（保留所有原有功能）
     dataset_dict = {
         'train_samples': X_train_scaled,
-        'train_labels': y_train,
+        'train_labels': processed_train_labels,  # 使用处理后的标签
         'val_samples': X_val_scaled,  # 注意：这里是验证集，不是测试集
-        'val_labels': y_val,
+        'val_labels': processed_val_labels,      # 使用处理后的标签
         'test_samples': X_test_scaled,
-        'test_labels': y_test,
+        'test_labels': processed_test_labels,    # 使用处理后的标签
         'feature_dim': X_train.shape[1],
         'scaler': scaler,
-        'num_classes': y_train.shape[1] if len(y_train.shape) > 1 else len(np.unique(y_train)),
-        # 额外信息
+        'num_classes': effective_num_classes,    # 使用实际类别数（原来是这样计算的，现在改为配置驱动）
+        # 额外信息（保留所有原有信息）
         'test_prob_idx_used': test_prob_idx,
         'test_prob_idx_actual': sorted(np.unique(test_prob_idx_actual)),
-        'train_val_prob_idx': sorted(np.unique(train_val_prob_idx))
+        'train_val_prob_idx': sorted(np.unique(train_val_prob_idx)),
+        # 新增：背景处理信息
+        'background_filtered': filter_background,
+        'background_config': {
+            'filter_background': config.get('filter_background', True),
+            'include_background_in_classes': config.get('include_background_in_classes', False),
+            'background_label_target': config.get('background_label_target', -1)
+        }
     }
     
     print(f"\n✅ 数据处理完成！")
@@ -256,6 +298,7 @@ def process_train38_data_with_fixed_test(mat_file_path, config, random_state=666
     print(f"  类别数量: {dataset_dict['num_classes']}")
     print(f"  测试集使用的prob_idx: {dataset_dict['test_prob_idx_used']}")
     print(f"  测试集实际包含的prob_idx: {dataset_dict['test_prob_idx_actual']}")
+    print(f"  背景处理模式: {'过滤背景' if filter_background else '保留背景'}")
     
     return dataset_dict
 

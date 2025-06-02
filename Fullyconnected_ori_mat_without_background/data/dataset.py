@@ -15,22 +15,16 @@ import matplotlib.pyplot as plt
 from .samplers import BrainVoxelSampler
 
 class BrainVoxelDataset(Dataset):
-    """
-    脑体素数据集类，兼容多种标签格式
-    """
-    def __init__(self, data, labels, label_format='original'):
+    def __init__(self, data, labels, label_format='original', config=None):
         """
         初始化数据集
-        
-        参数:
-            data: 特征数据，形状为(n_samples, feature_dim)
-            labels: 标签数据，可以是索引形式或one-hot编码
-            label_format: 'original' (1-102, 背景-1) 或 'mat' (0-101, 背景0)
         """
         super(BrainVoxelDataset, self).__init__()
         self.data = data
         self.labels = labels
         self.label_format = label_format
+        self.config = config
+        
         
     def __len__(self):
         return len(self.data)
@@ -39,25 +33,27 @@ class BrainVoxelDataset(Dataset):
         x = self.data[idx]
         x = torch.FloatTensor(x)
         
-        # 处理标签
-        if len(self.labels.shape) > 1 and self.labels.shape[1] > 1:
-            # one-hot编码，转换为索引
-            y = np.argmax(self.labels[idx])
-        else:
-            # 已经是索引形式
+        # 🔧 修改：使用配置或原有逻辑
+        if self.config:
+            # 标签已经在数据加载阶段处理完成，直接使用
             y = self.labels[idx]
-        
-        # 稀疏映射：1-102 -> 0-101
-        # 由于已经在加载阶段过滤了背景(标签0)，这里只处理1-102的映射
-        if y >= 1:
-            y = y - 1  # 1-102 -> 0-101
         else:
-            # 理论上不应该出现，但添加保护
-            print(f"警告: 发现异常标签值 {y}")
-            y = 0
+            # 原有的标签处理逻辑
+            if len(self.labels.shape) > 1 and self.labels.shape[1] > 1:
+                y = np.argmax(self.labels[idx])
+            else:
+                y = self.labels[idx]
             
+            if y >= 1:
+                y = y - 1
+            else:
+                print(f"警告: 发现异常标签值 {y}")
+                y = 0
+                
         y = torch.LongTensor([int(y)])[0]
         return x, y
+    
+    
 # 保留原版函数，确保向后兼容
 def apply_pca(X, num_components=15, norm=True, pca_model=None):
     """
