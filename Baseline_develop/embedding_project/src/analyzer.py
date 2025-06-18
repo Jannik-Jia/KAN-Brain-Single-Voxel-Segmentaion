@@ -75,37 +75,52 @@ class BrainAwareSubjectEmbeddingAnalyzer:
 
 
     def _initialize_deep_network_components(self):
-        """初始化深度网络组件"""
+        """初始化深度网络组件 - 🔥 严格按照alex版本的超参数"""
         
         # 设置PyTorch设备
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"🔥 深度网络将使用设备: {self.device}")
         
-        # 设置随机种子确保可重现性
+        # 🔥 严格按照alex版本设置随机种子确保可重现性
         torch.manual_seed(42)
+        torch.cuda.manual_seed(42)
+        np.random.seed(42)
         if torch.cuda.is_available():
-            torch.cuda.manual_seed(42)
             torch.cuda.manual_seed_all(42)
+        torch.backends.cudnn.deterministic = True  # 🔥 补充：确定性设置
+        torch.backends.cudnn.benchmark = False     # 🔥 补充：禁用benchmark
         
         # 深度网络缓存
         self.deep_network_cache = {}
+        
+        # 🔥 alex版本的严格超参数配置
+        self.alex_hyperparams = {
+            'batch_size': 128,        # 🔥 严格按照alex版本
+            'no_epochs': 25,          # 🔥 严格按照alex版本  
+            'learning_rate': 0.00001, # 🔥 严格按照alex版本
+            'weight_decay': 0.00001,  # 🔥 L2正则化权重
+            'dropout_rate': 0.5       # 🔥 严格按照alex版本
+        }
+        
+        logger.info(f"🔥 alex版本超参数已加载: {self.alex_hyperparams}")
 
     def _create_deep_network(self, input_dim=341, num_classes=None):
-        """创建4×4096深度网络 (完全基于你的alex torch版本)"""
+        """创建4×4096深度网络 - 🔥 严格对应alex版本架构"""
         
         class RegModel(nn.Module):
             def __init__(self, input_dim=341, num_classes=102):
                 super(RegModel, self).__init__()
-                # 严格对应你的TensorFlow版本的Dense层
+                # 🔥 严格对应alex的TensorFlow版本的Dense层
                 self.fc1 = nn.Linear(input_dim, 4096)
                 self.fc2 = nn.Linear(4096, 4096) 
                 self.fc3 = nn.Linear(4096, 4096)
                 self.fc4 = nn.Linear(4096, 4096)
                 self.fc5 = nn.Linear(4096, num_classes)  # visualized_layer对应的层
-                self.dropout = nn.Dropout(0.5)
+                # 🔥 严格使用alex版本的dropout率
+                self.dropout = nn.Dropout(0.5)  # alex版本的dropout率
                 
             def forward(self, x):
-                # 严格按照你的TensorFlow模型的结构
+                # 🔥 严格按照alex的TensorFlow模型的结构
                 x = self.dropout(F.relu(self.fc1(x)))
                 x = self.dropout(F.relu(self.fc2(x)))
                 x = self.dropout(F.relu(self.fc3(x)))
@@ -121,10 +136,10 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 else:
                     num_classes = len(np.unique(self.data['y_train']))
             else:
-                num_classes = 102  # 默认值
+                num_classes = 102  # alex版本的默认值
         
         model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
-        logger.info(f"    🏗️ 创建4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
+        logger.info(f"    🏗️ 创建alex版4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
         
         return model
 
@@ -155,19 +170,27 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             return TensorDataset(X_tensor)
 
     def _create_deep_classifier_wrapper(self, network_config=None):
-        """创建深度网络的sklearn兼容包装器"""
+        """创建深度网络的sklearn兼容包装器 - 🔥 严格使用alex超参数"""
         
         class DeepNetworkWrapper:
             def __init__(self, analyzer_instance, config=None):
                 self.analyzer = analyzer_instance
-                self.config = config or {}
+                # 🔥 严格使用alex版本超参数，只在特殊情况下允许覆盖
+                self.config = self.analyzer.alex_hyperparams.copy()
+                
+                # 只允许在特殊情况下覆盖（如LOSO时数据较少）
+                if config:
+                    logger.info(f"    ⚠️ 覆盖alex默认超参数: {config}")
+                    self.config.update(config)
+                
                 self.network = None
                 self.trained = False
                 self.training_history = {'loss': [], 'accuracy': []}
                 
             def fit(self, X, y):
-                """训练深度网络 (完全按照你的alex版本)"""
-                logger.info("    🔥 开始训练4×4096深度网络...")
+                """训练深度网络 - 🔥 完全按照alex版本的训练流程"""
+                logger.info("    🔥 开始训练4×4096深度网络 (alex版本超参数)...")
+                logger.info(f"    📊 使用超参数: {self.config}")
                 start_time = time.time()
                 
                 # 确定类别数
@@ -187,15 +210,19 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 
                 # 数据准备
                 train_dataset = self.analyzer._prepare_torch_dataset(X, y)
-                batch_size = self.config.get('batch_size', 128)
+                # 🔥 严格使用alex的batch_size
+                batch_size = self.config['batch_size']
                 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
                 
-                # 训练配置 (严格对应你的配置)
-                optimizer = torch.optim.Adam(self.network.parameters(), lr=0.00001)  # 你的学习率
+                # 🔥 训练配置严格对应alex版本
+                optimizer = torch.optim.Adam(
+                    self.network.parameters(), 
+                    lr=self.config['learning_rate']  # 🔥 alex的学习率
+                )
                 criterion = nn.CrossEntropyLoss()
-                no_epochs = self.config.get('epochs', 25)  # 你的默认epoch数
+                no_epochs = self.config['no_epochs']  # 🔥 alex的epoch数
                 
-                # 训练循环 (完全模拟你的训练过程)
+                # 🔥 训练循环完全模拟alex的训练过程
                 self.network.train()
                 for epoch in range(no_epochs):
                     epoch_loss = 0
@@ -207,11 +234,14 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                         
                         output = self.network(batch_x)
                         
-                        # 计算基础损失
+                        # 🔥 计算基础损失
                         base_loss = criterion(output, batch_y)
                         
-                        # 添加L2正则化 (完全按照你的方法)
-                        l2_reg = self.analyzer._kernel_l2_regularization(self.network, weight_decay=0.00001)
+                        # 🔥 添加L2正则化 (严格按照alex的kernel_l2_regularization)
+                        l2_reg = self.analyzer._kernel_l2_regularization(
+                            self.network, 
+                            weight_decay=self.config['weight_decay']  # 🔥 alex的权重衰减
+                        )
                         total_loss = base_loss + l2_reg
                         
                         total_loss.backward()
@@ -219,31 +249,34 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                         
                         epoch_loss += total_loss.item()
                         
-                        # 计算训练准确率
+                        # 🔥 计算训练准确率
                         _, predicted = torch.max(output.data, 1)
                         total_train += batch_y.size(0)
                         correct_train += (predicted == batch_y).sum().item()
                     
-                    # 记录历史
+                    # 🔥 记录历史 (对应alex的history)
                     avg_loss = epoch_loss / len(train_loader)
                     train_accuracy = correct_train / total_train
                     self.training_history['loss'].append(avg_loss)
                     self.training_history['accuracy'].append(train_accuracy)
                     
+                    # 🔥 按alex版本的输出频率
                     if epoch % 5 == 0:
                         logger.info(f"      Epoch {epoch}/{no_epochs}, Loss: {avg_loss:.4f}, Acc: {train_accuracy:.3f}")
                 
                 self.trained = True
                 train_time = time.time() - start_time
                 logger.info(f"    ✅ 深度网络训练完成，耗时: {train_time/60:.1f}分钟")
+                logger.info(f"    📊 最终训练准确率: {self.training_history['accuracy'][-1]:.3f}")
                 
             def predict(self, X):
-                """预测"""
+                """预测 - 🔥 对应alex版本的model.predict"""
                 if not self.trained:
                     raise ValueError("模型尚未训练")
                 
                 self.network.eval()
                 test_dataset = self.analyzer._prepare_torch_dataset(X, None, train_mode=False)
+                # 🔥 预测时可以用更大的batch_size提高效率
                 test_loader = DataLoader(test_dataset, batch_size=512, shuffle=False)
                 
                 predictions = []
@@ -256,7 +289,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 return np.array(predictions)
                 
             def predict_proba(self, X):
-                """预测概率"""
+                """预测概率 - 🔥 对应alex版本的softmax输出"""
                 if not self.trained:
                     raise ValueError("模型尚未训练")
                 
@@ -268,6 +301,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 with torch.no_grad():
                     for batch_x, in test_loader:
                         outputs = self.network(batch_x)
+                        # 🔥 alex版本在预测时会手动应用softmax
                         probs = F.softmax(outputs, dim=1)
                         probabilities.extend(probs.cpu().numpy())
                 
@@ -1560,11 +1594,8 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 min_samples_split=2, random_state=42),
             'simple_lr': LogisticRegression(
                 max_iter=1000, C=0.1, random_state=42),
-            # 🔥 新增：你的4×4096深度网络
-            'deep_4x4096': self._create_deep_classifier_wrapper({
-                'batch_size': 128,
-                'epochs': 25  # 可以根据数据量调整
-            })
+            # 🔥 严格使用alex超参数，不允许覆盖
+            'deep_4x4096': self._create_deep_classifier_wrapper()  # 使用默认alex超参数
         }
         
         results = {
@@ -1819,9 +1850,10 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 'type': 'traditional'
             },
             'Deep4x4096': {
+                # 🔥 LOSO时只适度调整batch_size，保持其他alex超参数
                 'creator': lambda: self._create_deep_classifier_wrapper({
-                    'batch_size': 64,   # LOSO时数据较少，用小batch
-                    'epochs': 15        # 较少epoch避免过拟合
+                    'batch_size': 64  # 🔥 LOSO时数据较少，只调整batch_size
+                    # epochs和learning_rate保持alex默认值25和0.00001
                 }),
                 'type': 'deep_network'
             }
@@ -2018,7 +2050,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                     if model_info['type'] == 'deep_network':
                         clf_region = self._create_deep_classifier_wrapper({
                             'batch_size': 32,  # 分脑区数据更少，用更小batch
-                            'epochs': 10       # 更少epoch
+                            'epochs': 20       # 更少epoch
                         })
                     else:
                         clf_region = model_info['creator']()
