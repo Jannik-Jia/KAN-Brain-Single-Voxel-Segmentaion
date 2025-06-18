@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 脑区感知Subject Embedding分析启动脚本 - 增强版
+# 脑区感知Subject Embedding分析启动脚本 - 修复版
 # 🔥 新增功能：存档点管理、交互式恢复、智能重启
 
 # 🔥 改进：更严格的错误处理
@@ -137,23 +137,7 @@ show_help() {
     
     # 强制重新开始
     $0 --force-restart
-    
-    # 创建存档点后退出
-    $0 --checkpoint-and-exit debug_point
 
-基础使用示例:
-    # 使用默认参数运行（带交互式恢复）
-    $0 --interactive-recovery
-    
-    # 指定数据路径和输出目录
-    $0 -d /path/to/data.mat -o /path/to/output --interactive-recovery
-    
-    # 使用特定conda环境
-    $0 -e tabnet10 --resume-latest
-
-环境变量:
-    CUDA_VISIBLE_DEVICES        指定GPU设备 (例如: export CUDA_VISIBLE_DEVICES=0)
-    
 EOF
 }
 
@@ -496,7 +480,7 @@ if command -v nvidia-smi &> /dev/null; then
     while IFS=, read -r index name total used; do
         echo "  GPU $index: $name (${used}MB/${total}MB)"
     done
-else:
+else
     print_warning "未检测到NVIDIA GPU，将使用CPU进行计算"
 fi
 
@@ -567,19 +551,19 @@ print_info "PID文件: $PID_FILE"
 # 🔥 新增：存档点状态显示
 if [[ "$DISABLE_CHECKPOINTS" != true ]]; then
     print_checkpoint "存档点状态检查..."
-    local checkpoint_dir="$OUTPUT_DIR/checkpoints"
+    checkpoint_dir="$OUTPUT_DIR/checkpoints"
     if [[ -d "$checkpoint_dir" ]]; then
-        local checkpoint_count=$(find "$checkpoint_dir" -name "*.ckpt" -type f 2>/dev/null | wc -l)
+        checkpoint_count=$(find "$checkpoint_dir" -name "*.ckpt" -type f 2>/dev/null | wc -l)
         if [[ $checkpoint_count -gt 0 ]]; then
             print_checkpoint "发现 $checkpoint_count 个存档点"
             
             # 显示最新的几个存档点
-            local recent_checkpoints=($(find "$checkpoint_dir" -name "*.ckpt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -3 | cut -d' ' -f2-))
+            recent_checkpoints=($(find "$checkpoint_dir" -name "*.ckpt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -3 | cut -d' ' -f2-))
             if [[ ${#recent_checkpoints[@]} -gt 0 ]]; then
                 print_checkpoint "最近的存档点:"
                 for ckpt_path in "${recent_checkpoints[@]}"; do
-                    local ckpt_name=$(basename "$ckpt_path")
-                    local ckpt_date=$(stat -c %y "$ckpt_path" 2>/dev/null | cut -d'.' -f1 || echo "Unknown")
+                    ckpt_name=$(basename "$ckpt_path")
+                    ckpt_date=$(stat -c %y "$ckpt_path" 2>/dev/null | cut -d'.' -f1 || echo "Unknown")
                     echo "  • $ckpt_name ($ckpt_date)"
                 done
             fi

@@ -158,6 +158,9 @@ def handle_checkpoint_operations(args, analyzer=None):
 def create_analyzer_with_recovery(args, output_dir):
     """创建分析器并处理恢复逻辑"""
     
+    # 获取logger实例
+    logger = logging.getLogger(__name__)
+    
     # 创建分析器
     enable_checkpoints = not args.disable_checkpoints
     analyzer = BrainAwareSubjectEmbeddingAnalyzer(
@@ -226,6 +229,8 @@ def create_analyzer_with_recovery(args, output_dir):
 
 def determine_skip_phases(recovered_checkpoint_info, analyzer):
     """根据恢复的存档点确定要跳过的阶段"""
+    logger = logging.getLogger(__name__)  # 获取logger实例
+    
     if not recovered_checkpoint_info or not analyzer.checkpoint_manager:
         return []
     
