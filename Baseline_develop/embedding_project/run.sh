@@ -530,7 +530,7 @@ if [[ -n "$RESUME_FROM" ]]; then
     PYTHON_ARGS+=("--resume_from" "$RESUME_FROM")
     
     # 检查指定的存档点是否存在
-    local checkpoint_path="$OUTPUT_DIR/checkpoints/$RESUME_FROM"
+    checkpoint_path="$OUTPUT_DIR/checkpoints/$RESUME_FROM"
     if [[ ! "$RESUME_FROM" == *".ckpt" ]]; then
         checkpoint_path="$OUTPUT_DIR/checkpoints/${RESUME_FROM}.ckpt"
     fi
