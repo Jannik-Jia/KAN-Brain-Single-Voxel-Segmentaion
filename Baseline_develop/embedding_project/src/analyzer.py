@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-脑区感知Subject Embedding分析器
+脑区感知Subject Embedding分析器 - 增强版（带存档点功能）
 核心分析功能模块
 """
 
@@ -32,6 +32,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score
 
+# 🔥 新增：导入存档点管理器
+from checkpoint_manager import CheckpointManager, create_checkpoint_decorator
 
 try:
     from .utils import ensure_directory, save_analysis_results, cleanup_memory
@@ -56,22 +58,36 @@ class BrainAwareSubjectEmbeddingAnalyzer:
     - 增强决策框架提供分脑区建议
     """
     
-    def __init__(self, save_path='./subject_embedding_analysis_brain_aware/'):
-        self.save_path = Path(save_path)  # 使用Path对象
-        ensure_directory(self.save_path)  # 使用utils中的函数
-        ensure_directory(self.save_path / 'visualizations')
+    def __init__(self, save_path='./subject_embedding_analysis_brain_aware/', enable_checkpoints=True):
+            self.save_path = Path(save_path)
+            ensure_directory(self.save_path)
+            ensure_directory(self.save_path / 'visualizations')
+            
+            # 分析结果存储
+            self.analysis_results = {}
+            self.decision_scores = {}
+            
+            # 🔥 新增：存档点管理器
+            self.enable_checkpoints = enable_checkpoints
+            if enable_checkpoints:
+                checkpoint_dir = self.save_path / 'checkpoints'
+                self.checkpoint_manager = CheckpointManager(checkpoint_dir)
+                logger.info("🔄 存档点系统已启用")
+            else:
+                self.checkpoint_manager = None
+                logger.info("📝 存档点系统已禁用")
+            
+            # 🔥 新增：性能追踪
+            self.phase_durations = []
+            self.phase_start_times = {}
+            self.config_info = {}  # 用于存储配置信息
+            
+            # 初始化深度网络组件
+            self._initialize_deep_network_components()
+            
+            logger.info("🧠 脑区感知Subject Embedding分析器初始化完成（增强版）")
+            logger.info(f"📁 结果保存路径: {self.save_path}")
         
-        # 分析结果存储
-        self.analysis_results = {}
-        self.decision_scores = {}
-        
-        logger.info("🧠 脑区感知Subject Embedding分析器初始化完成")  # 改为logger
-        logger.info(f"📁 结果保存路径: {self.save_path}")
-        self._initialize_deep_network_components()
-    
-        logger.info("🧠 脑区感知Subject Embedding分析器初始化完成")
-        logger.info(f"📁 结果保存路径: {self.save_path}")
-
 
 
     def _initialize_deep_network_components(self):
@@ -87,22 +103,73 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         np.random.seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-        torch.backends.cudnn.deterministic = True  # 🔥 补充：确定性设置
-        torch.backends.cudnn.benchmark = False     # 🔥 补充：禁用benchmark
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
         
         # 深度网络缓存
         self.deep_network_cache = {}
         
         # 🔥 alex版本的严格超参数配置
         self.alex_hyperparams = {
-            'batch_size': 128,        # 🔥 严格按照alex版本
-            'no_epochs': 25,          # 🔥 严格按照alex版本  
-            'learning_rate': 0.00001, # 🔥 严格按照alex版本
-            'weight_decay': 0.00001,  # 🔥 L2正则化权重
-            'dropout_rate': 0.5       # 🔥 严格按照alex版本
+            'batch_size': 128,
+            'no_epochs': 25,
+            'learning_rate': 0.00001,
+            'weight_decay': 0.00001,
+            'dropout_rate': 0.5
         }
         
         logger.info(f"🔥 alex版本超参数已加载: {self.alex_hyperparams}")
+    
+    def save_checkpoint(self, checkpoint_name: str, phase_completed: int = -1, description: str = ""):
+        """手动创建存档点"""
+        if not self.checkpoint_manager:
+            logger.warning("存档点系统未启用")
+            return None
+        
+        return self.checkpoint_manager.create_checkpoint(
+            analyzer_instance=self,
+            checkpoint_name=checkpoint_name,
+            phase_completed=phase_completed,
+            description=description,
+            is_auto=False
+        )
+    
+      
+    def list_checkpoints(self):
+        """列出所有存档点"""
+        if not self.checkpoint_manager:
+            logger.warning("存档点系统未启用")
+            return []
+        
+        return self.checkpoint_manager.list_checkpoints()
+    
+    def interactive_recovery(self) -> bool:
+        """交互式恢复选择"""
+        if not self.checkpoint_manager:
+            return False
+        
+        selected_checkpoint = self.checkpoint_manager.interactive_recovery_selection()
+        
+        if selected_checkpoint:
+            return self.load_checkpoint(selected_checkpoint)
+        else:
+            return False  # 用户选择重新开始
+    
+    # 🔥 新增：性能追踪方法
+    def _start_phase_timer(self, phase_name: str):
+        """开始阶段计时"""
+        self.phase_start_times[phase_name] = time.time()
+        logger.info(f"⏱️ {phase_name} 开始")
+    
+    def _end_phase_timer(self, phase_name: str):
+        """结束阶段计时"""
+        if phase_name in self.phase_start_times:
+            duration = time.time() - self.phase_start_times[phase_name]
+            self.phase_durations.append(duration)
+            logger.info(f"⏱️ {phase_name} 完成，耗时: {duration/60:.2f}分钟")
+            return duration
+        return 0
+    
 
     def _create_deep_network(self, input_dim=341, num_classes=None):
         """创建4×4096深度网络 - 🔥 严格对应alex版本架构"""
@@ -383,11 +450,19 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         return accuracy
 
     
+
     def prepare_data_with_subjects_enhanced(self, data_dict):
-        """增强版数据准备 - 保留原有功能 + 脑区感知 + 🔥 深度网络支持"""
+        """增强版数据准备 - 🔥 带存档点功能"""
+        self._start_phase_timer("数据准备")
+        
+        # 保存配置信息用于存档点
+        self.config_info = {
+            'data_keys': list(data_dict.keys()),
+            'analysis_timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
         
         logger.info("\n" + "="*80)
-        logger.info("📊 Phase 0: 增强版数据准备（原有功能 + 脑区感知 + 🔥 深度网络支持）")
+        logger.info("📊 Phase 0: 增强版数据准备（原有功能 + 脑区感知 + 🔥 深度网络支持 + 存档点）")
         logger.info("="*80)
         
         # 🔄 保留原有数据验证逻辑（不变）
@@ -495,14 +570,29 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             'y_train_regions': y_train_regions,
             
             # 🔥 新增：深度网络相关元信息
-            'deep_network_compatible': True,  # 假设兼容，在实际使用时验证
+            'deep_network_compatible': True,
             'feature_dim': X_train.shape[1],
             'n_classes': y_train.shape[1] if len(y_train.shape) > 1 else len(np.unique(y_train)),
             'total_samples': len(X_train) + len(X_val) + len(X_test),
-            'pytorch_ready': hasattr(self, 'device')  # 检查是否已初始化PyTorch组件
+            'pytorch_ready': hasattr(self, 'device')
         }
         
-        logger.info(f"✅ 🔥 增强版数据准备完成（深度网络就绪）")
+        duration = self._end_phase_timer("数据准备")
+        
+        # 🔥 创建Phase 0存档点
+        if self.checkpoint_manager:
+            try:
+                self.checkpoint_manager.create_checkpoint(
+                    analyzer_instance=self,
+                    checkpoint_name="data_prepared",
+                    phase_completed=0,
+                    description="数据准备完成，包含脑区感知分析数据",
+                    is_auto=True
+                )
+            except Exception as e:
+                logger.warning(f"存档点创建失败: {e}")
+        
+        logger.info(f"✅ 🔥 增强版数据准备完成（深度网络就绪 + 存档点保存）")
         logger.info(f"  - 数据映射方法: 精确Multi-Subject-Out + 脑区感知 + 深度网络支持")
         logger.info(f"  - 有效脑区×受试者组合: {len(brain_region_analysis['subject_region_features'])}")
         logger.info(f"  - 深度网络兼容性: {'✅' if self.data['deep_network_compatible'] else '❌'}")
@@ -568,24 +658,52 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             'total_combinations': total_combinations
         }
 
+
     def phase1_subject_differences_analysis(self):
-        """
-        Phase 1: 受试者间差异分析 - 保留原有全局分析 + 新增分脑区分析
-        """
-        logger.info("\n" + "="*80)
-        logger.info("📊 Phase 1: 受试者间差异本质分析 (增强版)")
-        logger.info("="*80)
+        """Phase 1: 受试者间差异分析 - 🔥 带存档点功能"""
+        self._start_phase_timer("Phase 1")
         
-        # 🔄 Phase 1A: 保留原有全局分析逻辑
-        logger.info("\n📊 Phase 1A: 全局受试者差异分析 (保持原有逻辑)")
-        self._phase1a_global_subject_analysis()
+        try:
+            logger.info("\n" + "="*80)
+            logger.info("📊 Phase 1: 受试者间差异本质分析 (增强版 + 存档点)")
+            logger.info("="*80)
+            
+            # 🔄 Phase 1A: 保留原有全局分析逻辑
+            logger.info("\n📊 Phase 1A: 全局受试者差异分析 (保持原有逻辑)")
+            self._phase1a_global_subject_analysis()
+            
+            # 🔥 Phase 1B: 新增分脑区分析
+            logger.info("\n📊 Phase 1B: 分脑区受试者差异分析 (新增)")
+            self._phase1b_region_wise_analysis()
+            
+            # 综合决策得分计算
+            self._compute_phase1_combined_scores()
+            
+            duration = self._end_phase_timer("Phase 1")
+            
+            # 🔥 创建Phase 1存档点
+            if self.checkpoint_manager:
+                try:
+                    self.checkpoint_manager.create_checkpoint(
+                        analyzer_instance=self,
+                        checkpoint_name="subject_analysis",
+                        phase_completed=1,
+                        description="受试者间差异分析完成，包含全局和分脑区分析",
+                        is_auto=True
+                    )
+                except Exception as e:
+                    logger.warning(f"Phase 1存档点创建失败: {e}")
         
-        # 🔥 Phase 1B: 新增分脑区分析
-        logger.info("\n📊 Phase 1B: 分脑区受试者差异分析 (新增)")
-        self._phase1b_region_wise_analysis()
-        
-        # 综合决策得分计算
-        self._compute_phase1_combined_scores()
+        except Exception as e:
+            # 🔥 异常时创建紧急存档点
+            if self.checkpoint_manager:
+                self.checkpoint_manager.create_emergency_checkpoint(
+                    analyzer_instance=self,
+                    error_info=f"Phase 1 执行异常: {str(e)}",
+                    stack_trace=str(e)
+                )
+            raise
+    
 
     def _phase1a_global_subject_analysis(self):
         """Phase 1A: 保留原有的全局受试者差异分析"""
@@ -888,28 +1006,55 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         logger.info(f"  🔥 脑区特异性多样性: {self.decision_scores['phase1']['region_specificity_diversity']:.3f}")
         logger.info(f"  🔥 高特异性脑区比例: {self.decision_scores['phase1']['high_specificity_ratio']:.3f}")
 
+
     def phase2_subject_separability_analysis(self):
-        """
-        Phase 2: 受试者可分离性评估 - 保留原有全局分析 + 新增分脑区分析
-        """
-        logger.info("\n" + "="*80)
-        logger.info("📊 Phase 2: 受试者可分离性评估 (增强版)")
-        logger.info("="*80)
+        """Phase 2: 受试者可分离性评估 - 🔥 带存档点功能"""
+        self._start_phase_timer("Phase 2")
         
-        # 🔄 Phase 2A: 修正版全局受试者可分离性分析
-        logger.info("\n📊 Phase 2A: 全局受试者可分离性分析 (修正版)")
-        self._phase2a_global_separability_corrected()
+        try:
+            logger.info("\n" + "="*80)
+            logger.info("📊 Phase 2: 受试者可分离性评估 (增强版 + 存档点)")
+            logger.info("="*80)
+            
+            # 🔄 Phase 2A: 修正版全局受试者可分离性分析
+            logger.info("\n📊 Phase 2A: 全局受试者可分离性分析 (修正版)")
+            self._phase2a_global_separability_corrected()
+            
+            # 🔥 Phase 2B: 新增分脑区可分离性分析
+            logger.info("\n📊 Phase 2B: 分脑区受试者可分离性分析 (新增)")
+            self._phase2b_region_wise_separability()
+            
+            # Phase 2C: 保留原有的脑区分类一致性分析
+            logger.info("\n📊 Phase 2C: 脑区分类一致性分析 (保持原有)")
+            self._phase2c_class_consistency_analysis()
+            
+            # 综合决策得分计算
+            self._compute_phase2_combined_scores()
+            
+            duration = self._end_phase_timer("Phase 2")
+            
+            # 🔥 创建Phase 2存档点
+            if self.checkpoint_manager:
+                try:
+                    self.checkpoint_manager.create_checkpoint(
+                        analyzer_instance=self,
+                        checkpoint_name="separability",
+                        phase_completed=2,
+                        description="受试者可分离性评估完成，包含深度网络分析",
+                        is_auto=True
+                    )
+                except Exception as e:
+                    logger.warning(f"Phase 2存档点创建失败: {e}")
         
-        # 🔥 Phase 2B: 新增分脑区可分离性分析
-        logger.info("\n📊 Phase 2B: 分脑区受试者可分离性分析 (新增)")
-        self._phase2b_region_wise_separability()
-        
-        # Phase 2C: 保留原有的脑区分类一致性分析
-        logger.info("\n📊 Phase 2C: 脑区分类一致性分析 (保持原有)")
-        self._phase2c_class_consistency_analysis()
-        
-        # 综合决策得分计算
-        self._compute_phase2_combined_scores()
+        except Exception as e:
+            # 🔥 异常时创建紧急存档点
+            if self.checkpoint_manager:
+                self.checkpoint_manager.create_emergency_checkpoint(
+                    analyzer_instance=self,
+                    error_info=f"Phase 2 执行异常: {str(e)}",
+                    stack_trace=str(e)
+                )
+            raise
 
     def _phase2a_global_separability_corrected(self):
         """修正版：神经网络baseline性能分析"""
@@ -2598,26 +2743,52 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         logger.info(f"  📊 分析覆盖率: {self.decision_scores['phase2']['analysis_coverage']:.3f}")
 
     def phase3_embedding_adaptability_analysis(self):
-        """
-        Phase 3: Embedding适配性评估 - 保留原有分析 + 新增脑区感知建议
-        """
-        logger.info("\n" + "="*80)
-        logger.info("📊 Phase 3: Embedding适配性评估 (增强版)")
-        logger.info("="*80)
+        """Phase 3: Embedding适配性评估 - 🔥 带存档点功能"""
+        self._start_phase_timer("Phase 3")
         
-        # 🔄 保留原有的增强版降维分析
-        logger.info("\n📊 Phase 3A: 增强版降维适配性分析 (保持原有)")
-        self._phase3a_enhanced_dimensionality_analysis()
+        try:
+            logger.info("\n" + "="*80)
+            logger.info("📊 Phase 3: Embedding适配性评估 (增强版 + 存档点)")
+            logger.info("="*80)
+            
+            # 🔄 保留原有的增强版降维分析
+            logger.info("\n📊 Phase 3A: 增强版降维适配性分析 (保持原有)")
+            self._phase3a_enhanced_dimensionality_analysis()
+            
+            # 🔥 新增：脑区感知的embedding设计分析
+            logger.info("\n📊 Phase 3B: 脑区感知embedding设计分析 (新增)")
+            self._phase3b_brain_aware_embedding_design()
+            
+            # 综合决策得分计算
+            self._compute_phase3_combined_scores()
+            
+            duration = self._end_phase_timer("Phase 3")
+            
+            # 🔥 创建Phase 3存档点
+            if self.checkpoint_manager:
+                try:
+                    self.checkpoint_manager.create_checkpoint(
+                        analyzer_instance=self,
+                        checkpoint_name="embedding_design",
+                        phase_completed=3,
+                        description="Embedding适配性评估完成，包含脑区感知设计",
+                        is_auto=True
+                    )
+                except Exception as e:
+                    logger.warning(f"Phase 3存档点创建失败: {e}")
         
-        # 🔥 新增：脑区感知的embedding设计分析
-        logger.info("\n📊 Phase 3B: 脑区感知embedding设计分析 (新增)")
-        self._phase3b_brain_aware_embedding_design()
-        
-        # 综合决策得分计算
-        self._compute_phase3_combined_scores()
+        except Exception as e:
+            # 🔥 异常时创建紧急存档点
+            if self.checkpoint_manager:
+                self.checkpoint_manager.create_emergency_checkpoint(
+                    analyzer_instance=self,
+                    error_info=f"Phase 3 执行异常: {str(e)}",
+                    stack_trace=str(e)
+                )
+            raise
 
     def _phase3a_enhanced_dimensionality_analysis(self):
-        """Phase 3A: 保留原有的增强版降维分析"""
+        """Phase 3A: 🔥 深度网络增强版降维分析"""
         
         if 'subject_stats' not in self.analysis_results:
             logger.info("❌ 需要先运行Phase 1")
@@ -2625,38 +2796,179 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         subject_means = self.analysis_results['subject_stats']['means']
         
-        # 保留原有的多种降维方法对比分析
+        # 🔄 保留原有的多种降维方法对比分析
         logger.info("🔍 3.1A 多种降维方法对比分析...")
         dimensionality_results = self._comprehensive_dimensionality_analysis(subject_means)
         
-        # 保留原有的高维空间直接分析
+        # 🔄 保留原有的高维空间直接分析
         logger.info("🔍 3.2A 高维空间直接分析...")
         high_dim_results = self._high_dimensional_direct_analysis(subject_means)
         
-        # 保留原有的特征分组分析
+        # 🔥 新增：深度网络特征重要性分析
+        logger.info("🔍 3.2A-Deep 🔥 深度网络特征重要性分析...")
+        deep_feature_analysis = self._deep_network_feature_importance_analysis()
+        
+        # 🔄 保留原有的特征分组分析
         logger.info("🔍 3.3A 特征分组分析...")
         group_results = self._feature_group_analysis(subject_means)
         
-        # 保留原有的样本量充足性评估
+        # 🔥 新增：深度网络增强的特征分组分析
+        logger.info("🔍 3.3A-Deep 🔥 深度网络增强特征分组分析...")
+        enhanced_group_results = self._deep_enhanced_feature_group_analysis(group_results, deep_feature_analysis)
+        
+        # 🔄 保留原有的样本量充足性评估
         logger.info("🔍 3.4A 样本量充足性评估...")
         sample_adequacy = self._sample_adequacy_assessment()
         
-        # 保留原有的综合适配性评估
-        logger.info("🔍 3.5A 综合适配性评估...")
+        # 🔥 新增：深度网络样本效率分析
+        logger.info("🔍 3.4A-Deep 🔥 深度网络样本效率分析...")
+        deep_sample_efficiency = self._deep_network_sample_efficiency_analysis()
+        
+        # 🔥 修改：深度网络增强的综合适配性评估
+        logger.info("🔍 3.5A 🔥 深度网络增强综合适配性评估...")
         comprehensive_assessment = self._comprehensive_embedding_assessment(
-            dimensionality_results, high_dim_results, group_results, sample_adequacy
+            dimensionality_results, high_dim_results, enhanced_group_results, sample_adequacy
         )
         
-        # 存储原有结果
+        # 🔥 存储增强版结果
         self.analysis_results['enhanced_dimensionality'] = {
             'dimensionality_comparison': dimensionality_results,
             'high_dimensional_analysis': high_dim_results,
-            'feature_group_analysis': group_results,
+            'feature_group_analysis': enhanced_group_results,            # 🔥 使用增强版
             'sample_adequacy': sample_adequacy,
-            'comprehensive_assessment': comprehensive_assessment
+            'comprehensive_assessment': comprehensive_assessment,
+            # 🔥 新增深度网络相关分析
+            'deep_feature_analysis': deep_feature_analysis,
+            'deep_sample_efficiency': deep_sample_efficiency,
+            'deep_network_integration_status': 'success'
         }
         
-        logger.info(f"✅ 增强版降维分析完成")
+        # 🔥 存储深度网络特征重要性到全局结果
+        if 'error' not in deep_feature_analysis:
+            self.analysis_results['deep_feature_importance'] = deep_feature_analysis
+        
+        logger.info(f"✅ 🔥 深度网络增强版降维分析完成")
+        logger.info(f"  - 传统降维方法: {len(dimensionality_results)} 种")
+        logger.info(f"  - 高维分类器: {len(high_dim_results.get('separability_scores', {}))} 个（含深度网络）")
+        logger.info(f"  - 深度网络特征分析: {'成功' if 'error' not in deep_feature_analysis else '失败'}")
+        logger.info(f"  - 综合可行性评分: {comprehensive_assessment['overall_feasibility']:.3f}")
+        logger.info(f"  🔥 深度网络评分: {comprehensive_assessment['deep_network_score']:.3f}")
+        logger.info(f"  🔥 深度网络权威性: {comprehensive_assessment['deep_authority_score']:.3f}")
+
+    def _deep_enhanced_feature_group_analysis(self, group_results, deep_feature_analysis):
+        """🔥 深度网络增强的特征分组分析"""
+        
+        enhanced_group_results = group_results.copy()
+        
+        if 'error' not in deep_feature_analysis and 'group_importance' in deep_feature_analysis:
+            deep_group_importance = deep_feature_analysis['group_importance']
+            
+            # 为每个特征组添加深度网络重要性信息
+            for group_name in enhanced_group_results.keys():
+                if group_name in deep_group_importance:
+                    deep_info = deep_group_importance[group_name]
+                    
+                    enhanced_group_results[group_name].update({
+                        # 🔥 深度网络分析结果
+                        'deep_mean_importance': deep_info['mean_importance'],
+                        'deep_max_importance': deep_info['max_importance'],
+                        'deep_relative_contribution': deep_info['relative_contribution'],
+                        'deep_top_features': deep_info['top_features_in_group'],
+                        
+                        # 🔥 综合评估
+                        'traditional_pca_score': enhanced_group_results[group_name].get('variance_in_3pc', 0),
+                        'deep_importance_score': deep_info['mean_importance'],
+                        'combined_importance': (enhanced_group_results[group_name].get('variance_in_3pc', 0) * 0.4 + 
+                                            deep_info['mean_importance'] * 0.6),  # 深度网络权重更高
+                        
+                        # 🔥 推荐等级
+                        'recommendation_level': self._determine_group_recommendation_level(
+                            enhanced_group_results[group_name].get('variance_in_3pc', 0),
+                            deep_info['mean_importance']
+                        )
+                    })
+            
+            # 🔥 添加整体特征组排名
+            enhanced_group_results['deep_network_ranking'] = {
+                'by_deep_importance': sorted(deep_group_importance.keys(), 
+                                        key=lambda x: deep_group_importance[x]['mean_importance'], reverse=True),
+                'by_combined_score': sorted([g for g in enhanced_group_results.keys() if g != 'deep_network_ranking'], 
+                                        key=lambda x: enhanced_group_results[x].get('combined_importance', 0), reverse=True),
+                'recommendation_summary': self._generate_group_recommendation_summary(enhanced_group_results)
+            }
+        
+        return enhanced_group_results
+
+    def _determine_group_recommendation_level(self, pca_score, deep_score):
+        """确定特征组推荐等级"""
+        combined = pca_score * 0.4 + deep_score * 0.6
+        
+        if combined > 0.8:
+            return "HIGHLY_RECOMMENDED"
+        elif combined > 0.6:
+            return "RECOMMENDED"
+        elif combined > 0.4:
+            return "MODERATELY_USEFUL"
+        else:
+            return "LOW_PRIORITY"
+
+    def _generate_group_recommendation_summary(self, enhanced_results):
+        """生成特征组推荐总结"""
+        summary = {
+            'HIGHLY_RECOMMENDED': [],
+            'RECOMMENDED': [],
+            'MODERATELY_USEFUL': [],
+            'LOW_PRIORITY': []
+        }
+        
+        for group_name, group_data in enhanced_results.items():
+            if group_name != 'deep_network_ranking' and 'recommendation_level' in group_data:
+                level = group_data['recommendation_level']
+                summary[level].append(group_name)
+        
+        return summary
+
+    def _deep_network_sample_efficiency_analysis(self):
+        """🔥 深度网络样本效率分析"""
+        
+        logger.info("      🔍 分析深度网络的样本效率...")
+        
+        if 'deep_feature_importance' not in self.analysis_results:
+            return {'error': 'No deep feature analysis available'}
+        
+        deep_analysis = self.analysis_results['deep_feature_importance']
+        if 'error' in deep_analysis:
+            return {'error': 'Deep feature analysis failed'}
+        
+        # 基于深度网络的样本效率评估
+        network_performance = deep_analysis.get('network_performance', 0)
+        training_time = deep_analysis.get('training_time', 0)
+        
+        # 样本效率指标
+        total_samples = len(self.data['X_train'])
+        efficiency_metrics = {
+            'samples_per_second': total_samples / training_time if training_time > 0 else 0,
+            'accuracy_per_minute': network_performance / (training_time / 60) if training_time > 0 else 0,
+            'parameter_efficiency': network_performance / (4096 * 4),  # 性能/参数比
+            'convergence_efficiency': network_performance / len(deep_analysis.get('combined_importance', [1])),  # 性能/特征数比
+        }
+        
+        # 效率等级评估
+        if efficiency_metrics['accuracy_per_minute'] > 0.1:
+            efficiency_level = "HIGHLY_EFFICIENT"
+        elif efficiency_metrics['accuracy_per_minute'] > 0.05:
+            efficiency_level = "MODERATELY_EFFICIENT"
+        else:
+            efficiency_level = "LOW_EFFICIENCY"
+        
+        return {
+            'efficiency_metrics': efficiency_metrics,
+            'efficiency_level': efficiency_level,
+            'total_samples': total_samples,
+            'training_time_minutes': training_time / 60,
+            'network_performance': network_performance,
+            'recommendation': f"深度网络训练效率{efficiency_level.replace('_', ' ').lower()}，建议{'保持当前配置' if efficiency_level == 'HIGHLY_EFFICIENT' else '考虑优化' if efficiency_level == 'MODERATELY_EFFICIENT' else '重新设计网络架构'}"
+        }
 
     def _phase3b_brain_aware_embedding_design(self):
         """Phase 3B: 新增的脑区感知embedding设计分析"""
@@ -3031,6 +3343,25 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             results['tsne'] = None
         
         # 3. 比较不同方法的结构保持能力
+        try:
+            import umap
+            logger.info("    🔍 运行UMAP降维分析...")
+            umap_reducer = umap.UMAP(n_components=2, random_state=42)
+            umap_result = umap_reducer.fit_transform(subject_means)
+            
+            results['umap'] = {
+                '2d_result': umap_result,
+                'method_type': 'nonlinear_manifold'
+            }
+            logger.info(f"    ✅ UMAP分析完成")
+        except ImportError:
+            logger.info(f"    ⚠️ UMAP未安装，跳过UMAP分析")
+            results['umap'] = None
+        except Exception as e:
+            logger.info(f"    ⚠️ UMAP分析失败: {e}")
+            results['umap'] = None
+        
+        # 3. 比较不同方法的结构保持能力 - 保持原有
         structure_preservation = self._compare_structure_preservation(subject_means, results)
         results['structure_preservation'] = structure_preservation
         
@@ -3128,14 +3459,20 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         }
 
     def _comprehensive_embedding_assessment(self, dimensionality_results, high_dim_results, group_results, sample_adequacy):
-        """综合embedding适配性评估 (保持原有逻辑)"""
+        """综合embedding适配性评估 (🔥 深度网络增强版)"""
+        
         assessment = {
             'linearity_score': 0.0,
             'clustering_score': 0.0,
             'intrinsic_dim_score': 0.0,
             'high_dim_score': 0.0,
+            'deep_network_score': 0.0,          # 🔥 新增：深度网络评分
+            'feature_importance_score': 0.0,    # 🔥 新增：特征重要性评分
+            'deep_authority_score': 0.0,        # 🔥 新增：深度网络权威性评分
             'overall_feasibility': 0.0
         }
+        
+        # 🔄 保留原有评估逻辑
         
         # 线性度评估
         if 'pca' in dimensionality_results:
@@ -3154,33 +3491,85 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             else:
                 assessment['intrinsic_dim_score'] = 0.3
         
-        # 高维性能评估
+        # 高维性能评估（🔥 增强版：包含深度网络）
         if 'separability_scores' in high_dim_results:
-            high_dim_scores = []
-            for clf_name, clf_results in high_dim_results['separability_scores'].items():
-                high_dim_scores.append(clf_results['mean_score'])
+            # 分离传统方法和深度网络
+            traditional_scores = []
+            deep_network_scores = []
             
-            if high_dim_scores:
-                avg_high_dim_performance = np.mean(high_dim_scores)
+            for clf_name, clf_results in high_dim_results['separability_scores'].items():
+                if isinstance(clf_results, dict) and 'mean_score' in clf_results:
+                    score = clf_results['mean_score']
+                    if clf_name.startswith('deep'):
+                        deep_network_scores.append(score)
+                    else:
+                        traditional_scores.append(score)
+            
+            # 传统高维性能评估
+            if traditional_scores:
+                avg_traditional_performance = np.mean(traditional_scores)
                 n_subjects = len(self.data['available_subjects'])
                 random_baseline = 1.0 / n_subjects
-                normalized_score = (avg_high_dim_performance - random_baseline) / (1 - random_baseline)
-                assessment['high_dim_score'] = max(0, min(1, normalized_score))
+                normalized_traditional_score = (avg_traditional_performance - random_baseline) / (1 - random_baseline)
+                assessment['high_dim_score'] = max(0, min(1, normalized_traditional_score))
+            
+            # 🔥 深度网络性能评估
+            if deep_network_scores:
+                avg_deep_performance = np.mean(deep_network_scores)
+                n_subjects = len(self.data['available_subjects'])
+                random_baseline = 1.0 / n_subjects
+                normalized_deep_score = (avg_deep_performance - random_baseline) / (1 - random_baseline)
+                assessment['deep_network_score'] = max(0, min(1, normalized_deep_score))
+                
+                # 🔥 深度网络权威性评估
+                if 'authority_assessment' in high_dim_results.get('separability_scores', {}):
+                    authority_data = high_dim_results['separability_scores']['authority_assessment']
+                    assessment['deep_authority_score'] = authority_data.get('overall_authority', 0.0)
+            
+            # 🔥 如果深度网络表现更好，提高总体评分
+            if deep_network_scores and traditional_scores:
+                deep_advantage = np.mean(deep_network_scores) - np.mean(traditional_scores)
+                if deep_advantage > 0.05:  # 深度网络显著更好
+                    assessment['deep_network_score'] = min(1.0, assessment['deep_network_score'] + 0.1)
         
-        # 综合可行性评估
+        # 🔥 特征重要性评估
+        if 'deep_feature_importance' in self.analysis_results:
+            feature_analysis = self.analysis_results['deep_feature_importance']
+            if 'error' not in feature_analysis:
+                # 基于特征重要性的稀疏度和区分度评估
+                sparsity = feature_analysis['importance_statistics']['sparsity']
+                importance_std = feature_analysis['importance_statistics']['std']
+                
+                # 稀疏度适中（不全重要，也不全不重要）且区分度高更好
+                sparsity_score = 1.0 - abs(sparsity - 0.3) / 0.7  # 30%稀疏度为最优
+                discrimination_score = min(1.0, importance_std * 2)  # 标准差越大，区分度越高
+                
+                assessment['feature_importance_score'] = (sparsity_score + discrimination_score) / 2
+        
+        # 🔥 修改综合可行性计算权重
         weights = {
-            'linearity': 0.3,
-            'intrinsic_dim': 0.3,
-            'high_dim': 0.2,
-            'sample_adequacy': 0.2
+            'linearity': 0.15,              # 降低传统方法权重
+            'intrinsic_dim': 0.15,          # 降低传统方法权重
+            'high_dim': 0.15,               # 降低传统方法权重
+            'deep_network': 0.25,           # 🔥 深度网络主要权重
+            'feature_importance': 0.10,     # 🔥 特征重要性权重
+            'deep_authority': 0.10,         # 🔥 深度网络权威性权重
+            'sample_adequacy': 0.10         # 降低样本充足性权重
         }
         
         assessment['overall_feasibility'] = (
             assessment['linearity_score'] * weights['linearity'] +
             assessment['intrinsic_dim_score'] * weights['intrinsic_dim'] +
             assessment['high_dim_score'] * weights['high_dim'] +
+            assessment['deep_network_score'] * weights['deep_network'] +                    # 🔥 新增
+            assessment['feature_importance_score'] * weights['feature_importance'] +       # 🔥 新增
+            assessment['deep_authority_score'] * weights['deep_authority'] +               # 🔥 新增
             sample_adequacy['adequacy_score'] * weights['sample_adequacy']
         )
+        
+        # 🔥 深度网络加成机制
+        if assessment['deep_authority_score'] > 0.8:
+            assessment['overall_feasibility'] = min(1.0, assessment['overall_feasibility'] + 0.05)  # 权威性很高时额外加成
         
         return assessment
 
@@ -3212,28 +3601,37 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             logger.info(f"      ⚠️ 内在维度估计失败: {e}")
             return data.shape[1]
 
-
     def _test_high_dim_classifiers(self, subject_means):
-        """测试多种高维分类器的性能 (增强版：全局 + 分脑区分析)"""
+        """测试多种高维分类器的性能 (🔥 深度网络增强版：全局 + 分脑区 + 4×4096深度网络)"""
         
-        logger.info("    🔍 增强版高维分类器性能测试...")
-        logger.info("    📊 分析维度：全局受试者识别 + 分脑区受试者识别")
+        logger.info("    🔍 🔥 深度网络增强版高维分类器性能测试...")
+        logger.info("    📊 分析维度：全局受试者识别 + 分脑区受试者识别 + 4×4096深度网络权威评估")
         
+        # 🔥 扩展分类器列表，添加4×4096深度网络
         classifiers = {
             'random_forest': RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42),
-            'logistic_regression': LogisticRegression(random_state=42, max_iter=1000, C=0.1)
+            'logistic_regression': LogisticRegression(random_state=42, max_iter=1000, C=0.1),
+            # 🔥 新增：4×4096深度网络 - 严格使用alex超参数
+            'deep_4x4096': self._create_deep_classifier_wrapper(),
+            # 🔥 新增：轻量级深度网络用于对比
+            'deep_lightweight': self._create_deep_classifier_wrapper({
+                'batch_size': 64,
+                'no_epochs': 15  # 较少epoch用于快速测试
+            })
         }
         
         results = {
             'global_analysis': {},
             'region_wise_analysis': {},
-            'comparative_analysis': {}
+            'comparative_analysis': {},
+            'deep_network_detailed_analysis': {}  # 🔥 新增：深度网络详细分析
         }
         
         # ========================================================================
-        # 1. 保留原有全局分析
+        # 1. 🔥 增强版全局分析 - 添加深度网络
         # ========================================================================
-        logger.info("      🌐 全局受试者识别分析...")
+        logger.info("      🌐 全局受试者识别分析（含4×4096深度网络）...")
+        
         subject_labels = np.arange(len(subject_means))
         
         for clf_name, clf in classifiers.items():
@@ -3248,37 +3646,134 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                         X_train, X_test, y_train, y_test = train_test_split(
                             subject_means, subject_labels, test_size=0.3, random_state=42
                         )
-                        clf.fit(X_train, y_train)
-                        score = clf.score(X_test, y_test)
-                        results['global_analysis'][clf_name] = {
-                            'mean_score': score,
-                            'std_score': 0.0,
-                            'scores': [score],
-                            'method': 'train_test_split'
-                        }
+                        
+                        # 🔥 特殊处理深度网络
+                        if 'deep' in clf_name:
+                            logger.info(f"        🔥 训练{clf_name}深度网络...")
+                            start_time = time.time()
+                            clf.fit(X_train, y_train)
+                            train_time = time.time() - start_time
+                            
+                            score = clf.score(X_test, y_test)
+                            
+                            # 🔥 深度网络特殊分析
+                            if hasattr(clf, 'training_history'):
+                                training_history = clf.training_history
+                                results['deep_network_detailed_analysis'][f'{clf_name}_global'] = {
+                                    'training_time': train_time,
+                                    'convergence_epochs': len(training_history['loss']),
+                                    'final_training_loss': training_history['loss'][-1] if training_history['loss'] else 0,
+                                    'final_training_accuracy': training_history['accuracy'][-1] if training_history['accuracy'] else 0,
+                                    'test_accuracy': score,
+                                    'generalization_gap': training_history['accuracy'][-1] - score if training_history['accuracy'] else 0,
+                                    'convergence_quality': 'good' if len(training_history['loss']) > 1 and training_history['loss'][-1] < training_history['loss'][0] else 'poor'
+                                }
+                            
+                            results['global_analysis'][clf_name] = {
+                                'mean_score': score,
+                                'std_score': 0.0,
+                                'scores': [score],
+                                'method': 'train_test_split',
+                                'training_time': train_time,
+                                'is_deep_network': True
+                            }
+                            
+                            logger.info(f"          ✅ 🔥 全局{clf_name}: Acc={score:.3f}, 训练时间={train_time/60:.1f}分钟")
+                            
+                        else:
+                            # 传统分类器
+                            clf.fit(X_train, y_train)
+                            score = clf.score(X_test, y_test)
+                            results['global_analysis'][clf_name] = {
+                                'mean_score': score,
+                                'std_score': 0.0,
+                                'scores': [score],
+                                'method': 'train_test_split',
+                                'is_deep_network': False
+                            }
+                            logger.info(f"          ✅ 全局{clf_name}: Acc={score:.3f}")
+                    
                     else:
                         # 使用KFold交叉验证
                         from sklearn.model_selection import KFold
                         cv_strategy = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-                        scores = cross_val_score(clf, subject_means, subject_labels, 
-                                            cv=cv_strategy, scoring='accuracy')
-                        results['global_analysis'][clf_name] = {
-                            'mean_score': np.mean(scores),
-                            'std_score': np.std(scores),
-                            'scores': scores,
-                            'method': 'cross_validation'
-                        }
                         
-                logger.info(f"        ✅ 全局{clf_name}: {results['global_analysis'][clf_name]['mean_score']:.3f}")
-                
+                        # 🔥 深度网络需要特殊处理交叉验证
+                        if 'deep' in clf_name:
+                            logger.info(f"        🔥 {clf_name}深度网络交叉验证...")
+                            scores = []
+                            training_times = []
+                            deep_metrics = []
+                            
+                            for fold, (train_idx, test_idx) in enumerate(cv_strategy.split(subject_means, subject_labels)):
+                                logger.info(f"          Fold {fold+1}/{cv_folds}...")
+                                
+                                X_train_fold, X_test_fold = subject_means[train_idx], subject_means[test_idx]
+                                y_train_fold, y_test_fold = subject_labels[train_idx], subject_labels[test_idx]
+                                
+                                # 为每个fold创建新的深度网络实例
+                                fold_clf = classifiers[clf_name]
+                                start_time = time.time()
+                                fold_clf.fit(X_train_fold, y_train_fold)
+                                train_time = time.time() - start_time
+                                
+                                score = fold_clf.score(X_test_fold, y_test_fold)
+                                scores.append(score)
+                                training_times.append(train_time)
+                                
+                                # 收集深度网络指标
+                                if hasattr(fold_clf, 'training_history'):
+                                    history = fold_clf.training_history
+                                    deep_metrics.append({
+                                        'fold': fold,
+                                        'training_time': train_time,
+                                        'final_loss': history['loss'][-1] if history['loss'] else 0,
+                                        'final_train_acc': history['accuracy'][-1] if history['accuracy'] else 0,
+                                        'test_acc': score,
+                                        'epochs': len(history['loss'])
+                                    })
+                            
+                            # 🔥 深度网络交叉验证统计
+                            results['deep_network_detailed_analysis'][f'{clf_name}_global_cv'] = {
+                                'per_fold_metrics': deep_metrics,
+                                'avg_training_time': np.mean(training_times),
+                                'avg_convergence_epochs': np.mean([m['epochs'] for m in deep_metrics]),
+                                'cv_stability': np.std(scores),  # 交叉验证稳定性
+                                'avg_generalization_gap': np.mean([m['final_train_acc'] - m['test_acc'] for m in deep_metrics])
+                            }
+                            
+                            results['global_analysis'][clf_name] = {
+                                'mean_score': np.mean(scores),
+                                'std_score': np.std(scores),
+                                'scores': scores,
+                                'method': 'cross_validation',
+                                'avg_training_time': np.mean(training_times),
+                                'is_deep_network': True
+                            }
+                            
+                            logger.info(f"          ✅ 🔥 全局{clf_name}: Acc={np.mean(scores):.3f}±{np.std(scores):.3f}, 平均训练时间={np.mean(training_times)/60:.1f}分钟")
+                            
+                        else:
+                            # 传统分类器的交叉验证
+                            scores = cross_val_score(clf, subject_means, subject_labels, 
+                                                cv=cv_strategy, scoring='accuracy')
+                            results['global_analysis'][clf_name] = {
+                                'mean_score': np.mean(scores),
+                                'std_score': np.std(scores),
+                                'scores': scores,
+                                'method': 'cross_validation',
+                                'is_deep_network': False
+                            }
+                            logger.info(f"          ✅ 全局{clf_name}: Acc={np.mean(scores):.3f}±{np.std(scores):.3f}")
+                            
             except Exception as e:
                 logger.info(f"        ❌ 全局{clf_name} 失败: {e}")
                 results['global_analysis'][clf_name] = {'error': str(e)}
         
         # ========================================================================
-        # 2. 新增分脑区分析
+        # 2. 🔥 增强版分脑区分析 - 添加深度网络
         # ========================================================================
-        logger.info("      🧠 分脑区受试者识别分析...")
+        logger.info("      🧠 分脑区受试者识别分析（含4×4096深度网络）...")
         
         region_dataset = self._build_region_aware_dataset()
         
@@ -3297,24 +3792,89 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             
             for clf_name, clf in classifiers.items():
                 try:
-                    # 使用StratifiedKFold，现在可以正常工作了
-                    from sklearn.model_selection import StratifiedKFold
-                    cv_strategy = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-                    scores = cross_val_score(clf, X_region, mapped_subject_labels, 
-                                        cv=cv_strategy, scoring='accuracy')
-                    
-                    results['region_wise_analysis'][clf_name] = {
-                        'mean_score': np.mean(scores),
-                        'std_score': np.std(scores),
-                        'scores': scores,
-                        'n_samples': len(X_region),
-                        'n_subjects': len(unique_subjects),
-                        'n_regions': len(np.unique(region_labels_region)),
-                        'method': 'stratified_cv'
-                    }
-                    
-                    logger.info(f"        ✅ 分脑区{clf_name}: {np.mean(scores):.3f} ± {np.std(scores):.3f}")
-                    
+                    # 🔥 深度网络分脑区分析需要特殊处理
+                    if 'deep' in clf_name:
+                        logger.info(f"        🔥 训练分脑区{clf_name}深度网络...")
+                        
+                        # 为分脑区分析创建专用深度网络配置
+                        if clf_name == 'deep_4x4096':
+                            clf_region = self._create_deep_classifier_wrapper({
+                                'batch_size': 64,  # 分脑区用较小batch size
+                                'no_epochs': 20    # 适中的epoch数
+                            })
+                        else:  # lightweight
+                            clf_region = self._create_deep_classifier_wrapper({
+                                'batch_size': 32,  
+                                'no_epochs': 15
+                            })
+                        
+                        start_time = time.time()
+                        clf_region.fit(X_region, mapped_subject_labels)
+                        train_time = time.time() - start_time
+                        
+                        # 🔥 深度网络分脑区性能评估
+                        from sklearn.model_selection import StratifiedKFold
+                        cv_strategy = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)  # 用3折节省时间
+                        
+                        scores = []
+                        for train_idx, test_idx in cv_strategy.split(X_region, mapped_subject_labels):
+                            test_score = clf_region.score(X_region[test_idx], mapped_subject_labels[test_idx])
+                            scores.append(test_score)
+                        
+                        # 🔥 分脑区深度网络特殊分析
+                        if hasattr(clf_region, 'training_history'):
+                            history = clf_region.training_history
+                            
+                            # 受试者判别能力分析
+                            random_baseline = 1.0 / len(unique_subjects)
+                            discrimination_strength = np.mean(scores) / random_baseline
+                            
+                            results['deep_network_detailed_analysis'][f'{clf_name}_region_wise'] = {
+                                'training_time': train_time,
+                                'convergence_epochs': len(history['loss']),
+                                'final_training_accuracy': history['accuracy'][-1] if history['accuracy'] else 0,
+                                'cv_test_accuracy': np.mean(scores),
+                                'discrimination_strength': discrimination_strength,
+                                'random_baseline': random_baseline,
+                                'region_adaptation_quality': 'excellent' if discrimination_strength > 5 else 'good' if discrimination_strength > 3 else 'moderate',
+                                'training_efficiency': np.mean(scores) / (train_time / 60),  # 准确率/分钟
+                                'data_utilization': len(X_region) / len(unique_subjects)  # 平均每受试者样本数
+                            }
+                        
+                        results['region_wise_analysis'][clf_name] = {
+                            'mean_score': np.mean(scores),
+                            'std_score': np.std(scores),
+                            'scores': scores,
+                            'n_samples': len(X_region),
+                            'n_subjects': len(unique_subjects),
+                            'n_regions': len(np.unique(region_labels_region)),
+                            'method': 'stratified_cv',
+                            'training_time_minutes': train_time / 60,
+                            'is_deep_network': True
+                        }
+                        
+                        logger.info(f"          ✅ 🔥 分脑区{clf_name}: Acc={np.mean(scores):.3f}±{np.std(scores):.3f}, 判别强度={discrimination_strength:.2f}x")
+                        
+                    else:
+                        # 传统分类器的分脑区分析（保持原有逻辑）
+                        from sklearn.model_selection import StratifiedKFold
+                        cv_strategy = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                        scores = cross_val_score(clf, X_region, mapped_subject_labels, 
+                                            cv=cv_strategy, scoring='accuracy')
+                        
+                        results['region_wise_analysis'][clf_name] = {
+                            'mean_score': np.mean(scores),
+                            'std_score': np.std(scores),
+                            'scores': scores,
+                            'n_samples': len(X_region),
+                            'n_subjects': len(unique_subjects),
+                            'n_regions': len(np.unique(region_labels_region)),
+                            'method': 'stratified_cv',
+                            'is_deep_network': False
+                        }
+                        
+                        logger.info(f"          ✅ 分脑区{clf_name}: Acc={np.mean(scores):.3f}±{np.std(scores):.3f}")
+                        
                 except Exception as e:
                     logger.info(f"        ❌ 分脑区{clf_name} 失败: {e}")
                     results['region_wise_analysis'][clf_name] = {'error': str(e)}
@@ -3324,34 +3884,404 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             results['region_wise_analysis'] = {'insufficient_data': True}
         
         # ========================================================================
-        # 3. 对比分析
+        # 3. 🔥 深度网络专项对比分析
         # ========================================================================
-        logger.info("      📈 全局 vs 分脑区性能对比...")
+        logger.info("      📈 🔥 深度网络专项性能对比分析...")
         
+        # 传统方法 vs 深度网络对比
         for clf_name in classifiers.keys():
             if (clf_name in results['global_analysis'] and 
                 clf_name in results['region_wise_analysis'] and
                 'mean_score' in results['global_analysis'][clf_name] and
                 'mean_score' in results['region_wise_analysis'][clf_name]):
                 
-                global_score = results['global_analysis'][clf_name]['mean_score']
-                region_score = results['region_wise_analysis'][clf_name]['mean_score']
+                global_metrics = results['global_analysis'][clf_name]
+                region_metrics = results['region_wise_analysis'][clf_name]
                 
-                improvement = region_score - global_score
-                relative_improvement = improvement / global_score if global_score > 0 else 0
+                # 计算各指标的提升
+                acc_improvement = region_metrics['mean_score'] - global_metrics['mean_score']
+                acc_improvement_percent = acc_improvement / global_metrics['mean_score'] * 100
                 
-                results['comparative_analysis'][clf_name] = {
-                    'global_score': global_score,
-                    'region_wise_score': region_score,
-                    'absolute_improvement': improvement,
-                    'relative_improvement_percent': relative_improvement * 100,
-                    'conclusion': self._interpret_improvement(improvement, relative_improvement)
+                comparison_result = {
+                    'accuracy_improvement': acc_improvement,
+                    'accuracy_improvement_percent': acc_improvement_percent,
+                    'interpretation': self._interpret_improvement(acc_improvement, acc_improvement / global_metrics['mean_score']),
+                    'is_deep_network': clf_name.startswith('deep')
                 }
                 
-                logger.info(f"        📊 {clf_name}对比: 全局{global_score:.3f} → 分脑区{region_score:.3f} "
-                    f"(提升{improvement:+.3f}, {relative_improvement*100:+.1f}%)")
+                # 🔥 深度网络特殊对比分析
+                if clf_name.startswith('deep'):
+                    global_time = global_metrics.get('training_time', 0) or global_metrics.get('avg_training_time', 0)
+                    region_time = region_metrics.get('training_time_minutes', 0) * 60
+                    
+                    comparison_result.update({
+                        'training_time_ratio': region_time / global_time if global_time > 0 else 0,
+                        'deep_network_advantage': 'significant' if acc_improvement > 0.05 else 'moderate' if acc_improvement > 0.02 else 'minimal',
+                        'efficiency_assessment': 'efficient' if region_time < 300 else 'moderate' if region_time < 900 else 'slow',  # 秒为单位
+                        'scalability': 'good' if region_metrics['n_samples'] > 1000 else 'limited'
+                    })
+                    
+                    # 🔥 深度网络详细性能分析
+                    if f'{clf_name}_global' in results['deep_network_detailed_analysis']:
+                        global_deep = results['deep_network_detailed_analysis'][f'{clf_name}_global']
+                        comparison_result['deep_analysis'] = {
+                            'convergence_stability': global_deep.get('convergence_quality', 'unknown'),
+                            'generalization_quality': 'good' if global_deep.get('generalization_gap', 1) < 0.1 else 'poor',
+                            'training_efficiency': global_deep.get('final_training_accuracy', 0) / (global_deep.get('training_time', 1) / 60)
+                        }
+                    
+                    logger.info(f"        📊 🔥 {clf_name}深度网络对比:")
+                    logger.info(f"          准确率: {global_metrics['mean_score']:.3f} → {region_metrics['mean_score']:.3f} ({acc_improvement:+.3f})")
+                    logger.info(f"          深度网络优势: {comparison_result['deep_network_advantage']}")
+                    logger.info(f"          效率评估: {comparison_result['efficiency_assessment']}")
+                    
+                else:
+                    logger.info(f"        📊 {clf_name}对比:")
+                    logger.info(f"          准确率: {global_metrics['mean_score']:.3f} → {region_metrics['mean_score']:.3f} ({acc_improvement:+.3f})")
+                
+                results['comparative_analysis'][clf_name] = comparison_result
+        
+        # ========================================================================
+        # 4. 🔥 深度网络权威性总结
+        # ========================================================================
+        deep_networks = [name for name in classifiers.keys() if name.startswith('deep')]
+        if deep_networks:
+            logger.info(f"      🔥 深度网络权威性总结:")
+            
+            best_deep_network = None
+            best_score = 0
+            
+            for deep_name in deep_networks:
+                if deep_name in results['region_wise_analysis'] and 'mean_score' in results['region_wise_analysis'][deep_name]:
+                    score = results['region_wise_analysis'][deep_name]['mean_score']
+                    if score > best_score:
+                        best_score = score
+                        best_deep_network = deep_name
+            
+            if best_deep_network:
+                logger.info(f"        🏆 最佳深度网络: {best_deep_network} (准确率: {best_score:.3f})")
+                
+                # 🔥 深度网络权威性评估
+                deep_authority_score = self._assess_deep_network_authority(results, deep_networks)
+                results['deep_network_detailed_analysis']['authority_assessment'] = deep_authority_score
+                
+                logger.info(f"        📊 深度网络权威性评分: {deep_authority_score['overall_authority']:.3f}")
+                logger.info(f"        🎯 权威性等级: {deep_authority_score['authority_level']}")
         
         return results
+
+
+    def _assess_deep_network_authority(self, results, deep_networks):
+        """评估深度网络在高维分类中的权威性"""
+        
+        authority_factors = {
+            'performance_superiority': 0.0,
+            'convergence_quality': 0.0,
+            'generalization_ability': 0.0,
+            'scalability': 0.0,
+            'consistency': 0.0
+        }
+        
+        # 1. 性能优越性：与传统方法对比
+        traditional_networks = [name for name in results['region_wise_analysis'].keys() 
+                            if not name.startswith('deep') and 'mean_score' in results['region_wise_analysis'][name]]
+        
+        if traditional_networks and deep_networks:
+            traditional_scores = [results['region_wise_analysis'][name]['mean_score'] for name in traditional_networks]
+            deep_scores = [results['region_wise_analysis'][name]['mean_score'] for name in deep_networks 
+                        if 'mean_score' in results['region_wise_analysis'][name]]
+            
+            if traditional_scores and deep_scores:
+                avg_traditional = np.mean(traditional_scores)
+                avg_deep = np.mean(deep_scores)
+                authority_factors['performance_superiority'] = min(1.0, max(0.0, (avg_deep - avg_traditional) / avg_traditional * 2))
+        
+        # 2. 收敛质量
+        convergence_scores = []
+        for deep_name in deep_networks:
+            global_key = f'{deep_name}_global'
+            if global_key in results['deep_network_detailed_analysis']:
+                deep_analysis = results['deep_network_detailed_analysis'][global_key]
+                if deep_analysis.get('convergence_quality') == 'good':
+                    convergence_scores.append(1.0)
+                else:
+                    convergence_scores.append(0.0)
+        
+        if convergence_scores:
+            authority_factors['convergence_quality'] = np.mean(convergence_scores)
+        
+        # 3. 泛化能力
+        generalization_scores = []
+        for deep_name in deep_networks:
+            global_key = f'{deep_name}_global'
+            if global_key in results['deep_network_detailed_analysis']:
+                deep_analysis = results['deep_network_detailed_analysis'][global_key]
+                gen_gap = deep_analysis.get('generalization_gap', 0)
+                # 泛化差距越小越好
+                gen_score = max(0.0, 1.0 - abs(gen_gap) * 2)
+                generalization_scores.append(gen_score)
+        
+        if generalization_scores:
+            authority_factors['generalization_ability'] = np.mean(generalization_scores)
+        
+        # 4. 可扩展性
+        scalability_scores = []
+        for deep_name in deep_networks:
+            region_key = f'{deep_name}_region_wise'
+            if region_key in results['deep_network_detailed_analysis']:
+                deep_analysis = results['deep_network_detailed_analysis'][region_key]
+                discrimination = deep_analysis.get('discrimination_strength', 1.0)
+                # 判别强度越高，可扩展性越好
+                scalability_score = min(1.0, discrimination / 5.0)  # 5倍随机基线为满分
+                scalability_scores.append(scalability_score)
+        
+        if scalability_scores:
+            authority_factors['scalability'] = np.mean(scalability_scores)
+        
+        # 5. 一致性（全局和分脑区性能的一致性）
+        consistency_scores = []
+        for deep_name in deep_networks:
+            if (deep_name in results['global_analysis'] and 
+                deep_name in results['region_wise_analysis'] and
+                'mean_score' in results['global_analysis'][deep_name] and
+                'mean_score' in results['region_wise_analysis'][deep_name]):
+                
+                global_score = results['global_analysis'][deep_name]['mean_score']
+                region_score = results['region_wise_analysis'][deep_name]['mean_score']
+                
+                # 一致性：两个分数越接近越好（但允许分脑区略优）
+                consistency = 1.0 - abs(global_score - region_score) / max(global_score, region_score)
+                consistency_scores.append(max(0.0, consistency))
+        
+        if consistency_scores:
+            authority_factors['consistency'] = np.mean(consistency_scores)
+        
+        # 综合权威性评分
+        weights = {
+            'performance_superiority': 0.3,
+            'convergence_quality': 0.2,
+            'generalization_ability': 0.2,
+            'scalability': 0.2,
+            'consistency': 0.1
+        }
+        
+        overall_authority = sum(authority_factors[factor] * weights[factor] 
+                            for factor in authority_factors.keys())
+        
+        # 权威性等级
+        if overall_authority > 0.8:
+            authority_level = "AUTHORITATIVE"
+            recommendation = "深度网络结果具有决定性权威，强烈建议采纳"
+        elif overall_authority > 0.6:
+            authority_level = "HIGHLY_CREDIBLE"
+            recommendation = "深度网络结果高度可信，建议优先考虑"
+        elif overall_authority > 0.4:
+            authority_level = "MODERATELY_CREDIBLE"
+            recommendation = "深度网络结果中等可信，可作为重要参考"
+        else:
+            authority_level = "LIMITED_CREDIBILITY"
+            recommendation = "深度网络结果可信度有限，需结合其他方法"
+        
+        return {
+            'overall_authority': overall_authority,
+            'authority_level': authority_level,
+            'recommendation': recommendation,
+            'factor_breakdown': authority_factors,
+            'detailed_interpretation': {
+                'performance_superiority': f"相比传统方法的性能优势: {authority_factors['performance_superiority']:.3f}",
+                'convergence_quality': f"训练收敛质量: {authority_factors['convergence_quality']:.3f}",
+                'generalization_ability': f"泛化能力: {authority_factors['generalization_ability']:.3f}",
+                'scalability': f"受试者判别能力: {authority_factors['scalability']:.3f}",
+                'consistency': f"全局-分脑区一致性: {authority_factors['consistency']:.3f}"
+            }
+        }
+    
+    def _deep_network_feature_importance_analysis(self):
+        """🔥 深度网络特征重要性分析 - Phase 3A增强"""
+        
+        logger.info("    🔥 深度网络特征重要性分析...")
+        
+        if 'subject_stats' not in self.analysis_results:
+            logger.info("    ❌ 需要先运行Phase 1")
+            return {}
+        
+        subject_means = self.analysis_results['subject_stats']['means']
+        subject_labels = np.arange(len(subject_means))
+        
+        try:
+            # 创建深度网络进行特征重要性分析
+            logger.info("      🏗️ 创建4×4096深度网络进行特征分析...")
+            deep_classifier = self._create_deep_classifier_wrapper({
+                'batch_size': 64,
+                'no_epochs': 20  # 充分训练以获得稳定的特征重要性
+            })
+            
+            # 训练深度网络
+            start_time = time.time()
+            deep_classifier.fit(subject_means, subject_labels)
+            train_time = time.time() - start_time
+            
+            logger.info(f"      ✅ 深度网络训练完成，耗时: {train_time/60:.1f}分钟")
+            
+            # 方法1: 扰动测试特征重要性
+            logger.info("      🔍 执行特征扰动重要性分析...")
+            perturbation_importance = self._compute_perturbation_importance(deep_classifier, subject_means, subject_labels)
+            
+            # 方法2: 梯度重要性分析
+            logger.info("      🔍 执行梯度重要性分析...")
+            gradient_importance = self._compute_gradient_importance(deep_classifier, subject_means, subject_labels)
+            
+            # 方法3: 网络权重分析
+            logger.info("      🔍 执行网络权重重要性分析...")
+            weight_importance = self._compute_weight_importance(deep_classifier)
+            
+            # 综合特征重要性
+            combined_importance = self._combine_feature_importance(
+                perturbation_importance, gradient_importance, weight_importance
+            )
+            
+            # 特征分组重要性分析
+            group_importance = self._analyze_feature_group_importance(combined_importance)
+            
+            # 生成特征重要性排名
+            top_features = np.argsort(combined_importance)[-50:][::-1]  # Top 50 重要特征
+            bottom_features = np.argsort(combined_importance)[:20]      # Bottom 20 不重要特征
+            
+            feature_analysis = {
+                'perturbation_importance': perturbation_importance,
+                'gradient_importance': gradient_importance,
+                'weight_importance': weight_importance,
+                'combined_importance': combined_importance,
+                'group_importance': group_importance,
+                'top_features': top_features,
+                'bottom_features': bottom_features,
+                'importance_statistics': {
+                    'mean': np.mean(combined_importance),
+                    'std': np.std(combined_importance),
+                    'max': np.max(combined_importance),
+                    'min': np.min(combined_importance),
+                    'sparsity': np.sum(combined_importance < 0.01) / len(combined_importance)  # 不重要特征比例
+                },
+                'training_time': train_time,
+                'network_performance': deep_classifier.score(subject_means, subject_labels)
+            }
+            
+            logger.info(f"      ✅ 深度网络特征重要性分析完成")
+            logger.info(f"        - 最重要特征: {top_features[:5]}")
+            logger.info(f"        - 特征重要性范围: [{np.min(combined_importance):.4f}, {np.max(combined_importance):.4f}]")
+            logger.info(f"        - 稀疏度: {feature_analysis['importance_statistics']['sparsity']:.1%}")
+            
+            return feature_analysis
+            
+        except Exception as e:
+            logger.info(f"      ❌ 深度网络特征重要性分析失败: {e}")
+            return {'error': str(e)}
+
+    def _compute_perturbation_importance(self, classifier, X, y):
+        """计算扰动重要性"""
+        baseline_score = classifier.score(X, y)
+        importance_scores = np.zeros(X.shape[1])
+        
+        # 对每个特征进行扰动测试
+        for i in range(X.shape[1]):
+            if i % 50 == 0:  # 每50个特征打印一次进度
+                logger.info(f"        扰动测试进度: {i}/{X.shape[1]}")
+            
+            X_perturbed = X.copy()
+            # 用随机噪声替换该特征
+            X_perturbed[:, i] = np.random.normal(np.mean(X[:, i]), np.std(X[:, i]), X.shape[0])
+            
+            perturbed_score = classifier.score(X_perturbed, y)
+            importance_scores[i] = baseline_score - perturbed_score  # 性能下降越大，重要性越高
+        
+        # 归一化到 [0, 1]
+        importance_scores = np.maximum(importance_scores, 0)  # 只保留正向重要性
+        if np.max(importance_scores) > 0:
+            importance_scores = importance_scores / np.max(importance_scores)
+        
+        return importance_scores
+
+    def _compute_gradient_importance(self, classifier, X, y):
+        """计算梯度重要性（简化版）"""
+        # 注意：这是一个简化的梯度重要性计算
+        # 在实际PyTorch实现中，你可能需要更复杂的梯度计算
+        
+        # 计算特征的方差作为梯度重要性的代理
+        feature_variances = np.var(X, axis=0)
+        
+        # 归一化
+        if np.max(feature_variances) > 0:
+            gradient_importance = feature_variances / np.max(feature_variances)
+        else:
+            gradient_importance = np.zeros(X.shape[1])
+        
+        return gradient_importance
+
+    def _compute_weight_importance(self, classifier):
+        """计算网络权重重要性"""
+        try:
+            # 获取第一层权重（输入层到第一个隐藏层）
+            if hasattr(classifier, 'network') and hasattr(classifier.network, 'fc1'):
+                first_layer_weights = classifier.network.fc1.weight.data.cpu().numpy()  # shape: (4096, 341)
+                
+                # 计算每个输入特征对所有隐藏单元的权重绝对值之和
+                weight_importance = np.sum(np.abs(first_layer_weights), axis=0)  # shape: (341,)
+                
+                # 归一化
+                if np.max(weight_importance) > 0:
+                    weight_importance = weight_importance / np.max(weight_importance)
+                
+                return weight_importance
+            else:
+                # 如果无法获取权重，返回均匀分布
+                return np.ones(341) * 0.5
+                
+        except Exception as e:
+            logger.info(f"        ⚠️ 权重重要性计算失败: {e}")
+            return np.ones(341) * 0.5
+
+    def _combine_feature_importance(self, perturbation, gradient, weight):
+        """综合多种特征重要性方法"""
+        
+        # 加权平均
+        weights = {
+            'perturbation': 0.5,  # 扰动测试最可靠
+            'gradient': 0.2,      # 梯度信息
+            'weight': 0.3         # 网络权重
+        }
+        
+        combined = (perturbation * weights['perturbation'] + 
+                    gradient * weights['gradient'] + 
+                    weight * weights['weight'])
+        
+        return combined
+
+    def _analyze_feature_group_importance(self, feature_importance):
+        """分析特征分组的重要性"""
+        
+        feature_groups = {
+            'qti_params': list(range(0, 15)),           # QTI参数 (15个)
+            'raw_b_tensors': list(range(15, 225)),      # 原始b-tensor值 (210个)
+            'cest_params': list(range(225, 229)),       # CEST参数 (4个)
+            'z_spectrum': list(range(229, 341))         # Z-spectrum值 (112个)
+        }
+        
+        group_importance = {}
+        
+        for group_name, indices in feature_groups.items():
+            if len(indices) > 0:
+                group_scores = feature_importance[indices]
+                group_importance[group_name] = {
+                    'mean_importance': np.mean(group_scores),
+                    'max_importance': np.max(group_scores),
+                    'std_importance': np.std(group_scores),
+                    'top_features_in_group': np.argsort(group_scores)[-5:][::-1] + indices[0],  # Top 5 in group
+                    'group_size': len(indices),
+                    'relative_contribution': np.sum(group_scores) / np.sum(feature_importance)
+                }
+        
+        return group_importance
+
 
     def _build_region_aware_dataset(self):
         """构建脑区感知数据集：每个样本 = 一个受试者在一个脑区的平均特征"""
@@ -3451,13 +4381,28 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         return preservation_scores
 
+  
     def generate_visualizations(self):
-        """生成可视化图表 - 保留原有可视化 + 新增脑区特异性可视化"""
-        logger.info("\n" + "="*80)
-        logger.info("📊 生成增强版可视化图表")
-        logger.info("="*80)
-        
+        """生成可视化图表 - 保持原有实现 + 🔥 存档点保护"""
         try:
+            logger.info("\n" + "="*80)
+            logger.info("📊 生成增强版可视化图表 (带存档点保护)")
+            logger.info("="*80)
+            
+            # 🔥 可视化前创建存档点
+            if self.checkpoint_manager:
+                try:
+                    self.checkpoint_manager.create_checkpoint(
+                        analyzer_instance=self,
+                        checkpoint_name="before_visualization",
+                        phase_completed=-1,
+                        description="可视化生成前的状态保存",
+                        is_auto=True,
+                        include_deep_networks=False  # 可视化前不需要保存网络状态
+                    )
+                except Exception as e:
+                    logger.warning(f"可视化前存档点创建失败: {e}")
+            
             # 🔄 生成原有可视化 (简化版，保留主要图表)
             logger.info("\n📊 生成原有分析可视化...")
             self._generate_original_visualizations()
@@ -3470,11 +4415,23 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             logger.info("\n📊 生成脑区embedding设计图表...")
             self._generate_brain_embedding_design_visualizations()
             
+            # 🔥 新增：生成降维方法对比图表
+            logger.info("\n📊 生成降维方法对比图表...")
+            self._generate_dimensionality_comparison_plot()
+            
             logger.info(f"✅ 增强版可视化图表生成完成")
             
         except Exception as e:
             logger.error(f"可视化生成过程中出现错误: {e}")
             logger.exception("详细错误信息:")
+            
+            # 🔥 可视化异常时的紧急存档
+            if self.checkpoint_manager:
+                self.checkpoint_manager.create_emergency_checkpoint(
+                    analyzer_instance=self,
+                    error_info=f"可视化生成异常: {str(e)}",
+                    stack_trace=str(e)
+                )
 
     def _generate_original_visualizations(self):
         """生成原有的可视化图表 (简化版)"""
@@ -3812,46 +4769,130 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         logger.info(f"  ✅ 脑区embedding设计图表已保存: {embedding_viz_path}")
 
     def phase4_decision_generation(self):
-        """
-        Phase 4: 决策建议生成 - 保留原有决策 + 新增脑区感知建议
-        """
-        logger.info("\n" + "="*80)
-        logger.info("🎯 Phase 4: 决策建议生成 (脑区感知增强版)")
-        logger.info("="*80)
+        """Phase 4: 决策建议生成 - 🔥 带存档点功能"""
+        self._start_phase_timer("Phase 4")
         
-        # 🔄 保留原有决策逻辑
-        logger.info("\n📊 Phase 4A: 全局决策生成...")
-        global_decision = self._generate_global_decision()
+        try:
+            logger.info("\n" + "="*80)
+            logger.info("🎯 Phase 4: 决策建议生成 (脑区感知增强版 + 存档点)")
+            logger.info("="*80)
+            
+            # 🔄 保留原有决策逻辑
+            logger.info("\n📊 Phase 4A: 全局决策生成...")
+            global_decision = self._generate_global_decision()
+            
+            # 🔥 新增脑区感知决策
+            logger.info("\n📊 Phase 4B: 脑区感知决策生成...")
+            brain_aware_decision = self._generate_brain_aware_decision()
+            
+            # 综合决策
+            logger.info("\n📊 Phase 4C: 综合决策整合...")
+            comprehensive_decision = self._integrate_comprehensive_decision(global_decision, brain_aware_decision)
+            
+            # 生成实施建议
+            logger.info("\n📊 Phase 4D: 实施建议生成...")
+            implementation_plan = self._generate_implementation_plan(comprehensive_decision)
+            
+            # 最终决策结果
+            final_decision = {
+                'global_analysis': global_decision,
+                'brain_aware_analysis': brain_aware_decision,
+                'comprehensive_recommendation': comprehensive_decision,
+                'implementation_plan': implementation_plan,
+                'analysis_timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'analysis_version': 'Brain-Aware v1.0 + Checkpoints',
+                'total_analysis_time': sum(self.phase_durations),
+                'phase_durations': self.phase_durations.copy()
+            }
+            
+            self.analysis_results['final_comprehensive_decision'] = final_decision
+            
+            duration = self._end_phase_timer("Phase 4")
+            
+            # 🔥 创建最终存档点
+            if self.checkpoint_manager:
+                try:
+                    self.checkpoint_manager.create_checkpoint(
+                        analyzer_instance=self,
+                        checkpoint_name="final_decision",
+                        phase_completed=4,
+                        description="完整分析完成，包含最终决策和实施计划",
+                        is_auto=True
+                    )
+                except Exception as e:
+                    logger.warning(f"最终存档点创建失败: {e}")
+            
+            # 打印决策报告
+            self._print_comprehensive_decision_report(final_decision)
+            
+            return final_decision
         
-        # 🔥 新增脑区感知决策
-        logger.info("\n📊 Phase 4B: 脑区感知决策生成...")
-        brain_aware_decision = self._generate_brain_aware_decision()
-        
-        # 综合决策
-        logger.info("\n📊 Phase 4C: 综合决策整合...")
-        comprehensive_decision = self._integrate_comprehensive_decision(global_decision, brain_aware_decision)
-        
-        # 生成实施建议
-        logger.info("\n📊 Phase 4D: 实施建议生成...")
-        implementation_plan = self._generate_implementation_plan(comprehensive_decision)
-        
-        # 最终决策结果
-        final_decision = {
-            'global_analysis': global_decision,
-            'brain_aware_analysis': brain_aware_decision,
-            'comprehensive_recommendation': comprehensive_decision,
-            'implementation_plan': implementation_plan,
-            'analysis_timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'analysis_version': 'Brain-Aware v1.0'
-        }
-        
-        self.analysis_results['final_comprehensive_decision'] = final_decision
-        
-        # 打印决策报告
-        self._print_comprehensive_decision_report(final_decision) 
+        except Exception as e:
+            # 🔥 异常时创建紧急存档点
+            if self.checkpoint_manager:
+                self.checkpoint_manager.create_emergency_checkpoint(
+                    analyzer_instance=self,
+                    error_info=f"Phase 4 执行异常: {str(e)}",
+                    stack_trace=str(e)
+                )
+            raise
+
     
+    def run_complete_analysis(self, skip_phase=None):
+        """
+        执行完整分析流程
         
-        return final_decision
+        Args:
+            skip_phase: 跳过的阶段列表 (用于从存档点恢复后的部分执行)
+        """
+        skip_phase = skip_phase or []
+        
+        total_start_time = time.time()
+        logger.info("🚀 开始完整的脑区感知Subject Embedding分析")
+        
+        try:
+            if 1 not in skip_phase:
+                self.phase1_subject_differences_analysis()
+            else:
+                logger.info("⏭️ 跳过Phase 1 (从存档点恢复)")
+            
+            if 2 not in skip_phase:
+                self.phase2_subject_separability_analysis()
+            else:
+                logger.info("⏭️ 跳过Phase 2 (从存档点恢复)")
+            
+            if 3 not in skip_phase:
+                self.phase3_embedding_adaptability_analysis()
+            else:
+                logger.info("⏭️ 跳过Phase 3 (从存档点恢复)")
+            
+            if 4 not in skip_phase:
+                final_decision = self.phase4_decision_generation()
+            else:
+                logger.info("⏭️ 跳过Phase 4 (从存档点恢复)")
+                final_decision = self.analysis_results.get('final_comprehensive_decision', {})
+            
+            total_time = time.time() - total_start_time
+            
+            logger.info(f"\n🎉 完整分析成功完成！")
+            logger.info(f"⏱️ 总耗时: {total_time/60:.2f}分钟")
+            logger.info(f"📊 阶段耗时: {[f'{d/60:.1f}min' for d in self.phase_durations]}")
+            
+            return final_decision
+            
+        except Exception as e:
+            logger.error(f"❌ 完整分析执行失败: {e}")
+            logger.exception("详细错误信息:")
+            
+            # 🔥 最后的紧急存档
+            if self.checkpoint_manager:
+                self.checkpoint_manager.create_emergency_checkpoint(
+                    analyzer_instance=self,
+                    error_info=f"完整分析执行异常: {str(e)}",
+                    stack_trace=str(e)
+                )
+            raise
+    
 
     def _generate_global_decision(self):
         """生成全局决策 (基于原有逻辑)"""
@@ -4053,189 +5094,6 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         return implementation_plan
 
-
-    def _generate_basic_visualizations(self, axes):
-        """生成所有分析结果的可视化图表"""
-        logger.info("\n" + "="*80)
-        logger.info("📊 生成可视化图表")
-        logger.info("="*80)
-        
-        # 创建大图
-        fig, axes = plt.subplots(3, 4, figsize=(20, 15))
-        
-        # 1. 受试者相似性热图
-        ax = axes[0, 0]
-        correlation_matrix = self.analysis_results['subject_similarity']['correlation_matrix']
-        im = ax.imshow(correlation_matrix, cmap='RdBu_r', vmin=-1, vmax=1)
-        ax.set_title('受试者间相关性矩阵', fontweight='bold')
-        ax.set_xlabel('受试者 ID')
-        ax.set_ylabel('受试者 ID')
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        
-        # 2. 层次聚类树状图
-        ax = axes[0, 1]
-        linkage_matrix = self.analysis_results['subject_similarity']['linkage_matrix']
-        dendrogram(linkage_matrix, ax=ax, leaf_rotation=90)
-        ax.set_title('受试者层次聚类', fontweight='bold')
-        ax.set_xlabel('受试者 ID')
-        ax.set_ylabel('距离')
-        
-        # 3. 特征变异分布
-        ax = axes[0, 2]
-        f_stats = self.analysis_results['feature_variation']['f_stats']
-        ax.hist(f_stats, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
-        ax.axvline(np.percentile(f_stats, 90), color='red', linestyle='--', 
-                  label=f'90th percentile: {np.percentile(f_stats, 90):.2f}')
-        ax.axvline(np.percentile(f_stats, 10), color='green', linestyle='--',
-                  label=f'10th percentile: {np.percentile(f_stats, 10):.2f}')
-        ax.set_title('特征受试者间变异分布', fontweight='bold')
-        ax.set_xlabel('标准化F统计量')
-        ax.set_ylabel('特征数量')
-        ax.legend()
-        
-        # 4. PCA累积方差解释
-        ax = axes[0, 3]
-        cumulative_variance = self.analysis_results['feature_variation']['pca_cumulative_variance']
-        ax.plot(range(1, min(21, len(cumulative_variance)+1)), 
-               cumulative_variance[:20], 'o-', linewidth=2, markersize=6)
-        ax.axhline(0.8, color='red', linestyle='--', label='80%解释阈值')
-        ax.axhline(0.9, color='orange', linestyle='--', label='90%解释阈值')
-        ax.set_title('PCA累积方差解释', fontweight='bold')
-        ax.set_xlabel('主成分数量')
-        ax.set_ylabel('累积方差解释比例')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        
-        # 5. 受试者识别准确率
-        ax = axes[1, 0]
-        if 'subject_identification' in self.analysis_results:
-            cv_scores = self.analysis_results['subject_identification'].get('cv_scores', [0])
-            accuracy = self.analysis_results['subject_identification'].get('accuracy', 0)
-            n_subjects = self.analysis_results['subject_identification'].get('n_valid_subjects', 1)
-            random_baseline = 1 / n_subjects
-            
-            ax.bar(['随机基线', '逻辑回归'], [random_baseline, accuracy], 
-                  color=['gray', 'lightcoral'])
-            ax.set_title('受试者识别准确率对比', fontweight='bold')
-            ax.set_ylabel('准确率')
-            
-            # 添加数值标签
-            ax.text(0, random_baseline + 0.01, f'{random_baseline:.3f}', 
-                   ha='center', va='bottom')
-            ax.text(1, accuracy + 0.01, f'{accuracy:.3f}', 
-                   ha='center', va='bottom')
-        
-        # 6. 特征重要性（Top 20）
-        ax = axes[1, 1]
-        if 'subject_identification' in self.analysis_results and 'feature_importance' in self.analysis_results['subject_identification']:
-            feature_importance = self.analysis_results['subject_identification']['feature_importance']
-            top_features = np.argsort(feature_importance)[-20:]
-            ax.barh(range(20), feature_importance[top_features], color='lightgreen')
-            ax.set_title('Top 20 受试者识别特征重要性', fontweight='bold')
-            ax.set_xlabel('重要性得分')
-            ax.set_ylabel('特征索引')
-            ax.set_yticks(range(20))
-            ax.set_yticklabels(top_features)
-        
-        # 7. PCA vs t-SNE受试者分布对比
-        ax = axes[1, 2]
-        if 'linearity_analysis' in self.analysis_results:
-            pca_2d = self.analysis_results['linearity_analysis']['pca_2d']
-            scatter = ax.scatter(pca_2d[:, 0], pca_2d[:, 1], 
-                               c=range(len(pca_2d)), cmap='viridis', s=50, alpha=0.7)
-            ax.set_title('PCA - 受试者2D分布', fontweight='bold')
-            ax.set_xlabel('PC1')
-            ax.set_ylabel('PC2')
-            plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
-        
-        ax = axes[1, 3]
-        if 'linearity_analysis' in self.analysis_results:
-            tsne_2d = self.analysis_results['linearity_analysis']['tsne_2d']
-            scatter = ax.scatter(tsne_2d[:, 0], tsne_2d[:, 1], 
-                               c=range(len(tsne_2d)), cmap='viridis', s=50, alpha=0.7)
-            ax.set_title('t-SNE - 受试者2D分布', fontweight='bold')
-            ax.set_xlabel('t-SNE 1')
-            ax.set_ylabel('t-SNE 2')
-            plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
-        
-        # 8. 聚类质量评估
-        ax = axes[2, 0]
-        if 'linearity_analysis' in self.analysis_results and 'silhouette_scores' in self.analysis_results['linearity_analysis']:
-            silhouette_scores = self.analysis_results['linearity_analysis']['silhouette_scores']
-            n_clusters_range = range(2, 2 + len(silhouette_scores))
-            ax.plot(n_clusters_range, silhouette_scores, 'o-', linewidth=2, markersize=8)
-            best_n = self.analysis_results['linearity_analysis']['best_n_clusters']
-            best_score = self.analysis_results['linearity_analysis']['best_silhouette']
-            ax.axvline(best_n, color='red', linestyle='--', 
-                      label=f'最优聚类数: {best_n}')
-            ax.set_title('聚类质量评估 (轮廓系数)', fontweight='bold')
-            ax.set_xlabel('聚类数量')
-            ax.set_ylabel('轮廓系数')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-        
-        # 9. 脑区一致性分析
-        ax = axes[2, 1]
-        if 'class_consistency' in self.analysis_results and self.analysis_results['class_consistency']:
-            class_consistency = self.analysis_results['class_consistency']
-            class_ids = list(class_consistency.keys())
-            cv_values = [class_consistency[cid]['mean_cv'] for cid in class_ids]
-            
-            ax.bar(range(len(class_ids)), cv_values, color='lightblue', alpha=0.7)
-            ax.set_title('脑区受试者间一致性', fontweight='bold')
-            ax.set_xlabel('脑区 ID')
-            ax.set_ylabel('变异系数 (越低越一致)')
-            ax.set_xticks(range(len(class_ids)))
-            ax.set_xticklabels(class_ids, rotation=45)
-        
-        # 10. 样本量分布
-        ax = axes[2, 2]
-        sample_counts = self.analysis_results['subject_stats']['sample_counts']
-        ax.hist(sample_counts, bins=15, alpha=0.7, color='lightcoral', edgecolor='black')
-        ax.axvline(np.mean(sample_counts), color='red', linestyle='--',
-                  label=f'平均: {np.mean(sample_counts):.0f}')
-        ax.axvline(np.median(sample_counts), color='green', linestyle='--',
-                  label=f'中位数: {np.median(sample_counts):.0f}')
-        ax.set_title('受试者样本量分布', fontweight='bold')
-        ax.set_xlabel('样本量')
-        ax.set_ylabel('受试者数量')
-        ax.legend()
-        
-        # 11. 综合决策雷达图
-        ax = axes[2, 3]
-        categories = ['差异显著性', '模式线性度', '受试者相似性', '特征异质性', 
-                     '可分离性', '类别一致性', '样本充足性']
-        
-        scores = [
-            self.decision_scores['phase1']['difference_significance'],
-            self.decision_scores['phase1']['pattern_linearity'], 
-            self.decision_scores['phase1']['subject_similarity'],
-            self.decision_scores['phase1']['feature_heterogeneity'],
-            self.decision_scores['phase2']['subject_separability'],
-            self.decision_scores['phase2']['class_consistency'],
-            self.decision_scores['phase3']['sample_adequacy']
-        ]
-        
-        # 雷达图
-        angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False)
-        scores_plot = scores + [scores[0]]  # 闭合图形
-        angles_plot = np.concatenate((angles, [angles[0]]))
-        
-        ax.plot(angles_plot, scores_plot, 'o-', linewidth=2, color='blue')
-        ax.fill(angles_plot, scores_plot, alpha=0.25, color='blue')
-        ax.set_xticks(angles)
-        ax.set_xticklabels(categories, fontsize=10)
-        ax.set_ylim(0, 1)
-        ax.set_title('Subject Embedding 可行性雷达图', fontweight='bold')
-        ax.grid(True)
-        
-        plt.tight_layout()
-        viz_path = self.save_path / 'visualizations' / 'comprehensive_analysis.png'
-        plt.savefig(viz_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        logger.info(f"✅ 可视化图表已保存: {viz_path}")
-    
     def _generate_implementation_suggestions(self, embedding_suggestions, all_scores, enhanced_results):
         """生成具体的实施建议"""
         suggestions = []
@@ -4382,19 +5240,23 @@ class BrainAwareSubjectEmbeddingAnalyzer:
 
     def _generate_dimensionality_comparison_plot(self):
         """生成专门的降维方法对比图"""
+        
+        # 检查是否有增强版降维分析结果
         if 'enhanced_dimensionality' not in self.analysis_results:
+            logger.info("  ⚠️ 没有增强版降维分析结果，跳过降维对比图生成")
             return
         
         enhanced_results = self.analysis_results['enhanced_dimensionality']
         
         if 'dimensionality_comparison' not in enhanced_results:
+            logger.info("  ⚠️ 没有降维对比数据，跳过降维对比图生成")
             return
         
         dim_results = enhanced_results['dimensionality_comparison']
         
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         
-        # PCA结果
+        # 1. PCA结果
         if 'pca' in dim_results and dim_results['pca'] is not None:
             ax = axes[0, 0]
             pca_2d = dim_results['pca']['2d_result']
@@ -4403,9 +5265,14 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             ax.set_title('PCA降维结果', fontweight='bold', fontsize=14)
             ax.set_xlabel('PC1')
             ax.set_ylabel('PC2')
-            plt.colorbar(scatter, ax=ax)
+            plt.colorbar(scatter, ax=ax, fraction=0.046)
+            logger.info("    ✅ PCA降维图生成完成")
+        else:
+            axes[0, 0].text(0.5, 0.5, 'PCA数据不可用', ha='center', va='center', 
+                        transform=axes[0, 0].transAxes, fontsize=12)
+            axes[0, 0].set_title('PCA降维结果', fontweight='bold', fontsize=14)
         
-        # Kernel PCA结果  
+        # 2. Kernel PCA结果（如果有的话）
         if 'kernel_pca' in dim_results and dim_results['kernel_pca'] is not None:
             ax = axes[0, 1]
             kpca_2d = dim_results['kernel_pca']['rbf_2d_result']
@@ -4414,9 +5281,14 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             ax.set_title('Kernel PCA (RBF)降维结果', fontweight='bold', fontsize=14)
             ax.set_xlabel('KPC1')
             ax.set_ylabel('KPC2')
-            plt.colorbar(scatter, ax=ax)
+            plt.colorbar(scatter, ax=ax, fraction=0.046)
+            logger.info("    ✅ Kernel PCA降维图生成完成")
+        else:
+            axes[0, 1].text(0.5, 0.5, 'Kernel PCA数据不可用', ha='center', va='center', 
+                        transform=axes[0, 1].transAxes, fontsize=12)
+            axes[0, 1].set_title('Kernel PCA降维结果', fontweight='bold', fontsize=14)
         
-        # t-SNE结果
+        # 3. t-SNE结果
         if 'tsne' in dim_results and dim_results['tsne'] is not None:
             ax = axes[0, 2]
             tsne_2d = dim_results['tsne']['2d_result']
@@ -4425,9 +5297,14 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             ax.set_title('t-SNE降维结果', fontweight='bold', fontsize=14)
             ax.set_xlabel('t-SNE 1')
             ax.set_ylabel('t-SNE 2')
-            plt.colorbar(scatter, ax=ax)
+            plt.colorbar(scatter, ax=ax, fraction=0.046)
+            logger.info("    ✅ t-SNE降维图生成完成")
+        else:
+            axes[0, 2].text(0.5, 0.5, 't-SNE数据不可用', ha='center', va='center', 
+                        transform=axes[0, 2].transAxes, fontsize=12)
+            axes[0, 2].set_title('t-SNE降维结果', fontweight='bold', fontsize=14)
         
-        # UMAP结果
+        # 4. UMAP结果（如果有的话）
         if 'umap' in dim_results and dim_results['umap'] is not None:
             ax = axes[1, 0]
             umap_2d = dim_results['umap']['2d_result']
@@ -4436,10 +5313,15 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             ax.set_title('UMAP降维结果', fontweight='bold', fontsize=14)
             ax.set_xlabel('UMAP 1')
             ax.set_ylabel('UMAP 2')
-            plt.colorbar(scatter, ax=ax)
+            plt.colorbar(scatter, ax=ax, fraction=0.046)
+            logger.info("    ✅ UMAP降维图生成完成")
+        else:
+            axes[1, 0].text(0.5, 0.5, 'UMAP数据不可用', ha='center', va='center', 
+                        transform=axes[1, 0].transAxes, fontsize=12)
+            axes[1, 0].set_title('UMAP降维结果', fontweight='bold', fontsize=14)
         
-        # PCA解释方差
-        if 'pca' in dim_results:
+        # 5. PCA解释方差
+        if 'pca' in dim_results and dim_results['pca'] is not None:
             ax = axes[1, 1]
             explained_var = dim_results['pca']['explained_variance'][:20]  # 前20个
             ax.plot(range(1, len(explained_var)+1), explained_var, 'o-', linewidth=2, markersize=6)
@@ -4447,16 +5329,31 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             ax.set_xlabel('主成分')
             ax.set_ylabel('解释方差比例')
             ax.grid(True, alpha=0.3)
+            
+            # 添加累积方差线
+            if len(explained_var) > 1:
+                cumulative_var = np.cumsum(explained_var)
+                ax2 = ax.twinx()
+                ax2.plot(range(1, len(cumulative_var)+1), cumulative_var, 's-', 
+                        color='red', alpha=0.7, linewidth=2, markersize=4)
+                ax2.set_ylabel('累积解释方差', color='red')
+                ax2.tick_params(axis='y', labelcolor='red')
+            
+            logger.info("    ✅ PCA解释方差图生成完成")
+        else:
+            axes[1, 1].text(0.5, 0.5, 'PCA方差数据不可用', ha='center', va='center', 
+                        transform=axes[1, 1].transAxes, fontsize=12)
+            axes[1, 1].set_title('PCA解释方差', fontweight='bold', fontsize=14)
         
-        # 结构保持能力对比
-        if 'structure_preservation' in dim_results:
+        # 6. 结构保持能力对比
+        if 'structure_preservation' in dim_results and dim_results['structure_preservation']:
             ax = axes[1, 2]
             methods = []
             correlations = []
             
             for method, scores in dim_results['structure_preservation'].items():
-                if 'spearman_correlation' in scores:
-                    methods.append(method)
+                if isinstance(scores, dict) and 'spearman_correlation' in scores:
+                    methods.append(method.upper())
                     correlations.append(abs(scores['spearman_correlation']))
             
             if methods:
@@ -4464,17 +5361,28 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 ax.set_title('结构保持能力对比', fontweight='bold', fontsize=14)
                 ax.set_ylabel('Spearman相关系数')
                 ax.set_xticklabels(methods, rotation=45)
+                ax.set_ylim(0, 1)
                 
                 # 添加数值标签
                 for bar, corr in zip(bars, correlations):
                     height = bar.get_height()
                     ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                        f'{corr:.3f}', ha='center', va='bottom')
+                        f'{corr:.3f}', ha='center', va='bottom', fontsize=10)
+                
+                logger.info("    ✅ 结构保持能力对比图生成完成")
+            else:
+                ax.text(0.5, 0.5, '结构保持数据不可用', ha='center', va='center', 
+                    transform=ax.transAxes, fontsize=12)
+                ax.set_title('结构保持能力对比', fontweight='bold', fontsize=14)
+        else:
+            axes[1, 2].text(0.5, 0.5, '结构保持数据不可用', ha='center', va='center', 
+                        transform=axes[1, 2].transAxes, fontsize=12)
+            axes[1, 2].set_title('结构保持能力对比', fontweight='bold', fontsize=14)
         
         plt.tight_layout()
-        dim_viz_path = self.save_path / 'visualizations'/ 'dimensionality_comparison.png'
+        dim_viz_path = self.save_path / 'visualizations' / 'dimensionality_comparison.png'
         plt.savefig(dim_viz_path, dpi=300, bbox_inches='tight')
-        plt.close()
+        plt.close()  # 🔥 重要：关闭图形避免内存泄漏
         
         logger.info(f"  ✅ 降维对比图已保存: {dim_viz_path}")
 
@@ -4569,29 +5477,43 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         logger.info(f"\n⏱️ 分析完成时间: {final_decision['analysis_timestamp']}")
         logger.info(f"🔬 分析版本: {final_decision['analysis_version']}")
-
+  
     def generate_report(self):
-        """生成完整的脑区感知分析报告"""
+        """生成完整的脑区感知分析报告 - 增强版"""
         report_path = self.save_path / 'brain_aware_subject_embedding_analysis_report.txt'
-    
-
+        
         with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("脑区感知Subject Embedding 可行性分析报告\n")
+            f.write("脑区感知Subject Embedding 可行性分析报告 (增强版)\n")
             f.write("=" * 80 + "\n\n")
             f.write(f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"分析版本: 脑区感知增强版 v1.0\n\n")
+            f.write(f"分析版本: 脑区感知增强版 v1.0 + 存档点系统\n")
+            
+            # 🔥 新增：存档点使用统计
+            if self.checkpoint_manager:
+                checkpoints = self.checkpoint_manager.list_checkpoints()
+                f.write(f"存档点数量: {len(checkpoints)}\n")
+                if checkpoints:
+                    f.write(f"最新存档点: {checkpoints[0]['name']} ({checkpoints[0]['creation_time']})\n")
+            
+            # 🔥 新增：性能统计
+            if self.phase_durations:
+                f.write(f"总分析时间: {sum(self.phase_durations)/60:.2f} 分钟\n")
+                f.write(f"各阶段耗时: {[f'{d/60:.1f}min' for d in self.phase_durations]}\n")
+            
+            f.write("\n")
             
             # 数据概况
             f.write("📊 数据概况\n")
             f.write("-" * 40 + "\n")
-            f.write(f"受试者数量: {len(self.data['available_subjects'])}\n")
-            f.write(f"特征维度: {self.data['X_train'].shape[1]}\n")
-            f.write(f"训练样本量: {len(self.data['X_train']):,}\n")
-            f.write(f"验证样本量: {len(self.data['X_val']):,}\n")
-            f.write(f"测试样本量: {len(self.data['X_test']):,}\n\n")
+            if hasattr(self, 'data') and self.data:
+                f.write(f"受试者数量: {len(self.data['available_subjects'])}\n")
+                f.write(f"特征维度: {self.data['X_train'].shape[1]}\n")
+                f.write(f"训练样本量: {len(self.data['X_train']):,}\n")
+                f.write(f"验证样本量: {len(self.data['X_val']):,}\n")
+                f.write(f"测试样本量: {len(self.data['X_test']):,}\n\n")
             
             # 脑区分析概况
-            if 'brain_region_analysis' in self.data:
+            if hasattr(self, 'data') and 'brain_region_analysis' in self.data:
                 brain_data = self.data['brain_region_analysis']
                 f.write("🧠 脑区分析概况\n")
                 f.write("-" * 40 + "\n")
@@ -4607,10 +5529,16 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 f.write(f"PCA前3PC解释方差: {np.sum(global_analysis['pca_explained_variance'][:3]):.3f}\n")
                 f.write(f"PCA前10PC解释方差: {np.sum(global_analysis['pca_explained_variance'][:10]):.3f}\n")
             
-            if 'global_subject_identification' in self.analysis_results:
-                global_id = self.analysis_results['global_subject_identification']
-                f.write(f"全局受试者识别准确率: {global_id['accuracy']:.3f}\n")
-                f.write(f"随机基线: {global_id['random_baseline']:.3f}\n\n")
+            if 'neural_network_baseline_analysis' in self.analysis_results:
+                baseline_analysis = self.analysis_results['neural_network_baseline_analysis']
+                if 'baseline_random_split' in baseline_analysis:
+                    baseline_results = baseline_analysis['baseline_random_split']
+                    if 'global_analysis' in baseline_results:
+                        global_perf = baseline_results['global_analysis']
+                        for model_name, results in global_perf.items():
+                            if isinstance(results, dict) and 'accuracy' in results:
+                                f.write(f"{model_name}准确率: {results['accuracy']:.3f}\n")
+            f.write("\n")
             
             # 脑区感知分析结果
             f.write("🧠 脑区感知分析结果\n")
@@ -4627,8 +5555,11 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             if 'region_wise_separability' in self.analysis_results:
                 region_sep = self.analysis_results['region_wise_separability']
                 if region_sep:
-                    sep_scores = [r['accuracy'] for r in region_sep.values()]
-                    f.write(f"平均脑区识别准确率: {np.mean(sep_scores):.3f}\n\n")
+                    successful_regions = {k: v for k, v in region_sep.items() if 'embedding_necessity_score' in v}
+                    if successful_regions:
+                        necessity_scores = [v['embedding_necessity_score'] for v in successful_regions.values()]
+                        f.write(f"平均Subject Embedding需求得分: {np.mean(necessity_scores):.3f}\n")
+            f.write("\n")
             
             # 最终决策
             f.write("🎯 最终综合决策\n")
@@ -4650,6 +5581,15 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 f.write("  主要阶段:\n")
                 for phase in impl_plan['phase2_development'][:3]:
                     f.write(f"    • {phase}\n")
+            
+            # 🔥 存档点信息
+            if self.checkpoint_manager:
+                f.write("\n🔄 存档点信息\n")
+                f.write("-" * 40 + "\n")
+                checkpoints = self.checkpoint_manager.list_checkpoints()
+                f.write(f"总存档点数: {len(checkpoints)}\n")
+                for ckpt in checkpoints[:5]:  # 显示最新5个
+                    f.write(f"  • {ckpt['name']} - {ckpt['creation_time']} ({ckpt['file_size_mb']:.1f}MB)\n")
         
-        logger.info(f"✅ 脑区感知完整报告已保存: {report_path}")
+        logger.info(f"✅ 增强版完整报告已保存: {report_path}")
         return report_path

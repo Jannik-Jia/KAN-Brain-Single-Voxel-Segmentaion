@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 脑区感知Subject Embedding分析启动脚本
-# 使用nohup在后台运行，保存详细日志
+# 脑区感知Subject Embedding分析启动脚本 - 增强版
+# 🔥 新增功能：存档点管理、交互式恢复、智能重启
 
 # 🔥 改进：更严格的错误处理
 set -euo pipefail  # 更严格的错误处理
@@ -39,6 +39,10 @@ print_header() {
     echo -e "${PURPLE}================================${NC}"
 }
 
+print_checkpoint() {
+    echo -e "${CYAN}[CHECKPOINT]${NC} $1"
+}
+
 # 🔥 新增：错误处理函数
 cleanup_on_error() {
     local exit_code=$?
@@ -73,18 +77,27 @@ SKIP_VIZ=false
 CONDA_ENV=""
 PYTHON_CMD="python"
 
+# 🔥 新增：存档点相关参数
+DISABLE_CHECKPOINTS=false
+RESUME_LATEST=false
+RESUME_FROM=""
+LIST_CHECKPOINTS=false
+CHECKPOINT_AND_EXIT=""
+FORCE_RESTART=false
+INTERACTIVE_RECOVERY=false
+
 # 全局变量
 PID_FILE=""
 NOHUP_LOG=""
 
-# 帮助信息（保持不变）
+# 🔥 增强版帮助信息
 show_help() {
     cat << EOF
-脑区感知Subject Embedding分析启动脚本
+脑区感知Subject Embedding分析启动脚本 - 增强版 (带存档点支持)
 
 用法: $0 [选项]
 
-选项:
+基础选项:
     -d, --data-path PATH        数据文件路径 (默认: $DATA_PATH)
     --train-start NUM           训练集受试者起始ID (默认: $TRAIN_START)
     --train-end NUM             训练集受试者结束ID (默认: $TRAIN_END)
@@ -97,25 +110,115 @@ show_help() {
     --skip-viz                  跳过可视化生成
     -e, --conda-env ENV         指定conda环境名
     -p, --python-cmd CMD        指定Python命令 (默认: $PYTHON_CMD)
+
+🔥 存档点选项:
+    --disable-checkpoints       禁用存档点系统
+    --resume-latest             自动恢复最新存档点
+    --resume-from CHECKPOINT    从指定存档点恢复 (文件名或阶段名)
+    --list-checkpoints          列出所有可用存档点并退出
+    --checkpoint-and-exit NAME  创建指定名称的存档点后退出
+    --force-restart             强制重新开始，忽略所有存档点
+    --interactive-recovery      启用交互式恢复选择
+
     -h, --help                  显示此帮助信息
 
-示例:
-    # 使用默认参数运行
-    $0
+存档点使用示例:
+    # 启用交互式恢复（推荐）
+    $0 --interactive-recovery
+    
+    # 自动恢复最新存档点
+    $0 --resume-latest
+    
+    # 从指定存档点恢复
+    $0 --resume-from phase2_separability
+    
+    # 列出所有存档点
+    $0 --list-checkpoints
+    
+    # 强制重新开始
+    $0 --force-restart
+    
+    # 创建存档点后退出
+    $0 --checkpoint-and-exit debug_point
+
+基础使用示例:
+    # 使用默认参数运行（带交互式恢复）
+    $0 --interactive-recovery
     
     # 指定数据路径和输出目录
-    $0 -d /path/to/data.mat -o /path/to/output
+    $0 -d /path/to/data.mat -o /path/to/output --interactive-recovery
     
     # 使用特定conda环境
-    $0 -e tabnet10
-    
-    # 跳过可视化，使用DEBUG日志级别
-    $0 --skip-viz -l DEBUG
+    $0 -e tabnet10 --resume-latest
 
 环境变量:
     CUDA_VISIBLE_DEVICES        指定GPU设备 (例如: export CUDA_VISIBLE_DEVICES=0)
     
 EOF
+}
+
+# 🔥 新增：存档点管理函数
+list_available_checkpoints() {
+    local checkpoint_dir="$OUTPUT_DIR/checkpoints"
+    
+    if [[ ! -d "$checkpoint_dir" ]]; then
+        print_warning "存档点目录不存在: $checkpoint_dir"
+        return 1
+    fi
+    
+    local checkpoint_files=($(find "$checkpoint_dir" -name "*.ckpt" -type f 2>/dev/null | sort -t_ -k3 -r))
+    
+    if [[ ${#checkpoint_files[@]} -eq 0 ]]; then
+        print_warning "未找到任何存档点文件"
+        return 1
+    fi
+    
+    print_header "📂 可用存档点列表"
+    echo ""
+    
+    local i=0
+    for checkpoint_file in "${checkpoint_files[@]}"; do
+        local filename=$(basename "$checkpoint_file")
+        local size=$(ls -lh "$checkpoint_file" | awk '{print $5}')
+        local date=$(stat -c %y "$checkpoint_file" 2>/dev/null | cut -d'.' -f1 || echo "Unknown")
+        
+        echo "[$i] $filename"
+        echo "    大小: $size, 创建时间: $date"
+        echo ""
+        
+        ((i++))
+        
+        # 只显示前10个
+        if [[ $i -ge 10 ]]; then
+            echo "... (还有 $((${#checkpoint_files[@]} - 10)) 个存档点)"
+            break
+        fi
+    done
+}
+
+check_checkpoint_compatibility() {
+    local checkpoint_path="$1"
+    
+    if [[ ! -f "$checkpoint_path" ]]; then
+        print_error "存档点文件不存在: $checkpoint_path"
+        return 1
+    fi
+    
+    # 基础检查：文件是否可读
+    if [[ ! -r "$checkpoint_path" ]]; then
+        print_error "存档点文件不可读: $checkpoint_path"
+        return 1
+    fi
+    
+    # 检查文件大小
+    local file_size=$(stat -c%s "$checkpoint_path" 2>/dev/null || echo "0")
+    if [[ "$file_size" -lt 1000 ]]; then
+        print_error "存档点文件可能损坏 (文件过小): $checkpoint_path"
+        return 1
+    fi
+    
+    print_success "存档点兼容性检查通过: $(basename "$checkpoint_path")"
+    return 0
 }
 
 # 🔥 改进：参数验证函数
@@ -157,10 +260,21 @@ validate_parameters() {
         *) print_error "无效的日志级别: $LOG_LEVEL"; return 1 ;;
     esac
     
+    # 🔥 验证存档点相关参数
+    if [[ "$RESUME_LATEST" == true && -n "$RESUME_FROM" ]]; then
+        print_error "不能同时使用 --resume-latest 和 --resume-from"
+        return 1
+    fi
+    
+    if [[ "$FORCE_RESTART" == true && ("$RESUME_LATEST" == true || -n "$RESUME_FROM" || "$INTERACTIVE_RECOVERY" == true) ]]; then
+        print_error "--force-restart 不能与其他恢复选项同时使用"
+        return 1
+    fi
+    
     return 0
 }
 
-# 解析命令行参数（保持不变）
+# 解析命令行参数（增强版）
 while [[ $# -gt 0 ]]; do
     case $1 in
         -d|--data-path)
@@ -211,6 +325,35 @@ while [[ $# -gt 0 ]]; do
             PYTHON_CMD="$2"
             shift 2
             ;;
+        # 🔥 新增：存档点选项
+        --disable-checkpoints)
+            DISABLE_CHECKPOINTS=true
+            shift
+            ;;
+        --resume-latest)
+            RESUME_LATEST=true
+            shift
+            ;;
+        --resume-from)
+            RESUME_FROM="$2"
+            shift 2
+            ;;
+        --list-checkpoints)
+            LIST_CHECKPOINTS=true
+            shift
+            ;;
+        --checkpoint-and-exit)
+            CHECKPOINT_AND_EXIT="$2"
+            shift 2
+            ;;
+        --force-restart)
+            FORCE_RESTART=true
+            shift
+            ;;
+        --interactive-recovery)
+            INTERACTIVE_RECOVERY=true
+            shift
+            ;;
         -h|--help)
             show_help
             exit 0
@@ -229,8 +372,14 @@ if ! validate_parameters; then
     exit 1
 fi
 
+# 🔥 处理存档点列表请求
+if [[ "$LIST_CHECKPOINTS" == true ]]; then
+    list_available_checkpoints
+    exit 0
+fi
+
 # 打印启动信息
-print_header "🧠 脑区感知Subject Embedding分析"
+print_header "🧠 脑区感知Subject Embedding分析 - 增强版"
 
 print_info "分析参数:"
 echo "  📁 数据路径: $DATA_PATH"
@@ -241,6 +390,15 @@ echo "  📂 输出目录: $OUTPUT_DIR"
 echo "  🎲 随机种子: $RANDOM_STATE"
 echo "  📊 日志级别: $LOG_LEVEL"
 echo "  🎨 跳过可视化: $SKIP_VIZ"
+
+# 🔥 新增：存档点配置显示
+echo ""
+print_checkpoint "存档点配置:"
+echo "  💾 存档点系统: $([ "$DISABLE_CHECKPOINTS" == true ] && echo "禁用" || echo "启用")"
+echo "  🔄 自动恢复最新: $RESUME_LATEST"
+echo "  📂 从存档点恢复: ${RESUME_FROM:-"无"}"
+echo "  🔧 交互式恢复: $INTERACTIVE_RECOVERY"
+echo "  🚀 强制重新开始: $FORCE_RESTART"
 
 # 检查数据文件是否存在
 if [[ ! -f "$DATA_PATH" ]]; then
@@ -267,14 +425,14 @@ cd "$SCRIPT_DIR" || {
 print_info "当前工作目录: $(pwd)"
 
 # 🔥 改进：检查项目结构
-required_files=("main.py" "src/analyzer.py" "src/data_loader.py" "src/utils.py" "config/settings.py")
+required_files=("main.py" "src/analyzer.py" "src/data_loader.py" "src/utils.py" "config/settings.py" "checkpoint_manager.py")
 for file in "${required_files[@]}"; do
     if [[ ! -f "$file" ]]; then
         print_error "缺少必要文件: $file"
         exit 1
     fi
 done
-print_success "项目结构检查通过"
+print_success "项目结构检查通过（包含存档点模块）"
 
 # 检查Python环境
 if [[ -n "$CONDA_ENV" ]]; then
@@ -308,9 +466,9 @@ if ! "$PYTHON_CMD" --version; then
     exit 1
 fi
 
-# 🔥 改进：更详细的依赖检查
+# 🔥 改进：更详细的依赖检查（包含存档点相关依赖）
 print_info "检查Python依赖包..."
-required_packages=("numpy" "pandas" "matplotlib" "sklearn" "scipy" "h5py")
+required_packages=("numpy" "pandas" "matplotlib" "sklearn" "scipy" "h5py" "torch" "psutil")
 
 for package in "${required_packages[@]}"; do
     if ! "$PYTHON_CMD" -c "import $package" &> /dev/null; then
@@ -324,7 +482,7 @@ for package in "${required_packages[@]}"; do
     fi
 done
 
-print_success "Python环境检查通过"
+print_success "Python环境检查通过（包含存档点依赖）"
 
 # 🔥 改进：设置环境变量
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
@@ -338,11 +496,11 @@ if command -v nvidia-smi &> /dev/null; then
     while IFS=, read -r index name total used; do
         echo "  GPU $index: $name (${used}MB/${total}MB)"
     done
-else
+else:
     print_warning "未检测到NVIDIA GPU，将使用CPU进行计算"
 fi
 
-# 构建Python命令参数
+# 🔥 构建Python命令参数（增强版）
 PYTHON_ARGS=(
     "--data_path" "$DATA_PATH"
     "--train_start" "$TRAIN_START"
@@ -359,6 +517,44 @@ if [[ "$SKIP_VIZ" == true ]]; then
     PYTHON_ARGS+=("--skip_visualization")
 fi
 
+# 🔥 添加存档点相关参数
+if [[ "$DISABLE_CHECKPOINTS" == true ]]; then
+    PYTHON_ARGS+=("--disable_checkpoints")
+fi
+
+if [[ "$RESUME_LATEST" == true ]]; then
+    PYTHON_ARGS+=("--resume_latest")
+fi
+
+if [[ -n "$RESUME_FROM" ]]; then
+    PYTHON_ARGS+=("--resume_from" "$RESUME_FROM")
+    
+    # 检查指定的存档点是否存在
+    local checkpoint_path="$OUTPUT_DIR/checkpoints/$RESUME_FROM"
+    if [[ ! "$RESUME_FROM" == *".ckpt" ]]; then
+        checkpoint_path="$OUTPUT_DIR/checkpoints/${RESUME_FROM}.ckpt"
+    fi
+    
+    if [[ -f "$checkpoint_path" ]]; then
+        check_checkpoint_compatibility "$checkpoint_path"
+    else
+        print_warning "指定的存档点文件不存在: $checkpoint_path"
+        print_info "将尝试按阶段名查找存档点..."
+    fi
+fi
+
+if [[ "$INTERACTIVE_RECOVERY" == true ]]; then
+    PYTHON_ARGS+=("--interactive_recovery")
+fi
+
+if [[ "$FORCE_RESTART" == true ]]; then
+    PYTHON_ARGS+=("--force_restart")
+fi
+
+if [[ -n "$CHECKPOINT_AND_EXIT" ]]; then
+    PYTHON_ARGS+=("--checkpoint_and_exit" "$CHECKPOINT_AND_EXIT")
+fi
+
 # 准备日志文件
 readonly TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 NOHUP_LOG="$OUTPUT_DIR/run_${TIMESTAMP}.log"
@@ -367,6 +563,33 @@ PID_FILE="$OUTPUT_DIR/analysis.pid"
 print_info "准备启动分析..."
 print_info "nohup日志文件: $NOHUP_LOG"
 print_info "PID文件: $PID_FILE"
+
+# 🔥 新增：存档点状态显示
+if [[ "$DISABLE_CHECKPOINTS" != true ]]; then
+    print_checkpoint "存档点状态检查..."
+    local checkpoint_dir="$OUTPUT_DIR/checkpoints"
+    if [[ -d "$checkpoint_dir" ]]; then
+        local checkpoint_count=$(find "$checkpoint_dir" -name "*.ckpt" -type f 2>/dev/null | wc -l)
+        if [[ $checkpoint_count -gt 0 ]]; then
+            print_checkpoint "发现 $checkpoint_count 个存档点"
+            
+            # 显示最新的几个存档点
+            local recent_checkpoints=($(find "$checkpoint_dir" -name "*.ckpt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -3 | cut -d' ' -f2-))
+            if [[ ${#recent_checkpoints[@]} -gt 0 ]]; then
+                print_checkpoint "最近的存档点:"
+                for ckpt_path in "${recent_checkpoints[@]}"; do
+                    local ckpt_name=$(basename "$ckpt_path")
+                    local ckpt_date=$(stat -c %y "$ckpt_path" 2>/dev/null | cut -d'.' -f1 || echo "Unknown")
+                    echo "  • $ckpt_name ($ckpt_date)"
+                done
+            fi
+        else
+            print_checkpoint "未发现存档点，将执行完整分析"
+        fi
+    else
+        print_checkpoint "存档点目录不存在，将执行完整分析"
+    fi
+fi
 
 # 启动分析
 print_header "🚀 启动分析进程"
@@ -403,6 +626,16 @@ if kill -0 $ANALYSIS_PID 2>/dev/null; then
     echo "  强制停止:     kill -9 $ANALYSIS_PID"
     echo "  后台进程管理: jobs"
     
+    # 🔥 新增：存档点管理命令
+    if [[ "$DISABLE_CHECKPOINTS" != true ]]; then
+        echo ""
+        print_checkpoint "存档点管理命令:"
+        echo "  列出存档点:   $0 --list-checkpoints"
+        echo "  从存档点恢复: $0 --resume-from <checkpoint>"
+        echo "  交互式恢复:   $0 --interactive-recovery"
+        echo "  强制重新开始: $0 --force-restart"
+    fi
+    
     print_info "分析预计耗时: 10-30分钟（取决于数据规模和硬件配置）"
     
     # 🔥 改进：检查初始日志
@@ -423,6 +656,16 @@ if kill -0 $ANALYSIS_PID 2>/dev/null; then
     else
         print_info "分析在后台运行中..."
         print_info "要查看日志，请运行: tail -f $NOHUP_LOG"
+        
+        # 🔥 新增：存档点进度提示
+        if [[ "$DISABLE_CHECKPOINTS" != true ]]; then
+            echo ""
+            print_checkpoint "存档点进度提示:"
+            echo "  • Phase 0: 数据准备完成后会创建第一个存档点"
+            echo "  • Phase 1-4: 每个阶段完成后自动创建存档点"
+            echo "  • 如果分析中断，可以使用存档点快速恢复"
+            echo "  • 异常时会自动创建紧急存档点"
+        fi
     fi
     
 else
