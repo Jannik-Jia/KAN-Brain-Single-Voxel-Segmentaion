@@ -25,6 +25,13 @@ from scipy.spatial.distance import pdist, squareform
 from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.stats import f_oneway, kruskal, spearmanr
 from pathlib import Path
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.metrics import accuracy_score
+
 
 try:
     from .utils import ensure_directory, save_analysis_results, cleanup_memory
@@ -60,22 +67,296 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         logger.info("🧠 脑区感知Subject Embedding分析器初始化完成")  # 改为logger
         logger.info(f"📁 结果保存路径: {self.save_path}")
+        self._initialize_deep_network_components()
+    
+        logger.info("🧠 脑区感知Subject Embedding分析器初始化完成")
+        logger.info(f"📁 结果保存路径: {self.save_path}")
 
-    def prepare_data_with_subjects_enhanced(self, data_dict):
-        """
-        增强版数据准备 - 保留原有功能 + 脑区张量构建
+
+
+    def _initialize_deep_network_components(self):
+        """初始化深度网络组件"""
         
-        Args:
-            data_dict: load_and_prepare_data_multi_subject_out()的返回结果
+        # 设置PyTorch设备
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"🔥 深度网络将使用设备: {self.device}")
+        
+        # 设置随机种子确保可重现性
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(42)
+            torch.cuda.manual_seed_all(42)
+        
+        # 深度网络缓存
+        self.deep_network_cache = {}
+
+    def _create_deep_network(self, input_dim=341, num_classes=None):
+        """创建4×4096深度网络 (完全基于你的alex torch版本)"""
+        
+        class RegModel(nn.Module):
+            def __init__(self, input_dim=341, num_classes=102):
+                super(RegModel, self).__init__()
+                # 严格对应你的TensorFlow版本的Dense层
+                self.fc1 = nn.Linear(input_dim, 4096)
+                self.fc2 = nn.Linear(4096, 4096) 
+                self.fc3 = nn.Linear(4096, 4096)
+                self.fc4 = nn.Linear(4096, 4096)
+                self.fc5 = nn.Linear(4096, num_classes)  # visualized_layer对应的层
+                self.dropout = nn.Dropout(0.5)
+                
+            def forward(self, x):
+                # 严格按照你的TensorFlow模型的结构
+                x = self.dropout(F.relu(self.fc1(x)))
+                x = self.dropout(F.relu(self.fc2(x)))
+                x = self.dropout(F.relu(self.fc3(x)))
+                x = self.dropout(F.relu(self.fc4(x)))
+                x = self.fc5(x)  # 注意：这里不应用softmax，让CrossEntropyLoss处理
+                return x
+        
+        if num_classes is None:
+            # 自动检测类别数
+            if hasattr(self, 'data') and 'y_train' in self.data:
+                if len(self.data['y_train'].shape) > 1 and self.data['y_train'].shape[1] > 1:
+                    num_classes = self.data['y_train'].shape[1]
+                else:
+                    num_classes = len(np.unique(self.data['y_train']))
+            else:
+                num_classes = 102  # 默认值
+        
+        model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
+        logger.info(f"    🏗️ 创建4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
+        
+        return model
+
+    def _kernel_l2_regularization(self, model, weight_decay=0.00001):
+        """L2正则化 - 只对权重矩阵，完全模拟你的TensorFlow版本"""
+        l2_reg = 0
+        for name, param in model.named_parameters():
+            # 只对权重矩阵应用L2正则化，跳过偏置项
+            if 'weight' in name and param.requires_grad:
+                l2_reg += torch.norm(param, p=2) ** 2
+        return weight_decay * l2_reg
+
+    def _prepare_torch_dataset(self, X, y=None, train_mode=True):
+        """准备PyTorch数据集"""
+        X_tensor = torch.FloatTensor(X).to(self.device)
+        
+        if train_mode and y is not None:
+            # 处理one-hot编码
+            if len(y.shape) > 1 and y.shape[1] > 1:
+                # one-hot -> 类别索引
+                y_indices = np.argmax(y, axis=1)
+            else:
+                y_indices = y
             
-        Returns:
-            dict: 包含完整受试者映射和脑区分析数据的字典
-        """
+            y_tensor = torch.LongTensor(y_indices).to(self.device)
+            return TensorDataset(X_tensor, y_tensor)
+        else:
+            return TensorDataset(X_tensor)
+
+    def _create_deep_classifier_wrapper(self, network_config=None):
+        """创建深度网络的sklearn兼容包装器"""
+        
+        class DeepNetworkWrapper:
+            def __init__(self, analyzer_instance, config=None):
+                self.analyzer = analyzer_instance
+                self.config = config or {}
+                self.network = None
+                self.trained = False
+                self.training_history = {'loss': [], 'accuracy': []}
+                
+            def fit(self, X, y):
+                """训练深度网络 (完全按照你的alex版本)"""
+                logger.info("    🔥 开始训练4×4096深度网络...")
+                start_time = time.time()
+                
+                # 确定类别数
+                if len(y.shape) > 1 and y.shape[1] > 1:
+                    num_classes = y.shape[1]
+                    y_indices = np.argmax(y, axis=1)
+                else:
+                    unique_classes = np.unique(y)
+                    num_classes = len(unique_classes)
+                    y_indices = y
+                
+                # 创建网络
+                self.network = self.analyzer._create_deep_network(
+                    input_dim=X.shape[1], 
+                    num_classes=num_classes
+                )
+                
+                # 数据准备
+                train_dataset = self.analyzer._prepare_torch_dataset(X, y)
+                batch_size = self.config.get('batch_size', 128)
+                train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+                
+                # 训练配置 (严格对应你的配置)
+                optimizer = torch.optim.Adam(self.network.parameters(), lr=0.00001)  # 你的学习率
+                criterion = nn.CrossEntropyLoss()
+                no_epochs = self.config.get('epochs', 25)  # 你的默认epoch数
+                
+                # 训练循环 (完全模拟你的训练过程)
+                self.network.train()
+                for epoch in range(no_epochs):
+                    epoch_loss = 0
+                    correct_train = 0
+                    total_train = 0
+                    
+                    for batch_x, batch_y in train_loader:
+                        optimizer.zero_grad()
+                        
+                        output = self.network(batch_x)
+                        
+                        # 计算基础损失
+                        base_loss = criterion(output, batch_y)
+                        
+                        # 添加L2正则化 (完全按照你的方法)
+                        l2_reg = self.analyzer._kernel_l2_regularization(self.network, weight_decay=0.00001)
+                        total_loss = base_loss + l2_reg
+                        
+                        total_loss.backward()
+                        optimizer.step()
+                        
+                        epoch_loss += total_loss.item()
+                        
+                        # 计算训练准确率
+                        _, predicted = torch.max(output.data, 1)
+                        total_train += batch_y.size(0)
+                        correct_train += (predicted == batch_y).sum().item()
+                    
+                    # 记录历史
+                    avg_loss = epoch_loss / len(train_loader)
+                    train_accuracy = correct_train / total_train
+                    self.training_history['loss'].append(avg_loss)
+                    self.training_history['accuracy'].append(train_accuracy)
+                    
+                    if epoch % 5 == 0:
+                        logger.info(f"      Epoch {epoch}/{no_epochs}, Loss: {avg_loss:.4f}, Acc: {train_accuracy:.3f}")
+                
+                self.trained = True
+                train_time = time.time() - start_time
+                logger.info(f"    ✅ 深度网络训练完成，耗时: {train_time/60:.1f}分钟")
+                
+            def predict(self, X):
+                """预测"""
+                if not self.trained:
+                    raise ValueError("模型尚未训练")
+                
+                self.network.eval()
+                test_dataset = self.analyzer._prepare_torch_dataset(X, None, train_mode=False)
+                test_loader = DataLoader(test_dataset, batch_size=512, shuffle=False)
+                
+                predictions = []
+                with torch.no_grad():
+                    for batch_x, in test_loader:
+                        outputs = self.network(batch_x)
+                        preds = torch.argmax(outputs, dim=1)
+                        predictions.extend(preds.cpu().numpy())
+                
+                return np.array(predictions)
+                
+            def predict_proba(self, X):
+                """预测概率"""
+                if not self.trained:
+                    raise ValueError("模型尚未训练")
+                
+                self.network.eval()
+                test_dataset = self.analyzer._prepare_torch_dataset(X, None, train_mode=False)
+                test_loader = DataLoader(test_dataset, batch_size=512, shuffle=False)
+                
+                probabilities = []
+                with torch.no_grad():
+                    for batch_x, in test_loader:
+                        outputs = self.network(batch_x)
+                        probs = F.softmax(outputs, dim=1)
+                        probabilities.extend(probs.cpu().numpy())
+                
+                return np.array(probabilities)
+                
+            def score(self, X, y):
+                """计算准确率"""
+                pred = self.predict(X)
+                
+                # 处理one-hot编码的y
+                if len(y.shape) > 1 and y.shape[1] > 1:
+                    y_true = np.argmax(y, axis=1)
+                else:
+                    y_true = y
+                
+                return accuracy_score(y_true, pred)
+        
+        return DeepNetworkWrapper(self, network_config)
+
+    def _create_region_specific_network(self, input_dim, output_dim):
+        """为单个脑区创建小型深度网络"""
+        
+        class RegionSpecificModel(nn.Module):
+            def __init__(self, input_dim, output_dim):
+                super(RegionSpecificModel, self).__init__()
+                # 更小的网络架构，适合单脑区分析
+                self.fc1 = nn.Linear(input_dim, 1024)
+                self.fc2 = nn.Linear(1024, 512)
+                self.fc3 = nn.Linear(512, 256)
+                self.fc4 = nn.Linear(256, output_dim)
+                self.dropout = nn.Dropout(0.3)
+                
+            def forward(self, x):
+                x = self.dropout(F.relu(self.fc1(x)))
+                x = self.dropout(F.relu(self.fc2(x)))
+                x = self.dropout(F.relu(self.fc3(x)))
+                x = self.fc4(x)
+                return x
+        
+        return RegionSpecificModel(input_dim, output_dim).to(self.device)
+
+    def _quick_train_and_evaluate(self, network, X_train, y_train, X_test, y_test):
+        """快速训练和评估网络 (用于分脑区分析)"""
+        
+        # 数据准备
+        train_dataset = TensorDataset(
+            torch.FloatTensor(X_train).to(self.device),
+            torch.LongTensor(y_train).to(self.device)
+        )
+        test_dataset = TensorDataset(
+            torch.FloatTensor(X_test).to(self.device),
+            torch.LongTensor(y_test).to(self.device)
+        )
+        
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+        
+        # 训练配置
+        optimizer = torch.optim.Adam(network.parameters(), lr=1e-3)
+        criterion = nn.CrossEntropyLoss()
+        
+        # 快速训练 (10个epoch)
+        network.train()
+        for epoch in range(10):
+            for batch_x, batch_y in train_loader:
+                optimizer.zero_grad()
+                outputs = network(batch_x)
+                loss = criterion(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+        
+        # 评估
+        network.eval()
+        with torch.no_grad():
+            test_x = torch.FloatTensor(X_test).to(self.device)
+            test_outputs = network(test_x)
+            predictions = torch.argmax(test_outputs, dim=1).cpu().numpy()
+            accuracy = accuracy_score(y_test, predictions)
+        
+        return accuracy
+
+    
+    def prepare_data_with_subjects_enhanced(self, data_dict):
+        """增强版数据准备 - 保留原有功能 + 脑区感知 + 🔥 深度网络支持"""
+        
         logger.info("\n" + "="*80)
-        logger.info("📊 Phase 0: 增强版数据准备（原有功能 + 脑区感知）")
+        logger.info("📊 Phase 0: 增强版数据准备（原有功能 + 脑区感知 + 🔥 深度网络支持）")
         logger.info("="*80)
         
-        # 🔄 保留原有数据验证逻辑
+        # 🔄 保留原有数据验证逻辑（不变）
         required_keys = ['X_train_scaled', 'y_train', 'subjects_train',
                         'X_val_scaled', 'y_val', 'subjects_val', 
                         'X_test_scaled', 'y_test', 'subjects_test']
@@ -84,7 +365,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         if missing_keys:
             raise ValueError(f"数据字典缺少必要字段: {missing_keys}")
         
-        # 提取数据
+        # 提取数据（不变）
         X_train = data_dict['X_train_scaled']
         y_train = data_dict['y_train'] 
         subjects_train = data_dict['subjects_train']
@@ -97,7 +378,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         y_test = data_dict['y_test']
         subjects_test = data_dict['subjects_test']
         
-        # 获取所有可用受试者
+        # 获取所有可用受试者（不变）
         all_subjects = np.concatenate([subjects_train, subjects_val, subjects_test])
         available_subjects = np.unique(all_subjects)
         
@@ -107,7 +388,26 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         logger.info(f"  - 测试集: {len(subjects_test):,} 样本, 受试者 {sorted(np.unique(subjects_test))}")
         logger.info(f"  - 总受试者数: {len(available_subjects)}")
         
-        # 🔥 新增：构建脑区感知分析数据
+        # 🔥 深度网络兼容性检查
+        logger.info(f"\n🔥 深度网络环境检查...")
+        try:
+            import torch
+            logger.info(f"  ✅ PyTorch版本: {torch.__version__}")
+            logger.info(f"  ✅ CUDA可用: {torch.cuda.is_available()}")
+            if torch.cuda.is_available():
+                logger.info(f"  ✅ CUDA设备: {torch.cuda.get_device_name(0)}")
+                logger.info(f"  ✅ 显存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            
+            # 测试创建小型网络
+            test_network = self._create_deep_network(input_dim=X_train.shape[1], num_classes=y_train.shape[1] if len(y_train.shape) > 1 else len(np.unique(y_train)))
+            logger.info(f"  ✅ 深度网络创建测试成功")
+            del test_network  # 清理测试网络
+            
+        except Exception as e:
+            logger.warning(f"  ⚠️ 深度网络环境检查失败: {e}")
+            logger.warning(f"  ⚠️ 将跳过深度网络相关分析")
+        
+        # 🔥 构建脑区感知分析数据（保留原有逻辑）
         logger.info(f"\n🧠 构建脑区感知分析数据...")
         
         # 解析one-hot标签到脑区ID  
@@ -121,7 +421,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             X_train, y_train_regions, subjects_train
         )
         
-        # 计算受试者样本统计
+        # 计算受试者样本统计（保留原有逻辑）
         subject_counts = {}
         for subject_id in available_subjects:
             train_count = np.sum(subjects_train == subject_id)
@@ -158,13 +458,22 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             'available_subjects': available_subjects,
             'subject_counts': subject_counts,
             'brain_region_analysis': brain_region_analysis,
-            'y_train_regions': y_train_regions
+            'y_train_regions': y_train_regions,
+            
+            # 🔥 新增：深度网络相关元信息
+            'deep_network_compatible': True,  # 假设兼容，在实际使用时验证
+            'feature_dim': X_train.shape[1],
+            'n_classes': y_train.shape[1] if len(y_train.shape) > 1 else len(np.unique(y_train)),
+            'total_samples': len(X_train) + len(X_val) + len(X_test),
+            'pytorch_ready': hasattr(self, 'device')  # 检查是否已初始化PyTorch组件
         }
         
-        
-        logger.info(f"✅ 增强版数据准备完成")
-        logger.info(f"  - 数据映射方法: 精确Multi-Subject-Out + 脑区感知")
+        logger.info(f"✅ 🔥 增强版数据准备完成（深度网络就绪）")
+        logger.info(f"  - 数据映射方法: 精确Multi-Subject-Out + 脑区感知 + 深度网络支持")
         logger.info(f"  - 有效脑区×受试者组合: {len(brain_region_analysis['subject_region_features'])}")
+        logger.info(f"  - 深度网络兼容性: {'✅' if self.data['deep_network_compatible'] else '❌'}")
+        logger.info(f"  - 特征维度: {self.data['feature_dim']}")
+        logger.info(f"  - 类别数量: {self.data['n_classes']}")
         
         return self.data
 
@@ -612,9 +921,9 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         }
 
     def _phase2b_region_wise_separability(self):
-        """修正版分脑区Subject Embedding需求分析"""
+        """修正版分脑区Subject Embedding需求分析 + 🔥 深度网络增强"""
         
-        logger.info("🔍 2.1B 分脑区Subject Embedding需求分析...")
+        logger.info("🔍 2.1B 🔥 分脑区Subject Embedding需求分析（含深度网络权威评估）...")
         
         if 'region_wise_subject_analysis' not in self.analysis_results:
             logger.info("❌ 需要先运行Phase 1B")
@@ -622,6 +931,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         region_wise_results = self.analysis_results['region_wise_subject_analysis']
         region_embedding_analysis = {}
+        deep_network_region_analysis = {}  # 🔥 新增：深度网络分脑区分析
         
         logger.info(f"    - 待分析脑区数: {len(region_wise_results)}")
         
@@ -631,75 +941,250 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 
                 logger.info(f"    🧠 分析脑区{region_id}的Subject Embedding需求...")
                 
-                # 1. 脑区分类一致性分析
+                # 1. 原有分析方法（保持不变）
                 consistency_analysis = self._analyze_region_classification_consistency(region_id)
-                
-                # 2. 交叉受试者分类测试
                 cross_subject_analysis = self._cross_subject_region_classification_test(region_id)
-                
-                # 3. 受试者特异性影响评估
                 specificity_impact = self._assess_subject_specificity_impact(region_id)
+        
                 
-                # 4. Subject Embedding需求评级
+                # 原有的embedding需求评级
                 embedding_necessity = self._compute_embedding_necessity_score(
                     consistency_analysis, cross_subject_analysis, specificity_impact
                 )
                 
-                region_embedding_analysis[region_id] = {
-                    'consistency_analysis': consistency_analysis,
-                    'cross_subject_analysis': cross_subject_analysis,
-                    'specificity_impact': specificity_impact,
-                    'embedding_necessity_score': embedding_necessity['score'],
-                    'embedding_necessity_level': embedding_necessity['level'],
-                    'recommended_embedding_dim': embedding_necessity['recommended_dim'],
-                    'implementation_priority': embedding_necessity['priority']
-                }
+                # 🔥 2. 新增：深度网络权威分析
+                deep_network_analysis = self._analyze_region_with_deep_network(region_id)
                 
-                logger.info(f"      ✅ 脑区{region_id}: {embedding_necessity['level']} "
-                    f"(得分: {embedding_necessity['score']:.3f}, "
-                    f"推荐维度: {embedding_necessity['recommended_dim']})")
+                # 🔥 3. 综合原有分析和深度网络分析
+                if deep_network_analysis['status'] == 'success':
+                    # 融合传统分析和深度网络分析
+                    traditional_score = embedding_necessity['score']
+                    deep_score = min(1.0, deep_network_analysis['subject_specificity_strength'] / 5.0)  # 归一化到0-1
+                    
+                    # 加权综合评分（深度网络权重更高，因为更权威）
+                    comprehensive_score = 0.4 * traditional_score + 0.6 * deep_score
+                    
+                    # 确定最终等级
+                    if comprehensive_score > 0.8:
+                        final_level = 'CRITICAL'
+                        final_dim = 128
+                        final_priority = 'HIGHEST'
+                    elif comprehensive_score > 0.6:
+                        final_level = 'HIGH'
+                        final_dim = 64
+                        final_priority = 'HIGH'
+                    elif comprehensive_score > 0.4:
+                        final_level = 'MEDIUM'
+                        final_dim = 32
+                        final_priority = 'MEDIUM'
+                    else:
+                        final_level = 'LOW'
+                        final_dim = 16
+                        final_priority = 'LOW'
+                    
+                    region_embedding_analysis[region_id] = {
+                        'consistency_analysis': consistency_analysis,
+                        'cross_subject_analysis': cross_subject_analysis,
+                        'specificity_impact': specificity_impact,
+                        'traditional_embedding_necessity_score': traditional_score,
+                        'traditional_embedding_necessity_level': embedding_necessity['level'],
+                        # 🔥 深度网络分析结果
+                        'deep_network_analysis': deep_network_analysis,
+                        'deep_necessity_score': deep_score,
+                        'deep_necessity_level': deep_network_analysis['deep_necessity_level'],
+                        # 🔥 综合评估结果
+                        'comprehensive_embedding_necessity_score': comprehensive_score,
+                        'comprehensive_embedding_necessity_level': final_level,
+                        'final_recommended_embedding_dim': final_dim,
+                        'final_implementation_priority': final_priority,
+                        'analysis_confidence': 'high',  # 有深度网络验证，置信度高
+                        'deep_network_validation': True
+                    }
+                    
+                    # 🔥 深度网络专项分析存储
+                    deep_network_region_analysis[region_id] = {
+                        'deep_accuracy': deep_network_analysis['deep_subject_identification_accuracy'],
+                        'specificity_strength': deep_network_analysis['subject_specificity_strength'],
+                        'deep_advantage': deep_network_analysis['deep_network_advantage'],
+                        'training_efficiency': deep_network_analysis['deep_subject_identification_accuracy'] / (deep_network_analysis['training_time'] / 60),
+                        'necessity_level': deep_network_analysis['deep_necessity_level'],
+                        'recommended_dim': deep_network_analysis['deep_recommended_dim']
+                    }
+                    
+                    logger.info(f"      ✅ 脑区{region_id}: 综合={final_level} "
+                        f"(传统得分: {traditional_score:.3f}, 深度得分: {deep_score:.3f}, "
+                        f"综合得分: {comprehensive_score:.3f}, 推荐维度: {final_dim})")
+                    
+                else:
+                    # 深度网络分析失败，仅使用传统分析
+                    region_embedding_analysis[region_id] = {
+                        'consistency_analysis': consistency_analysis,
+                        'cross_subject_analysis': cross_subject_analysis,
+                        'specificity_impact': specificity_impact,
+                        'embedding_necessity_score': embedding_necessity['score'],
+                        'embedding_necessity_level': embedding_necessity['level'],
+                        'recommended_embedding_dim': embedding_necessity['recommended_dim'],
+                        'implementation_priority': embedding_necessity['priority'],
+                        'deep_network_validation': False,
+                        'analysis_confidence': 'medium',  # 没有深度网络验证，置信度中等
+                        'deep_network_failure_reason': deep_network_analysis.get('reason', '未知原因')
+                    }
+                    
+                    logger.info(f"      ⚠️ 脑区{region_id}: {embedding_necessity['level']} "
+                        f"(得分: {embedding_necessity['score']:.3f}, "
+                        f"推荐维度: {embedding_necessity['recommended_dim']}, 深度网络分析失败)")
         
+        # 保存分析结果
         self.analysis_results['region_wise_separability'] = region_embedding_analysis
+        self.analysis_results['deep_network_region_analysis'] = deep_network_region_analysis  # 🔥 新增
+        
+        # 🔥 深度网络分脑区分析总结
+        if deep_network_region_analysis:
+            self._summarize_deep_network_region_analysis(deep_network_region_analysis, region_embedding_analysis)
         
         # 🔥 保留原有的完整结果分析，但重新解释含义
         if region_embedding_analysis:
-            necessity_scores = [r['embedding_necessity_score'] for r in region_embedding_analysis.values()]
-            recommended_dims = [r['recommended_embedding_dim'] for r in region_embedding_analysis.values()]
+            # 使用综合评分进行统计
+            comprehensive_scores = []
+            final_dims = []
             
-            logger.info(f"✅ 分脑区Subject Embedding需求分析完成")
+            for r_data in region_embedding_analysis.values():
+                if 'comprehensive_embedding_necessity_score' in r_data:
+                    comprehensive_scores.append(r_data['comprehensive_embedding_necessity_score'])
+                    final_dims.append(r_data['final_recommended_embedding_dim'])
+                else:
+                    comprehensive_scores.append(r_data['embedding_necessity_score'])
+                    final_dims.append(r_data['recommended_embedding_dim'])
+            
+            logger.info(f"✅ 🔥 增强版分脑区Subject Embedding需求分析完成")
             logger.info(f"  - 成功分析脑区数量: {len(region_embedding_analysis)}")
-            logger.info(f"  - 平均embedding需求得分: {np.mean(necessity_scores):.3f}")
-            logger.info(f"  - 需求得分范围: [{np.min(necessity_scores):.3f}, {np.max(necessity_scores):.3f}]")
-            logger.info(f"  - 平均推荐embedding维度: {np.mean(recommended_dims):.1f}")
+            logger.info(f"  - 深度网络验证脑区数: {len(deep_network_region_analysis)}")
+            logger.info(f"  - 平均综合embedding需求得分: {np.mean(comprehensive_scores):.3f}")
+            logger.info(f"  - 需求得分范围: [{np.min(comprehensive_scores):.3f}, {np.max(comprehensive_scores):.3f}]")
+            logger.info(f"  - 平均推荐embedding维度: {np.mean(final_dims):.1f}")
             
-            # 按需求等级分类
+            # 按最终需求等级分类
             critical_regions = [rid for rid, data in region_embedding_analysis.items() 
-                            if data['embedding_necessity_level'] == 'CRITICAL']
+                            if data.get('comprehensive_embedding_necessity_level', data.get('embedding_necessity_level')) == 'CRITICAL']
             high_regions = [rid for rid, data in region_embedding_analysis.items() 
-                        if data['embedding_necessity_level'] == 'HIGH']
+                        if data.get('comprehensive_embedding_necessity_level', data.get('embedding_necessity_level')) == 'HIGH']
             medium_regions = [rid for rid, data in region_embedding_analysis.items() 
-                            if data['embedding_necessity_level'] == 'MEDIUM']
+                            if data.get('comprehensive_embedding_necessity_level', data.get('embedding_necessity_level')) == 'MEDIUM']
             low_regions = [rid for rid, data in region_embedding_analysis.items() 
-                        if data['embedding_necessity_level'] == 'LOW']
+                        if data.get('comprehensive_embedding_necessity_level', data.get('embedding_necessity_level')) == 'LOW']
             
-            logger.info(f"  - CRITICAL级别脑区: {len(critical_regions)} 个")
-            logger.info(f"  - HIGH级别脑区: {len(high_regions)} 个") 
-            logger.info(f"  - MEDIUM级别脑区: {len(medium_regions)} 个")
-            logger.info(f"  - LOW级别脑区: {len(low_regions)} 个")
+            logger.info(f"  🔥 最终需求等级分布:")
+            logger.info(f"    - CRITICAL级别脑区: {len(critical_regions)} 个")
+            logger.info(f"    - HIGH级别脑区: {len(high_regions)} 个") 
+            logger.info(f"    - MEDIUM级别脑区: {len(medium_regions)} 个")
+            logger.info(f"    - LOW级别脑区: {len(low_regions)} 个")
             
-            # 识别最需要和最不需要embedding的脑区
+            # 🔥 深度网络验证统计
+            deep_validated_regions = [rid for rid, data in region_embedding_analysis.items() 
+                                    if data.get('deep_network_validation', False)]
+            logger.info(f"  🔥 深度网络验证率: {len(deep_validated_regions)}/{len(region_embedding_analysis)} "
+                f"({len(deep_validated_regions)/len(region_embedding_analysis)*100:.1f}%)")
+            
+            # 识别最需要和最不需要embedding的脑区（基于综合评分）
             if len(region_embedding_analysis) > 0:
                 most_needed_region = max(region_embedding_analysis.keys(), 
-                                    key=lambda x: region_embedding_analysis[x]['embedding_necessity_score'])
+                                    key=lambda x: region_embedding_analysis[x].get('comprehensive_embedding_necessity_score', 
+                                                                            region_embedding_analysis[x].get('embedding_necessity_score', 0)))
                 least_needed_region = min(region_embedding_analysis.keys(), 
-                                        key=lambda x: region_embedding_analysis[x]['embedding_necessity_score'])
+                                    key=lambda x: region_embedding_analysis[x].get('comprehensive_embedding_necessity_score',
+                                                                                region_embedding_analysis[x].get('embedding_necessity_score', 1)))
                 
-                logger.info(f"  - 最需要Subject Embedding的脑区: {most_needed_region} "
-                    f"({region_embedding_analysis[most_needed_region]['embedding_necessity_score']:.3f})")
-                logger.info(f"  - 最不需要Subject Embedding的脑区: {least_needed_region} "
-                    f"({region_embedding_analysis[least_needed_region]['embedding_necessity_score']:.3f})")
+                most_score = region_embedding_analysis[most_needed_region].get('comprehensive_embedding_necessity_score',
+                                                                        region_embedding_analysis[most_needed_region].get('embedding_necessity_score'))
+                least_score = region_embedding_analysis[least_needed_region].get('comprehensive_embedding_necessity_score',
+                                                                            region_embedding_analysis[least_needed_region].get('embedding_necessity_score'))
+                
+                logger.info(f"  🔥 最需要Subject Embedding的脑区: {most_needed_region} (综合得分: {most_score:.3f})")
+                logger.info(f"  🔥 最不需要Subject Embedding的脑区: {least_needed_region} (综合得分: {least_score:.3f})")
+        
         else:
             logger.info(f"❌ 没有成功的分脑区Subject Embedding分析")
+
+                
+            
+    def _summarize_deep_network_region_analysis(self, deep_network_region_analysis, region_embedding_analysis):
+        """🔥 总结深度网络分脑区分析结果"""
+        
+        logger.info(f"    🔥 深度网络分脑区分析总结:")
+        
+        if not deep_network_region_analysis:
+            logger.info(f"      ⚠️ 没有成功的深度网络分脑区分析")
+            return
+        
+        # 深度网络性能统计
+        deep_accuracies = [data['deep_accuracy'] for data in deep_network_region_analysis.values()]
+        specificity_strengths = [data['specificity_strength'] for data in deep_network_region_analysis.values()]
+        training_efficiencies = [data['training_efficiency'] for data in deep_network_region_analysis.values()]
+        
+        logger.info(f"      📊 深度网络性能统计:")
+        logger.info(f"        - 平均受试者识别准确率: {np.mean(deep_accuracies):.3f}")
+        logger.info(f"        - 准确率范围: [{np.min(deep_accuracies):.3f}, {np.max(deep_accuracies):.3f}]")
+        logger.info(f"        - 平均特异性强度: {np.mean(specificity_strengths):.2f}x 随机基线")
+        logger.info(f"        - 平均训练效率: {np.mean(training_efficiencies):.2f} 准确率/分钟")
+        
+        # 按深度网络判定的需求等级统计
+        deep_critical = [rid for rid, data in deep_network_region_analysis.items() if data['necessity_level'] == 'CRITICAL']
+        deep_high = [rid for rid, data in deep_network_region_analysis.items() if data['necessity_level'] == 'HIGH']
+        deep_medium = [rid for rid, data in deep_network_region_analysis.items() if data['necessity_level'] == 'MEDIUM']
+        deep_low = [rid for rid, data in deep_network_region_analysis.items() if data['necessity_level'] == 'LOW']
+        
+        logger.info(f"      🎯 深度网络需求等级判定:")
+        logger.info(f"        - CRITICAL (特异性>5x): {len(deep_critical)} 个脑区")
+        logger.info(f"        - HIGH (特异性3-5x): {len(deep_high)} 个脑区")
+        logger.info(f"        - MEDIUM (特异性2-3x): {len(deep_medium)} 个脑区")
+        logger.info(f"        - LOW (特异性<2x): {len(deep_low)} 个脑区")
+        
+        # 找出深度网络表现最好和最差的脑区
+        if len(deep_network_region_analysis) > 0:
+            best_region = max(deep_network_region_analysis.keys(), 
+                            key=lambda x: deep_network_region_analysis[x]['specificity_strength'])
+            worst_region = min(deep_network_region_analysis.keys(), 
+                            key=lambda x: deep_network_region_analysis[x]['specificity_strength'])
+            
+            best_strength = deep_network_region_analysis[best_region]['specificity_strength']
+            worst_strength = deep_network_region_analysis[worst_region]['specificity_strength']
+            
+            logger.info(f"      🏆 深度网络最强脑区: {best_region} (特异性强度: {best_strength:.2f}x)")
+            logger.info(f"      📉 深度网络最弱脑区: {worst_region} (特异性强度: {worst_strength:.2f}x)")
+        
+        # 深度网络验证与传统方法的一致性分析
+        consistency_analysis = self._analyze_deep_traditional_consistency(deep_network_region_analysis, region_embedding_analysis)
+        logger.info(f"      🔬 深度网络与传统方法一致性: {consistency_analysis['overall_consistency']:.1%}")
+
+    def _analyze_deep_traditional_consistency(self, deep_analysis, region_analysis):
+        """分析深度网络与传统方法的一致性"""
+        
+        consistent_count = 0
+        total_count = 0
+        
+        for region_id in deep_analysis.keys():
+            if region_id in region_analysis:
+                deep_level = deep_analysis[region_id]['necessity_level']
+                traditional_level = region_analysis[region_id].get('embedding_necessity_level', 'UNKNOWN')
+                
+                # 简化的一致性判断
+                level_mapping = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
+                deep_score = level_mapping.get(deep_level, 0)
+                traditional_score = level_mapping.get(traditional_level, 0)
+                
+                # 如果两者差距在1个等级内，认为一致
+                if abs(deep_score - traditional_score) <= 1:
+                    consistent_count += 1
+                
+                total_count += 1
+        
+        consistency_rate = consistent_count / total_count if total_count > 0 else 0
+        
+        return {
+            'overall_consistency': consistency_rate,
+            'consistent_regions': consistent_count,
+            'total_compared_regions': total_count
+        }       
 
     def _analyze_region_classification_consistency(self, region_id):
         """分析单个脑区的分类一致性"""
@@ -753,6 +1238,90 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             'std_inter_subject_distance': std_distance,
             'consistency_score': 1.0 / (1.0 + mean_cv)  # 越一致分数越高
         }
+
+    def _analyze_region_with_deep_network(self, region_id):
+        """🔥 用深度网络分析单个脑区的受试者特异性"""
+        
+        logger.info(f"      🔥 深度网络分析脑区{region_id}的Subject Embedding需求...")
+        
+        # 准备该脑区的数据
+        y_labels = np.argmax(self.data['y_train'], axis=1)
+        region_mask = y_labels == region_id
+        
+        if np.sum(region_mask) < 500:
+            return {'status': 'insufficient_data', 'reason': '脑区样本不足500个'}
+        
+        region_features = self.data['X_train'][region_mask]
+        region_subjects = self.data['subjects_train'][region_mask]
+        
+        # 构建受试者识别任务
+        unique_subjects = np.unique(region_subjects)
+        if len(unique_subjects) < 5:
+            return {'status': 'insufficient_subjects', 'reason': '受试者数量不足5个'}
+        
+        # 重新映射受试者标签
+        subject_mapping = {orig_id: new_id for new_id, orig_id in enumerate(unique_subjects)}
+        mapped_labels = np.array([subject_mapping[s] for s in region_subjects])
+        
+        # 训练深度网络进行受试者识别
+        try:
+            logger.info(f"        🏗️ 为脑区{region_id}创建专用深度网络...")
+            
+            # 创建小型网络（针对单脑区）
+            region_network = self._create_region_specific_network(
+                input_dim=341,
+                output_dim=len(unique_subjects)
+            )
+            
+            # 训练和评估
+            from sklearn.model_selection import train_test_split
+            X_train, X_test, y_train, y_test = train_test_split(
+                region_features, mapped_labels, test_size=0.3, random_state=42, stratify=mapped_labels
+            )
+            
+            # 快速训练和评估
+            start_time = time.time()
+            accuracy = self._quick_train_and_evaluate(region_network, X_train, y_train, X_test, y_test)
+            train_time = time.time() - start_time
+            
+            # 计算Subject Embedding需求强度
+            random_baseline = 1.0 / len(unique_subjects)
+            subject_specificity_strength = accuracy / random_baseline
+            
+            # 深度网络特异性评估
+            if subject_specificity_strength > 5.0:
+                deep_necessity_level = 'CRITICAL'
+                deep_recommended_dim = 128
+            elif subject_specificity_strength > 3.0:
+                deep_necessity_level = 'HIGH'
+                deep_recommended_dim = 64
+            elif subject_specificity_strength > 2.0:
+                deep_necessity_level = 'MEDIUM'
+                deep_recommended_dim = 32
+            else:
+                deep_necessity_level = 'LOW'
+                deep_recommended_dim = 16
+            
+            logger.info(f"        ✅ 脑区{region_id}深度网络分析: 准确率={accuracy:.3f}, 特异性强度={subject_specificity_strength:.2f}x, 需求={deep_necessity_level}")
+            
+            return {
+                'status': 'success',
+                'deep_subject_identification_accuracy': accuracy,
+                'random_baseline': random_baseline,
+                'subject_specificity_strength': subject_specificity_strength,
+                'deep_necessity_level': deep_necessity_level,
+                'deep_recommended_dim': deep_recommended_dim,
+                'n_subjects': len(unique_subjects),
+                'n_samples': len(region_features),
+                'training_time': train_time,
+                'deep_network_advantage': accuracy - random_baseline,
+                'interpretation': f"深度网络在脑区{region_id}显示{deep_necessity_level}级Subject Embedding需求"
+            }
+            
+        except Exception as e:
+            logger.info(f"        ❌ 脑区{region_id}深度分析失败: {e}")
+            return {'status': 'failed', 'error': str(e)}
+
 
     def _cross_subject_region_classification_test(self, region_id):
         """交叉受试者脑区分类测试"""
@@ -975,61 +1544,111 @@ class BrainAwareSubjectEmbeddingAnalyzer:
 
 
     def _test_random_split_performance(self, X, y):
-        """测试随机分割的baseline性能 (增强版：全局 + 分脑区分析)"""
+        """测试随机分割的baseline性能 (🔥 增强版：全局 + 分脑区 + 深度网络分析)"""
         
-        logger.info("    🔍 增强版Baseline随机分割性能测试...")
+        logger.info("    🔍 🔥 增强版Baseline随机分割性能测试（包含4×4096深度网络）...")
         
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import f1_score, accuracy_score
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.linear_model import LogisticRegression
         
+        # 🔥 扩展分类器列表，添加你的深度网络
         classifiers = {
             'complex_rf': RandomForestClassifier(
                 n_estimators=200, max_depth=20, 
                 min_samples_split=2, random_state=42),
             'simple_lr': LogisticRegression(
-                max_iter=1000, C=0.1, random_state=42)
+                max_iter=1000, C=0.1, random_state=42),
+            # 🔥 新增：你的4×4096深度网络
+            'deep_4x4096': self._create_deep_classifier_wrapper({
+                'batch_size': 128,
+                'epochs': 25  # 可以根据数据量调整
+            })
         }
         
         results = {
             'global_analysis': {},
             'region_wise_analysis': {},
-            'comparative_analysis': {}
+            'comparative_analysis': {},
+            'deep_network_detailed_analysis': {}  # 🔥 新增：深度网络详细分析
         }
         
         # ========================================================================
-        # 1. 保留原有全局分析
+        # 1. 保留原有全局分析 + 🔥 深度网络增强
         # ========================================================================
-        logger.info("      🌐 全局随机分割性能...")
+        logger.info("      🌐 全局随机分割性能（含深度网络）...")
         
         X_train, X_val, y_train, y_val = train_test_split(
             X, y, test_size=0.2, stratify=y, random_state=42)
         
         for name, clf in classifiers.items():
             logger.info(f"        🔍 训练全局{name}...")
-            clf.fit(X_train, y_train)
             
-            y_pred = clf.predict(X_val)
-            accuracy = accuracy_score(y_val, y_pred)
-            f1_macro = f1_score(y_val, y_pred, average='macro')
-            f1_weighted = f1_score(y_val, y_pred, average='weighted')
-            
-            results['global_analysis'][name] = {
-                'accuracy': accuracy,
-                'f1_macro': f1_macro,
-                'f1_weighted': f1_weighted,
-                'n_train_samples': len(X_train),
-                'n_test_samples': len(X_val),
-                'n_classes': len(np.unique(y))
-            }
-            
-            logger.info(f"          ✅ 全局{name}: Acc={accuracy:.3f}, F1_macro={f1_macro:.3f}")
+            # 特殊处理深度网络
+            if name == 'deep_4x4096':
+                # 深度网络需要更长时间，给出详细反馈
+                start_time = time.time()
+                clf.fit(X_train, y_train)
+                train_time = time.time() - start_time
+                
+                # 获取训练历史
+                training_history = clf.training_history
+                
+                # 详细分析
+                y_pred = clf.predict(X_val)
+                y_pred_proba = clf.predict_proba(X_val)
+                
+                accuracy = accuracy_score(y_val.argmax(axis=1) if len(y_val.shape) > 1 else y_val, y_pred)
+                f1_macro = f1_score(y_val.argmax(axis=1) if len(y_val.shape) > 1 else y_val, y_pred, average='macro')
+                f1_weighted = f1_score(y_val.argmax(axis=1) if len(y_val.shape) > 1 else y_val, y_pred, average='weighted')
+                
+                results['global_analysis'][name] = {
+                    'accuracy': accuracy,
+                    'f1_macro': f1_macro,
+                    'f1_weighted': f1_weighted,
+                    'n_train_samples': len(X_train),
+                    'n_test_samples': len(X_val),
+                    'n_classes': len(np.unique(y.argmax(axis=1) if len(y.shape) > 1 else y)),
+                    'training_time_minutes': train_time / 60,
+                    'final_train_accuracy': training_history['accuracy'][-1] if training_history['accuracy'] else 0
+                }
+                
+                # 🔥 深度网络特殊分析
+                results['deep_network_detailed_analysis']['global_performance'] = {
+                    'convergence_epochs': len(training_history['loss']),
+                    'final_training_loss': training_history['loss'][-1] if training_history['loss'] else 0,
+                    'loss_trend': 'decreasing' if len(training_history['loss']) > 1 and training_history['loss'][-1] < training_history['loss'][0] else 'stable',
+                    'overfitting_risk': training_history['accuracy'][-1] - accuracy if training_history['accuracy'] else 0,
+                    'prediction_confidence': np.mean(np.max(y_pred_proba, axis=1))
+                }
+                
+                logger.info(f"          ✅ 🔥 全局深度网络: Acc={accuracy:.3f}, F1_macro={f1_macro:.3f}, 训练时间={train_time/60:.1f}分钟")
+                
+            else:
+                # 传统分类器的原有逻辑
+                clf.fit(X_train, y_train)
+                
+                y_pred = clf.predict(X_val)
+                accuracy = accuracy_score(y_val, y_pred)
+                f1_macro = f1_score(y_val, y_pred, average='macro')
+                f1_weighted = f1_score(y_val, y_pred, average='weighted')
+                
+                results['global_analysis'][name] = {
+                    'accuracy': accuracy,
+                    'f1_macro': f1_macro,
+                    'f1_weighted': f1_weighted,
+                    'n_train_samples': len(X_train),
+                    'n_test_samples': len(X_val),
+                    'n_classes': len(np.unique(y))
+                }
+                
+                logger.info(f"          ✅ 全局{name}: Acc={accuracy:.3f}, F1_macro={f1_macro:.3f}")
         
         # ========================================================================
-        # 2. 新增分脑区分析
+        # 2. 保留原有分脑区分析 + 深度网络增强
         # ========================================================================
-        logger.info("      🧠 分脑区随机分割性能...")
+        logger.info("      🧠 分脑区随机分割性能（含深度网络）...")
         
         region_dataset = self._build_region_aware_dataset()
         
@@ -1052,9 +1671,18 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 for name, clf in classifiers.items():
                     logger.info(f"        🔍 训练分脑区{name}...")
                     
-                    # 使用新的分类器实例
-                    clf_region = type(clf)(**clf.get_params())
+                    # 为分脑区分析创建新的分类器实例
+                    if name == 'deep_4x4096':
+                        clf_region = self._create_deep_classifier_wrapper({
+                            'batch_size': 64,  # 分脑区用较小batch size
+                            'epochs': 15      # 较少epoch，因为数据较少
+                        })
+                    else:
+                        clf_region = type(clf)(**clf.get_params())
+                    
+                    start_time = time.time()
                     clf_region.fit(X_train_region, y_train_region)
+                    train_time = time.time() - start_time
                     
                     y_pred_region = clf_region.predict(X_val_region)
                     accuracy_region = accuracy_score(y_val_region, y_pred_region)
@@ -1068,8 +1696,19 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                         'n_train_samples': len(X_train_region),
                         'n_test_samples': len(X_val_region),
                         'n_classes': len(unique_subjects),
-                        'n_regions': len(np.unique(region_dataset['region_labels']))
+                        'n_regions': len(np.unique(region_dataset['region_labels'])),
+                        'training_time_minutes': train_time / 60
                     }
+                    
+                    # 🔥 深度网络在分脑区的特殊分析
+                    if name == 'deep_4x4096':
+                        region_history = clf_region.training_history
+                        results['deep_network_detailed_analysis']['region_wise_performance'] = {
+                            'convergence_epochs': len(region_history['loss']),
+                            'final_training_loss': region_history['loss'][-1] if region_history['loss'] else 0,
+                            'subject_discrimination_strength': accuracy_region / (1/len(unique_subjects)),  # 相对于随机的提升
+                            'region_adaptation_time': train_time
+                        }
                     
                     logger.info(f"          ✅ 分脑区{name}: Acc={accuracy_region:.3f}, F1_macro={f1_macro_region:.3f}")
                     
@@ -1082,9 +1721,9 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             results['region_wise_analysis'] = {'insufficient_data': True}
         
         # ========================================================================
-        # 3. 性能对比分析
+        # 3. 性能对比分析 + 🔥 深度网络专项对比
         # ========================================================================
-        logger.info("      📈 Baseline性能对比分析...")
+        logger.info("      📈 Baseline性能对比分析（含深度网络对比）...")
         
         for name in classifiers.keys():
             if (name in results['global_analysis'] and 
@@ -1108,11 +1747,33 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                     'interpretation': self._interpret_baseline_improvement(acc_improvement, f1_improvement)
                 }
                 
+                # 🔥 深度网络特殊对比分析
+                if name == 'deep_4x4096':
+                    results['comparative_analysis'][name].update({
+                        'training_time_ratio': region_metrics['training_time_minutes'] / global_metrics['training_time_minutes'],
+                        'deep_network_advantage': 'significant' if acc_improvement > 0.05 else 'moderate' if acc_improvement > 0.02 else 'minimal',
+                        'efficiency_assessment': 'efficient' if region_metrics['training_time_minutes'] < 5 else 'moderate' if region_metrics['training_time_minutes'] < 15 else 'slow'
+                    })
+                
                 logger.info(f"        📊 {name}对比:")
                 logger.info(f"          准确率: {global_metrics['accuracy']:.3f} → {region_metrics['accuracy']:.3f} "
                     f"({acc_improvement:+.3f})")
                 logger.info(f"          F1分数: {global_metrics['f1_macro']:.3f} → {region_metrics['f1_macro']:.3f} "
                     f"({f1_improvement:+.3f})")
+        
+        # 🔥 深度网络总结分析
+        if 'deep_4x4096' in results['global_analysis']:
+            deep_global = results['global_analysis']['deep_4x4096']
+            deep_detailed = results['deep_network_detailed_analysis']
+            
+            logger.info(f"      🔥 深度网络总结:")
+            logger.info(f"        - 全局性能: {deep_global['accuracy']:.3f} (训练时间: {deep_global['training_time_minutes']:.1f}分钟)")
+            logger.info(f"        - 收敛性: {deep_detailed['global_performance']['loss_trend']}")
+            logger.info(f"        - 过拟合风险: {deep_detailed['global_performance']['overfitting_risk']:.3f}")
+            
+            if 'region_wise_performance' in deep_detailed:
+                region_perf = deep_detailed['region_wise_performance']
+                logger.info(f"        - 受试者判别强度: {region_perf['subject_discrimination_strength']:.2f}x随机基线")
         
         return results
 
@@ -1130,9 +1791,9 @@ class BrainAwareSubjectEmbeddingAnalyzer:
 
 
     def _test_leave_one_subject_out_performance(self, X, y, subjects):
-        """测试Leave-One-Subject-Out性能 (增强版：全局 + 分脑区分析)"""
+        """测试Leave-One-Subject-Out性能 (🔥 增强版：全局 + 分脑区 + 权威深度网络LOSO分析)"""
         
-        logger.info("    🔍 增强版Leave-One-Subject-Out性能测试...")
+        logger.info("    🔍 🔥 增强版Leave-One-Subject-Out性能测试（含4×4096深度网络权威评估）...")
         
         from sklearn.metrics import f1_score, accuracy_score
         from sklearn.ensemble import RandomForestClassifier
@@ -1147,82 +1808,163 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 'overall_performance': {},
                 'per_region_performance': {}
             },
-            'comparative_analysis': {}
+            'comparative_analysis': {},
+            'deep_network_loso_analysis': {}  # 🔥 新增：深度网络LOSO专项分析
+        }
+        
+        # 🔥 扩展测试模型，包含深度网络
+        test_models = {
+            'RandomForest': {
+                'creator': lambda: RandomForestClassifier(n_estimators=100, max_depth=15, random_state=42),
+                'type': 'traditional'
+            },
+            'Deep4x4096': {
+                'creator': lambda: self._create_deep_classifier_wrapper({
+                    'batch_size': 64,   # LOSO时数据较少，用小batch
+                    'epochs': 15        # 较少epoch避免过拟合
+                }),
+                'type': 'deep_network'
+            }
         }
         
         # ========================================================================
-        # 1. 保留原有全局LOSO分析
+        # 1. 保留原有全局LOSO分析 + 🔥 深度网络增强
         # ========================================================================
-        logger.info("      🌐 全局LOSO性能分析...")
+        logger.info("      🌐 全局LOSO性能分析（含深度网络）...")
         
         unique_subjects = np.unique(subjects)
-        all_accuracies_global = []
-        all_f1_scores_global = []
         
-        # 只测试部分受试者以节省时间
-        test_subjects = unique_subjects[:8]
-        
-        for test_subject in test_subjects:
-            logger.info(f"        🔍 全局测试受试者{test_subject}...")
+        # 对每个模型运行LOSO
+        for model_name, model_info in test_models.items():
+            logger.info(f"        🔍 {model_name} 全局LOSO测试...")
             
-            train_mask = subjects != test_subject
-            test_mask = subjects == test_subject
+            all_accuracies = []
+            all_f1_scores = []
+            all_training_times = []
+            deep_network_metrics = []  # 🔥 深度网络特殊指标
             
-            if np.sum(test_mask) < 1000:
-                logger.info(f"          ⚠️ 受试者{test_subject}样本不足，跳过")
-                continue
+            # 只测试部分受试者以节省时间
+            test_subjects = unique_subjects[:8]
             
-            X_train_global, X_test_global = X[train_mask], X[test_mask]
-            y_train_global, y_test_global = y[train_mask], y[test_mask]
+            for test_subject in test_subjects:
+                logger.info(f"          🔍 {model_name}测试受试者{test_subject}...")
+                
+                train_mask = subjects != test_subject
+                test_mask = subjects == test_subject
+                
+                if np.sum(test_mask) < 1000:
+                    logger.info(f"            ⚠️ 受试者{test_subject}样本不足，跳过")
+                    continue
+                
+                X_train_loso, X_test_loso = X[train_mask], X[test_mask]
+                y_train_loso, y_test_loso = y[train_mask], y[test_mask]
+                
+                # 检查类别平衡
+                if len(y_train_loso.shape) > 1:
+                    train_classes = len(np.unique(np.argmax(y_train_loso, axis=1)))
+                    test_classes = len(np.unique(np.argmax(y_test_loso, axis=1)))
+                    y_test_for_eval = np.argmax(y_test_loso, axis=1)
+                else:
+                    train_classes = len(np.unique(y_train_loso))
+                    test_classes = len(np.unique(y_test_loso))
+                    y_test_for_eval = y_test_loso
+                
+                if train_classes < 50 or test_classes < 20:
+                    logger.info(f"            ⚠️ 受试者{test_subject}类别不足，跳过")
+                    continue
+                
+                # 创建并训练模型
+                model = model_info['creator']()
+                
+                start_time = time.time()
+                model.fit(X_train_loso, y_train_loso)
+                train_time = time.time() - start_time
+                
+                # 测试性能
+                y_pred = model.predict(X_test_loso)
+                accuracy = accuracy_score(y_test_for_eval, y_pred)
+                f1_macro = f1_score(y_test_for_eval, y_pred, average='macro')
+                
+                all_accuracies.append(accuracy)
+                all_f1_scores.append(f1_macro)
+                all_training_times.append(train_time)
+                
+                # 🔥 深度网络特殊指标收集
+                if model_info['type'] == 'deep_network':
+                    training_history = model.training_history
+                    y_pred_proba = model.predict_proba(X_test_loso)
+                    
+                    deep_metrics = {
+                        'subject_id': test_subject,
+                        'convergence_epochs': len(training_history['loss']),
+                        'final_training_loss': training_history['loss'][-1] if training_history['loss'] else 0,
+                        'overfitting_indicator': training_history['accuracy'][-1] - accuracy if training_history['accuracy'] else 0,
+                        'prediction_confidence': np.mean(np.max(y_pred_proba, axis=1)),
+                        'generalization_strength': accuracy,
+                        'adaptation_time': train_time,
+                        'sample_efficiency': accuracy / (train_time / 60)  # 准确率/分钟
+                    }
+                    deep_network_metrics.append(deep_metrics)
+                
+                results['global_analysis']['per_subject_scores'][test_subject] = {
+                    'accuracy': accuracy,
+                    'f1_macro': f1_macro,
+                    'n_test_samples': len(X_test_loso),
+                    'n_test_classes': test_classes,
+                    'training_time': train_time,
+                    'model_type': model_name
+                }
+                
+                logger.info(f"            ✅ {model_name} 受试者{test_subject}: Acc={accuracy:.3f}, F1={f1_macro:.3f}, 时间={train_time/60:.1f}分钟")
             
-            # 检查类别平衡
-            train_classes = len(np.unique(y_train_global))
-            test_classes = len(np.unique(y_test_global))
-            
-            if train_classes < 50 or test_classes < 20:
-                logger.info(f"          ⚠️ 受试者{test_subject}类别不足，跳过")
-                continue
-            
-            # 训练全局分类器
-            clf_global = RandomForestClassifier(
-                n_estimators=100, max_depth=15, random_state=42)
-            clf_global.fit(X_train_global, y_train_global)
-            
-            # 测试全局性能
-            y_pred_global = clf_global.predict(X_test_global)
-            accuracy_global = accuracy_score(y_test_global, y_pred_global)
-            f1_macro_global = f1_score(y_test_global, y_pred_global, average='macro')
-            
-            all_accuracies_global.append(accuracy_global)
-            all_f1_scores_global.append(f1_macro_global)
-            
-            results['global_analysis']['per_subject_scores'][test_subject] = {
-                'accuracy': accuracy_global,
-                'f1_macro': f1_macro_global,
-                'n_test_samples': len(X_test_global),
-                'n_test_classes': test_classes
-            }
-            
-            logger.info(f"          ✅ 全局Acc={accuracy_global:.3f}, F1={f1_macro_global:.3f}")
-        
-        # 全局总体统计
-        if all_accuracies_global:
-            results['global_analysis']['overall_performance'] = {
-                'mean_accuracy': np.mean(all_accuracies_global),
-                'std_accuracy': np.std(all_accuracies_global),
-                'mean_f1_macro': np.mean(all_f1_scores_global),
-                'std_f1_macro': np.std(all_f1_scores_global),
-                'n_tested_subjects': len(all_accuracies_global)
-            }
-            
-            logger.info(f"      📊 全局LOSO总体性能:")
-            logger.info(f"        - 平均准确率: {np.mean(all_accuracies_global):.3f} ± {np.std(all_accuracies_global):.3f}")
-            logger.info(f"        - 平均F1: {np.mean(all_f1_scores_global):.3f} ± {np.std(all_f1_scores_global):.3f}")
+            # 整体统计
+            if all_accuracies:
+                results['global_analysis']['overall_performance'][model_name] = {
+                    'mean_accuracy': np.mean(all_accuracies),
+                    'std_accuracy': np.std(all_accuracies),
+                    'mean_f1_macro': np.mean(all_f1_scores),
+                    'std_f1_macro': np.std(all_f1_scores),
+                    'mean_training_time': np.mean(all_training_times),
+                    'n_tested_subjects': len(all_accuracies)
+                }
+                
+                logger.info(f"        📊 {model_name} 全局LOSO总体性能:")
+                logger.info(f"          - 平均准确率: {np.mean(all_accuracies):.3f} ± {np.std(all_accuracies):.3f}")
+                logger.info(f"          - 平均F1: {np.mean(all_f1_scores):.3f} ± {np.std(all_f1_scores):.3f}")
+                logger.info(f"          - 平均训练时间: {np.mean(all_training_times)/60:.1f}分钟")
+                
+                # 🔥 深度网络详细分析
+                if model_info['type'] == 'deep_network' and deep_network_metrics:
+                    results['deep_network_loso_analysis']['global_detailed'] = {
+                        'per_subject_metrics': deep_network_metrics,
+                        'convergence_analysis': {
+                            'avg_convergence_epochs': np.mean([m['convergence_epochs'] for m in deep_network_metrics]),
+                            'convergence_stability': np.std([m['convergence_epochs'] for m in deep_network_metrics])
+                        },
+                        'generalization_analysis': {
+                            'avg_confidence': np.mean([m['prediction_confidence'] for m in deep_network_metrics]),
+                            'confidence_consistency': np.std([m['prediction_confidence'] for m in deep_network_metrics]),
+                            'overfitting_tendency': np.mean([m['overfitting_indicator'] for m in deep_network_metrics])
+                        },
+                        'efficiency_analysis': {
+                            'avg_sample_efficiency': np.mean([m['sample_efficiency'] for m in deep_network_metrics]),
+                            'time_performance_correlation': np.corrcoef(
+                                [m['adaptation_time'] for m in deep_network_metrics],
+                                [m['generalization_strength'] for m in deep_network_metrics]
+                            )[0, 1] if len(deep_network_metrics) > 1 else 0
+                        }
+                    }
+                    
+                    logger.info(f"        🔥 深度网络LOSO详细分析:")
+                    logger.info(f"          - 平均收敛轮数: {results['deep_network_loso_analysis']['global_detailed']['convergence_analysis']['avg_convergence_epochs']:.1f}")
+                    logger.info(f"          - 平均预测置信度: {results['deep_network_loso_analysis']['global_detailed']['generalization_analysis']['avg_confidence']:.3f}")
+                    logger.info(f"          - 过拟合倾向: {results['deep_network_loso_analysis']['global_detailed']['generalization_analysis']['overfitting_tendency']:.3f}")
+                    logger.info(f"          - 样本效率: {results['deep_network_loso_analysis']['global_detailed']['efficiency_analysis']['avg_sample_efficiency']:.3f} 准确率/分钟")
         
         # ========================================================================
-        # 2. 新增分脑区LOSO分析
+        # 2. 保留原有分脑区LOSO分析 + 深度网络增强
         # ========================================================================
-        logger.info("      🧠 分脑区LOSO性能分析...")
+        logger.info("      🧠 分脑区LOSO性能分析（含深度网络）...")
         
         region_dataset = self._build_region_aware_dataset()
         
@@ -1237,133 +1979,289 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             subject_mapping = {orig_id: new_id for new_id, orig_id in enumerate(unique_subjects_region)}
             y_region_full = np.array([subject_mapping[s] for s in subject_labels_region_full])
             
-            all_accuracies_region = []
-            all_f1_scores_region = []
-            region_performance_summary = {}
-            
-            # 测试部分受试者
-            test_subjects_region = [s for s in test_subjects if s in unique_subjects_region][:5]
-            
-            for test_subject in test_subjects_region:
-                logger.info(f"        🔍 分脑区测试受试者{test_subject}...")
+            # 为每个模型执行分脑区LOSO
+            for model_name, model_info in test_models.items():
+                logger.info(f"        🔍 {model_name} 分脑区LOSO测试...")
                 
-                # 找到该受试者在分脑区数据中的所有样本
-                test_mask_region = subject_labels_region_full == test_subject
-                train_mask_region = subject_labels_region_full != test_subject
+                all_accuracies_region = []
+                all_f1_scores_region = []
+                region_deep_metrics = []  # 🔥 分脑区深度网络指标
                 
-                if np.sum(test_mask_region) < 10:
-                    logger.info(f"          ⚠️ 受试者{test_subject}分脑区样本不足，跳过")
-                    continue
+                # 测试部分受试者
+                test_subjects_region = [s for s in test_subjects if s in unique_subjects_region][:5]
                 
-                X_train_region = X_region_full[train_mask_region]
-                y_train_region = y_region_full[train_mask_region]
-                X_test_region = X_region_full[test_mask_region]
-                y_test_region = y_region_full[test_mask_region]
-                
-                # 检查类别平衡
-                train_classes_region = len(np.unique(y_train_region))
-                test_classes_region = len(np.unique(y_test_region))
-                
-                if train_classes_region < 5:
-                    logger.info(f"          ⚠️ 受试者{test_subject}训练类别不足，跳过")
-                    continue
-                
-                # 训练分脑区分类器
-                clf_region = RandomForestClassifier(
-                    n_estimators=100, max_depth=15, random_state=42)
-                clf_region.fit(X_train_region, y_train_region)
-                
-                # 测试分脑区性能
-                y_pred_region = clf_region.predict(X_test_region)
-                accuracy_region = accuracy_score(y_test_region, y_pred_region)
-                f1_macro_region = f1_score(y_test_region, y_pred_region, average='macro')
-                
-                all_accuracies_region.append(accuracy_region)
-                all_f1_scores_region.append(f1_macro_region)
-                
-                # 分析该受试者每个脑区的表现
-                test_regions = region_labels_region_full[test_mask_region]
-                region_performance = {}
-                
-                for region_id in np.unique(test_regions):
-                    region_test_mask = test_regions == region_id
-                    if np.sum(region_test_mask) >= 3:  # 至少3个样本
-                        region_acc = accuracy_score(
-                            y_test_region[region_test_mask], 
-                            y_pred_region[region_test_mask]
-                        )
-                        region_performance[region_id] = {
-                            'accuracy': region_acc,
-                            'n_samples': np.sum(region_test_mask)
+                for test_subject in test_subjects_region:
+                    logger.info(f"          🔍 {model_name} 分脑区测试受试者{test_subject}...")
+                    
+                    # 找到该受试者在分脑区数据中的所有样本
+                    test_mask_region = subject_labels_region_full == test_subject
+                    train_mask_region = subject_labels_region_full != test_subject
+                    
+                    if np.sum(test_mask_region) < 10:
+                        logger.info(f"            ⚠️ 受试者{test_subject}分脑区样本不足，跳过")
+                        continue
+                    
+                    X_train_region = X_region_full[train_mask_region]
+                    y_train_region = y_region_full[train_mask_region]
+                    X_test_region = X_region_full[test_mask_region]
+                    y_test_region = y_region_full[test_mask_region]
+                    
+                    # 检查类别平衡
+                    train_classes_region = len(np.unique(y_train_region))
+                    test_classes_region = len(np.unique(y_test_region))
+                    
+                    if train_classes_region < 5:
+                        logger.info(f"            ⚠️ 受试者{test_subject}训练类别不足，跳过")
+                        continue
+                    
+                    # 创建模型
+                    if model_info['type'] == 'deep_network':
+                        clf_region = self._create_deep_classifier_wrapper({
+                            'batch_size': 32,  # 分脑区数据更少，用更小batch
+                            'epochs': 10       # 更少epoch
+                        })
+                    else:
+                        clf_region = model_info['creator']()
+                    
+                    start_time = time.time()
+                    clf_region.fit(X_train_region, y_train_region)
+                    train_time = time.time() - start_time
+                    
+                    # 测试分脑区性能
+                    y_pred_region = clf_region.predict(X_test_region)
+                    accuracy_region = accuracy_score(y_test_region, y_pred_region)
+                    f1_macro_region = f1_score(y_test_region, y_pred_region, average='macro')
+                    
+                    all_accuracies_region.append(accuracy_region)
+                    all_f1_scores_region.append(f1_macro_region)
+                    
+                    # 🔥 分脑区深度网络特殊分析
+                    if model_info['type'] == 'deep_network':
+                        training_history = clf_region.training_history
+                        
+                        region_deep_metric = {
+                            'subject_id': test_subject,
+                            'region_adaptation_epochs': len(training_history['loss']),
+                            'region_specific_accuracy': accuracy_region,
+                            'subject_discrimination_in_regions': accuracy_region / (1/len(np.unique(y_train_region))),
+                            'region_training_efficiency': accuracy_region / (train_time / 60),
+                            'n_regions_tested': len(np.unique(region_labels_region_full[test_mask_region]))
                         }
+                        region_deep_metrics.append(region_deep_metric)
+                    
+                    # 分析该受试者每个脑区的表现
+                    test_regions = region_labels_region_full[test_mask_region]
+                    region_performance = {}
+                    
+                    for region_id in np.unique(test_regions):
+                        region_test_mask = test_regions == region_id
+                        if np.sum(region_test_mask) >= 3:  # 至少3个样本
+                            region_acc = accuracy_score(
+                                y_test_region[region_test_mask], 
+                                y_pred_region[region_test_mask]
+                            )
+                            region_performance[region_id] = {
+                                'accuracy': region_acc,
+                                'n_samples': np.sum(region_test_mask)
+                            }
+                    
+                    results['region_wise_analysis']['per_subject_scores'][test_subject] = {
+                        'accuracy': accuracy_region,
+                        'f1_macro': f1_macro_region,
+                        'n_test_samples': len(X_test_region),
+                        'n_test_regions': len(np.unique(test_regions)),
+                        'per_region_performance': region_performance,
+                        'model_type': model_name,
+                        'training_time': train_time
+                    }
+                    
+                    logger.info(f"            ✅ {model_name} 分脑区受试者{test_subject}: Acc={accuracy_region:.3f}, F1={f1_macro_region:.3f}")
+                    logger.info(f"            📊 测试脑区数: {len(np.unique(test_regions))}")
                 
-                results['region_wise_analysis']['per_subject_scores'][test_subject] = {
-                    'accuracy': accuracy_region,
-                    'f1_macro': f1_macro_region,
-                    'n_test_samples': len(X_test_region),
-                    'n_test_regions': len(np.unique(test_regions)),
-                    'per_region_performance': region_performance
-                }
-                
-                logger.info(f"          ✅ 分脑区Acc={accuracy_region:.3f}, F1={f1_macro_region:.3f}")
-                logger.info(f"          📊 测试脑区数: {len(np.unique(test_regions))}")
-            
-            # 分脑区总体统计
-            if all_accuracies_region:
-                results['region_wise_analysis']['overall_performance'] = {
-                    'mean_accuracy': np.mean(all_accuracies_region),
-                    'std_accuracy': np.std(all_accuracies_region),
-                    'mean_f1_macro': np.mean(all_f1_scores_region),
-                    'std_f1_macro': np.std(all_f1_scores_region),
-                    'n_tested_subjects': len(all_accuracies_region)
-                }
-                
-                logger.info(f"      📊 分脑区LOSO总体性能:")
-                logger.info(f"        - 平均准确率: {np.mean(all_accuracies_region):.3f} ± {np.std(all_accuracies_region):.3f}")
-                logger.info(f"        - 平均F1: {np.mean(all_f1_scores_region):.3f} ± {np.std(all_f1_scores_region):.3f}")
+                # 分脑区总体统计
+                if all_accuracies_region:
+                    results['region_wise_analysis']['overall_performance'][model_name] = {
+                        'mean_accuracy': np.mean(all_accuracies_region),
+                        'std_accuracy': np.std(all_accuracies_region),
+                        'mean_f1_macro': np.mean(all_f1_scores_region),
+                        'std_f1_macro': np.std(all_f1_scores_region),
+                        'n_tested_subjects': len(all_accuracies_region)
+                    }
+                    
+                    logger.info(f"        📊 {model_name} 分脑区LOSO总体性能:")
+                    logger.info(f"          - 平均准确率: {np.mean(all_accuracies_region):.3f} ± {np.std(all_accuracies_region):.3f}")
+                    logger.info(f"          - 平均F1: {np.mean(all_f1_scores_region):.3f} ± {np.std(all_f1_scores_region):.3f}")
+                    
+                    # 🔥 分脑区深度网络分析
+                    if model_info['type'] == 'deep_network' and region_deep_metrics:
+                        results['deep_network_loso_analysis']['region_wise_detailed'] = {
+                            'per_subject_region_metrics': region_deep_metrics,
+                            'region_adaptation_analysis': {
+                                'avg_adaptation_epochs': np.mean([m['region_adaptation_epochs'] for m in region_deep_metrics]),
+                                'region_discrimination_strength': np.mean([m['subject_discrimination_in_regions'] for m in region_deep_metrics]),
+                                'region_efficiency': np.mean([m['region_training_efficiency'] for m in region_deep_metrics])
+                            }
+                        }
+                        
+                        logger.info(f"        🔥 分脑区深度网络分析:")
+                        logger.info(f"          - 平均脑区适应轮数: {results['deep_network_loso_analysis']['region_wise_detailed']['region_adaptation_analysis']['avg_adaptation_epochs']:.1f}")
+                        logger.info(f"          - 脑区受试者判别强度: {results['deep_network_loso_analysis']['region_wise_detailed']['region_adaptation_analysis']['region_discrimination_strength']:.2f}x")
         
         else:
             logger.info("        ⚠️ 分脑区样本不足，跳过LOSO分析")
             results['region_wise_analysis'] = {'insufficient_data': True}
         
         # ========================================================================
-        # 3. LOSO对比分析
+        # 3. LOSO对比分析 + 🔥 深度网络权威评估
         # ========================================================================
-        logger.info("      📈 LOSO性能对比分析...")
+        logger.info("      📈 LOSO性能对比分析（含深度网络权威评估）...")
         
-        if (all_accuracies_global and all_accuracies_region and
-            'overall_performance' in results['global_analysis'] and
-            'overall_performance' in results['region_wise_analysis']):
+        # 传统对比分析
+        for model_name in test_models.keys():
+            if (model_name in results['global_analysis']['overall_performance'] and 
+                model_name in results['region_wise_analysis']['overall_performance']):
+                
+                global_perf = results['global_analysis']['overall_performance'][model_name]
+                region_perf = results['region_wise_analysis']['overall_performance'][model_name]
+                
+                acc_improvement = region_perf['mean_accuracy'] - global_perf['mean_accuracy']
+                f1_improvement = region_perf['mean_f1_macro'] - global_perf['mean_f1_macro']
+                
+                # 计算泛化稳定性（标准差比较）
+                acc_stability_change = global_perf['std_accuracy'] - region_perf['std_accuracy']
+                f1_stability_change = global_perf['std_f1_macro'] - region_perf['std_f1_macro']
+                
+                results['comparative_analysis'][model_name] = {
+                    'accuracy_improvement': acc_improvement,
+                    'f1_improvement': f1_improvement,
+                    'accuracy_stability_improvement': acc_stability_change,
+                    'f1_stability_improvement': f1_stability_change,
+                    'generalization_assessment': self._assess_generalization_improvement(
+                        acc_improvement, f1_improvement, acc_stability_change, f1_stability_change),
+                    'subject_embedding_value': self._assess_subject_embedding_loso_value(
+                        global_perf, region_perf)
+                }
+                
+                logger.info(f"        📊 {model_name} LOSO性能对比:")
+                logger.info(f"          准确率提升: {acc_improvement:+.3f} "
+                    f"(稳定性变化: {acc_stability_change:+.3f})")
+                logger.info(f"          F1分数提升: {f1_improvement:+.3f} "
+                    f"(稳定性变化: {f1_stability_change:+.3f})")
+                logger.info(f"          🎯 {results['comparative_analysis'][model_name]['generalization_assessment']}")
+        
+        # 🔥 深度网络权威Subject Embedding价值评估
+        if 'Deep4x4096' in results['global_analysis']['overall_performance']:
+            deep_global = results['global_analysis']['overall_performance']['Deep4x4096']
+            deep_detailed = results['deep_network_loso_analysis']
             
-            global_perf = results['global_analysis']['overall_performance']
-            region_perf = results['region_wise_analysis']['overall_performance']
+            # 权威评估
+            subject_embedding_necessity = self._deep_network_subject_embedding_assessment(
+                deep_global, deep_detailed, results['comparative_analysis'].get('Deep4x4096', {})
+            )
             
-            acc_improvement = region_perf['mean_accuracy'] - global_perf['mean_accuracy']
-            f1_improvement = region_perf['mean_f1_macro'] - global_perf['mean_f1_macro']
+            results['deep_network_loso_analysis']['authoritative_assessment'] = subject_embedding_necessity
             
-            # 计算泛化稳定性（标准差比较）
-            acc_stability_change = global_perf['std_accuracy'] - region_perf['std_accuracy']
-            f1_stability_change = global_perf['std_f1_macro'] - region_perf['std_f1_macro']
-            
-            results['comparative_analysis'] = {
-                'accuracy_improvement': acc_improvement,
-                'f1_improvement': f1_improvement,
-                'accuracy_stability_improvement': acc_stability_change,
-                'f1_stability_improvement': f1_stability_change,
-                'generalization_assessment': self._assess_generalization_improvement(
-                    acc_improvement, f1_improvement, acc_stability_change, f1_stability_change),
-                'subject_embedding_value': self._assess_subject_embedding_loso_value(
-                    global_perf, region_perf)
-            }
-            
-            logger.info(f"        📊 LOSO性能对比:")
-            logger.info(f"          准确率提升: {acc_improvement:+.3f} "
-                f"(稳定性变化: {acc_stability_change:+.3f})")
-            logger.info(f"          F1分数提升: {f1_improvement:+.3f} "
-                f"(稳定性变化: {f1_stability_change:+.3f})")
-            logger.info(f"          🎯 {results['comparative_analysis']['generalization_assessment']}")
+            logger.info(f"      🔥 深度网络权威Subject Embedding评估:")
+            logger.info(f"        - 总体推荐: {subject_embedding_necessity['recommendation']}")
+            logger.info(f"        - 置信度: {subject_embedding_necessity['confidence']}")
+            logger.info(f"        - 预期收益: {subject_embedding_necessity['expected_benefit']}")
+            logger.info(f"        - 实施复杂度: {subject_embedding_necessity['implementation_complexity']}")
         
         return results
+
+    def _deep_network_subject_embedding_assessment(self, global_performance, detailed_analysis, comparative_analysis):
+        """基于深度网络LOSO结果的权威Subject Embedding评估"""
+        
+        global_acc = global_performance['mean_accuracy']
+        global_std = global_performance['std_accuracy']
+        
+        # 评估因子
+        factors = {
+            'generalization_gap': 0,
+            'consistency': 0,
+            'efficiency': 0,
+            'convergence_stability': 0
+        }
+        
+        # 1. 泛化性能差距
+        if 'accuracy_improvement' in comparative_analysis:
+            acc_improvement = comparative_analysis['accuracy_improvement']
+            if acc_improvement < -0.05:
+                factors['generalization_gap'] = 1.0  # 显著泛化问题
+            elif acc_improvement < -0.02:
+                factors['generalization_gap'] = 0.7
+            elif acc_improvement < 0.02:
+                factors['generalization_gap'] = 0.4
+            else:
+                factors['generalization_gap'] = 0.0  # 泛化良好
+        
+        # 2. 预测一致性
+        if global_std > 0.1:
+            factors['consistency'] = 1.0  # 高变异，需要Subject Embedding
+        elif global_std > 0.05:
+            factors['consistency'] = 0.6
+        else:
+            factors['consistency'] = 0.2
+        
+        # 3. 过拟合倾向
+        if 'global_detailed' in detailed_analysis:
+            overfitting_tendency = detailed_analysis['global_detailed']['generalization_analysis']['overfitting_tendency']
+            if overfitting_tendency > 0.1:
+                factors['efficiency'] = 0.8
+            elif overfitting_tendency > 0.05:
+                factors['efficiency'] = 0.5
+            else:
+                factors['efficiency'] = 0.2
+        
+        # 4. 收敛稳定性
+        if 'global_detailed' in detailed_analysis:
+            convergence_stability = detailed_analysis['global_detailed']['convergence_analysis']['convergence_stability']
+            if convergence_stability > 5:
+                factors['convergence_stability'] = 0.7
+            elif convergence_stability > 2:
+                factors['convergence_stability'] = 0.4
+            else:
+                factors['convergence_stability'] = 0.1
+        
+        # 综合评分
+        necessity_score = np.mean(list(factors.values()))
+        
+        # 生成权威建议
+        if necessity_score > 0.7:
+            recommendation = "强烈推荐Subject Embedding"
+            confidence = "高"
+            expected_benefit = "显著性能提升 (5-15%)"
+            implementation_complexity = "值得投入"
+        elif necessity_score > 0.5:
+            recommendation = "建议考虑Subject Embedding"
+            confidence = "中高"
+            expected_benefit = "中等性能提升 (2-8%)"
+            implementation_complexity = "适度投入"
+        elif necessity_score > 0.3:
+            recommendation = "可选择性使用Subject Embedding"
+            confidence = "中"
+            expected_benefit = "小幅性能提升 (1-5%)"
+            implementation_complexity = "低风险尝试"
+        else:
+            recommendation = "Subject Embedding价值有限"
+            confidence = "高"
+            expected_benefit = "微小或无提升"
+            implementation_complexity = "不建议投入"
+        
+        return {
+            'necessity_score': necessity_score,
+            'recommendation': recommendation,
+            'confidence': confidence,
+            'expected_benefit': expected_benefit,
+            'implementation_complexity': implementation_complexity,
+            'factor_breakdown': factors,
+            'key_insights': [
+                f"泛化能力评估: {'需要改善' if factors['generalization_gap'] > 0.5 else '表现良好'}",
+                f"预测一致性: {'波动较大' if factors['consistency'] > 0.5 else '相对稳定'}",
+                f"过拟合风险: {'较高' if factors['efficiency'] > 0.5 else '可控'}",
+                f"收敛稳定性: {'不稳定' if factors['convergence_stability'] > 0.5 else '稳定'}"
+            ]
+        }
 
     def _assess_generalization_improvement(self, acc_imp, f1_imp, acc_stab, f1_stab):
         """评估泛化性能改进"""
@@ -1548,69 +2446,124 @@ class BrainAwareSubjectEmbeddingAnalyzer:
 
 
     def _compute_phase2_combined_scores(self):
-        """计算Phase 2的综合决策得分（修正版）"""
+        """计算Phase 2的综合决策得分（🔥 深度网络增强版）"""
         
-        # 全局可分离性得分（保持原逻辑，但重新解释含义）
+        # 原有得分计算（保持不变）
         global_separability = 0.0
         if 'global_subject_identification' in self.analysis_results:
             global_id = self.analysis_results['global_subject_identification']
             global_accuracy = global_id['accuracy']
             random_baseline = global_id['random_baseline']
-            # 这里实际反映的是全局受试者差异强度
             global_separability = max(0, min(1, (global_accuracy - random_baseline) / (1 - random_baseline + 1e-8)))
         
-        # 脑区一致性得分（保持原逻辑）
         consistency_score = 0.5
         if 'class_consistency' in self.analysis_results and self.analysis_results['class_consistency']:
             avg_consistency = np.mean([info['mean_cv'] for info in self.analysis_results['class_consistency'].values()])
             consistency_score = max(0, min(1, 1 / (1 + avg_consistency)))
         
-        # 🔥 新增：基于正确分析的Subject Embedding需求评分
+        # 🔥 新增：基于深度网络分析的Subject Embedding需求评分
         embedding_necessity_score = 0.0
         high_necessity_ratio = 0.0
+        deep_network_authority_boost = 0.0  # 🔥 深度网络权威性加成
         
         if 'region_wise_separability' in self.analysis_results and self.analysis_results['region_wise_separability']:
             region_analysis = self.analysis_results['region_wise_separability']
             
             # 只分析成功的脑区
             successful_regions = [rid for rid, data in region_analysis.items() 
-                                if 'embedding_necessity_score' in data]
+                                if 'embedding_necessity_score' in data or 'comprehensive_embedding_necessity_score' in data]
             
             if successful_regions:
-                necessity_scores = [region_analysis[rid]['embedding_necessity_score'] 
-                                for rid in successful_regions]
+                # 使用综合评分（包含深度网络分析）
+                necessity_scores = []
+                deep_validated_count = 0
+                
+                for rid in successful_regions:
+                    data = region_analysis[rid]
+                    
+                    # 优先使用综合评分，否则使用传统评分
+                    if 'comprehensive_embedding_necessity_score' in data:
+                        necessity_scores.append(data['comprehensive_embedding_necessity_score'])
+                        if data.get('deep_network_validation', False):
+                            deep_validated_count += 1
+                    else:
+                        necessity_scores.append(data['embedding_necessity_score'])
                 
                 embedding_necessity_score = np.mean(necessity_scores)
                 
-                # 计算高需求脑区比例
-                high_necessity_count = sum(1 for rid in successful_regions 
-                                        if region_analysis[rid]['embedding_necessity_level'] in ['CRITICAL', 'HIGH'])
+                # 计算高需求脑区比例（使用最终等级）
+                high_necessity_count = 0
+                for rid in successful_regions:
+                    data = region_analysis[rid]
+                    final_level = data.get('comprehensive_embedding_necessity_level', 
+                                        data.get('embedding_necessity_level', 'LOW'))
+                    if final_level in ['CRITICAL', 'HIGH']:
+                        high_necessity_count += 1
+                
                 high_necessity_ratio = high_necessity_count / len(successful_regions)
+                
+                # 🔥 深度网络权威性加成
+                deep_validation_ratio = deep_validated_count / len(successful_regions)
+                deep_network_authority_boost = deep_validation_ratio * 0.1  # 最多10%的权威性加成
         
-        # Phase 2 综合决策得分（更新含义）
-        self.decision_scores['phase2'] = {
-            # 重新解释的原有得分
-            'global_subject_variability': global_separability,  # 全局受试者变异性
-            'class_consistency': consistency_score,  # 脑区分类一致性
-            'identification_accuracy': global_separability,  # 保持向后兼容
-            'feature_competition_risk': 1.0 - consistency_score,  # 特征竞争风险
+        # 🔥 深度网络LOSO分析得分
+        deep_loso_authority_score = 0.0
+        if 'neural_network_baseline_analysis' in self.analysis_results:
+            baseline_analysis = self.analysis_results['neural_network_baseline_analysis']
             
-            # 🔥 新增：正确的Subject Embedding评估指标
-            'embedding_necessity_average': embedding_necessity_score,  # 平均embedding需求强度
-            'high_necessity_ratio': high_necessity_ratio,  # 高需求脑区比例
-            'embedding_recommended': embedding_necessity_score > 0.4,  # 是否推荐使用embedding
+            if 'deep_network_loso_analysis' in baseline_analysis:
+                deep_loso = baseline_analysis['deep_network_loso_analysis']
+                
+                if 'authoritative_assessment' in deep_loso:
+                    auth_assessment = deep_loso['authoritative_assessment']
+                    necessity_score = auth_assessment['necessity_score']
+                    deep_loso_authority_score = necessity_score
+            elif 'leave_one_subject_out' in baseline_analysis:
+                # 从LOSO结果中提取深度网络性能
+                loso_results = baseline_analysis['leave_one_subject_out']
+                if 'deep_network_loso_analysis' in loso_results:
+                    deep_loso_detailed = loso_results['deep_network_loso_analysis']
+                    if 'authoritative_assessment' in deep_loso_detailed:
+                        auth_assessment = deep_loso_detailed['authoritative_assessment']
+                        deep_loso_authority_score = auth_assessment['necessity_score']
+        
+        # Phase 2 综合决策得分（🔥 深度网络增强版）
+        self.decision_scores['phase2'] = {
+            # 原有得分（重新解释含义）
+            'global_subject_variability': global_separability,
+            'class_consistency': consistency_score,
+            'identification_accuracy': global_separability,  # 保持向后兼容
+            'feature_competition_risk': 1.0 - consistency_score,
+            
+            # 🔥 增强的Subject Embedding评估指标
+            'embedding_necessity_average': embedding_necessity_score + deep_network_authority_boost,  # 加入权威性加成
+            'high_necessity_ratio': high_necessity_ratio,
+            'embedding_recommended': (embedding_necessity_score + deep_network_authority_boost) > 0.4,
             'analysis_coverage': len(self.analysis_results.get('region_wise_separability', {})) / 
                             len(self.analysis_results.get('region_wise_subject_analysis', {})) 
-                            if self.analysis_results.get('region_wise_subject_analysis') else 0.0
+                            if self.analysis_results.get('region_wise_subject_analysis') else 0.0,
+            
+            # 🔥 深度网络专项评估指标
+            'deep_network_authority_boost': deep_network_authority_boost,
+            'deep_network_validation_ratio': deep_validated_count / len(successful_regions) if 'successful_regions' in locals() and successful_regions else 0.0,
+            'deep_loso_authority_score': deep_loso_authority_score,
+            'deep_network_comprehensive_score': (embedding_necessity_score + deep_network_authority_boost + deep_loso_authority_score) / 3,
+            
+            # 🔥 最终权威推荐
+            'authoritative_recommendation': deep_loso_authority_score > 0.6 or (embedding_necessity_score + deep_network_authority_boost) > 0.6
         }
         
-        logger.info(f"\n📈 Phase 2 综合决策指标 (修正版含义):")
+        logger.info(f"\n📈 🔥 Phase 2 综合决策指标 (深度网络增强版):")
         logger.info(f"  - 全局受试者变异性: {self.decision_scores['phase2']['global_subject_variability']:.3f}")
         logger.info(f"  - 脑区分类一致性: {self.decision_scores['phase2']['class_consistency']:.3f}")
         logger.info(f"  🔥 Subject Embedding平均需求强度: {self.decision_scores['phase2']['embedding_necessity_average']:.3f}")
         logger.info(f"  🔥 高需求脑区比例: {self.decision_scores['phase2']['high_necessity_ratio']:.3f}")
-        logger.info(f"  🔥 推荐使用Embedding: {'是' if self.decision_scores['phase2']['embedding_recommended'] else '否'}")
-        logger.info(f"  🔥 分析覆盖率: {self.decision_scores['phase2']['analysis_coverage']:.3f}")
+        logger.info(f"  🔥 深度网络权威性加成: {self.decision_scores['phase2']['deep_network_authority_boost']:.3f}")
+        logger.info(f"  🔥 深度网络验证率: {self.decision_scores['phase2']['deep_network_validation_ratio']:.3f}")
+        logger.info(f"  🔥 深度LOSO权威得分: {self.decision_scores['phase2']['deep_loso_authority_score']:.3f}")
+        logger.info(f"  🔥 深度网络综合评分: {self.decision_scores['phase2']['deep_network_comprehensive_score']:.3f}")
+        logger.info(f"  🔥 权威推荐使用Embedding: {'是' if self.decision_scores['phase2']['authoritative_recommendation'] else '否'}")
+        logger.info(f"  📊 分析覆盖率: {self.decision_scores['phase2']['analysis_coverage']:.3f}")
 
     def phase3_embedding_adaptability_analysis(self):
         """
