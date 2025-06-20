@@ -196,30 +196,24 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 return x
         
         if num_classes is None:
-                # 自动检测类别数
-                if hasattr(self, 'data') and 'y_train' in self.data:
-                    if 'label_info' in self.data:
-                        # 🔥 优先使用label_info中的信息
-                        num_classes = self.data['label_info']['one_hot_dim']
-                        logger.info(f"    📌 使用label_info中的one-hot维度: {num_classes}")
-                    elif len(self.data['y_train'].shape) > 1 and self.data['y_train'].shape[1] > 1:
-                        # One-hot编码情况
-                        num_classes = self.data['y_train'].shape[1]
-                    else:
-                        # 类别索引情况
-                        num_classes = int(np.max(self.data['y_train'])) + 1
+            # 自动检测类别数 - 修复：考虑实际的最大标签索引
+            if hasattr(self, 'data') and 'y_train' in self.data:
+                if len(self.data['y_train'].shape) > 1 and self.data['y_train'].shape[1] > 1:
+                    # One-hot编码情况：使用one-hot维度
+                    num_classes = self.data['y_train'].shape[1]
                 else:
-                    num_classes = 102  # 默认值
-            
-            model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
-            logger.info(f"    🏗️ 创建alex版4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
-            
-            if hasattr(self, 'data') and 'label_info' in self.data:
-                missing_classes = self.data['label_info']['missing_classes']
-                if missing_classes:
-                    logger.info(f"    📌 注意：类别 {missing_classes} 没有训练样本，但模型保留了对应输出")
-            
-            return model
+                    # 类别索引情况：使用最大索引+1
+                    num_classes = int(np.max(self.data['y_train'])) + 1
+                
+                # 🔥 关键修复：确保至少是102（因为标签范围是0-101）
+                num_classes = max(num_classes, 102)
+            else:
+                num_classes = 102  # 🔥 修改默认值为102（因为标签范围是0-101）
+        
+        model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
+        logger.info(f"    🏗️ 创建alex版4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
+        
+        return model
 
     def _kernel_l2_regularization(self, model, weight_decay=0.00001):
         """L2正则化 - 只对权重矩阵，完全模拟你的TensorFlow版本"""
