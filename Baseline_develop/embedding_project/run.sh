@@ -118,15 +118,12 @@ show_help() {
     --list-checkpoints          列出所有可用存档点并退出
     --checkpoint-and-exit NAME  创建指定名称的存档点后退出
     --force-restart             强制重新开始，忽略所有存档点
-    --interactive-recovery      启用交互式恢复选择
+    --interactive-recovery      启用交互式恢复选择（注意：此选项不支持后台运行）
 
     -h, --help                  显示此帮助信息
 
 存档点使用示例:
-    # 启用交互式恢复（推荐）
-    $0 --interactive-recovery
-    
-    # 自动恢复最新存档点
+    # 自动恢复最新存档点（推荐用于后台运行）
     $0 --resume-latest
     
     # 从指定存档点恢复
@@ -137,6 +134,11 @@ show_help() {
     
     # 强制重新开始
     $0 --force-restart
+    
+    # 交互式恢复（仅限前台运行）
+    $0 --interactive-recovery
+
+注意：如需在后台运行并能关闭终端，请使用非交互式恢复选项（如 --resume-latest 或 --resume-from）
 
 EOF
 }
@@ -178,6 +180,13 @@ list_available_checkpoints() {
             break
         fi
     done
+    
+    # 🔥 新增：提供使用建议
+    echo ""
+    print_info "使用建议："
+    print_info "  - 使用 --resume-latest 恢复最新的存档点"
+    print_info "  - 使用 --resume-from <文件名或阶段名> 恢复特定存档点"
+    print_info "  - 例如: $0 --resume-from phase1"
 }
 
 check_checkpoint_compatibility() {
@@ -545,7 +554,7 @@ NOHUP_LOG="$OUTPUT_DIR/run_${TIMESTAMP}.log"
 PID_FILE="$OUTPUT_DIR/analysis.pid"
 
 print_info "准备启动分析..."
-print_info "nohup日志文件: $NOHUP_LOG"
+print_info "日志文件: $NOHUP_LOG"
 print_info "PID文件: $PID_FILE"
 
 # 🔥 新增：存档点状态显示
@@ -578,12 +587,40 @@ fi
 # 启动分析
 print_header "🚀 启动分析进程"
 
+# 🔥 关键修改：检查是否为交互式恢复
+if [[ "$INTERACTIVE_RECOVERY" == true ]]; then
+    print_warning "交互式恢复模式不支持后台运行！"
+    print_info "请选择以下选项之一："
+    echo ""
+    echo "1. 使用 --resume-latest 自动恢复最新存档点"
+    echo "2. 使用 --resume-from <checkpoint> 恢复特定存档点"
+    echo "3. 使用 --force-restart 强制重新开始"
+    echo "4. 直接运行交互式恢复（不使用后台模式）："
+    echo "   python main.py --interactive_recovery"
+    echo ""
+    
+    # 🔥 自动推荐最佳选项
+    if [[ -d "$OUTPUT_DIR/checkpoints" ]]; then
+        latest_checkpoint=$(find "$OUTPUT_DIR/checkpoints" -name "*.ckpt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        if [[ -n "$latest_checkpoint" ]]; then
+            latest_name=$(basename "$latest_checkpoint")
+            print_info "💡 推荐使用: $0 --resume-latest"
+            print_info "   这将恢复最新的存档点: $latest_name"
+        fi
+    fi
+    
+    exit 1
+fi
+
 # 🔥 改进：更好的进程启动
 print_info "执行命令: $PYTHON_CMD main.py ${PYTHON_ARGS[*]}"
 
-# 使用nohup在后台运行
+# 🔥 使用nohup和disown确保进程在终端关闭后继续运行
 nohup "$PYTHON_CMD" main.py "${PYTHON_ARGS[@]}" > "$NOHUP_LOG" 2>&1 &
 ANALYSIS_PID=$!
+
+# 🔥 立即disown进程，使其脱离终端
+disown $ANALYSIS_PID
 
 # 保存PID
 echo $ANALYSIS_PID > "$PID_FILE" || {
@@ -592,9 +629,9 @@ echo $ANALYSIS_PID > "$PID_FILE" || {
     exit 1
 }
 
-print_success "分析进程已启动"
+print_success "分析进程已启动（已脱离终端）"
 print_info "进程PID: $ANALYSIS_PID"
-print_info "nohup日志: $NOHUP_LOG"
+print_info "日志文件: $NOHUP_LOG"
 
 # 🔥 改进：更长时间等待和更好的进程检查
 print_info "等待进程稳定启动..."
@@ -608,7 +645,6 @@ if kill -0 $ANALYSIS_PID 2>/dev/null; then
     echo "  查看进程状态: ps aux | grep $ANALYSIS_PID"
     echo "  停止分析:     kill $ANALYSIS_PID"
     echo "  强制停止:     kill -9 $ANALYSIS_PID"
-    echo "  后台进程管理: jobs"
     
     # 🔥 新增：存档点管理命令
     if [[ "$DISABLE_CHECKPOINTS" != true ]]; then
@@ -616,7 +652,7 @@ if kill -0 $ANALYSIS_PID 2>/dev/null; then
         print_checkpoint "存档点管理命令:"
         echo "  列出存档点:   $0 --list-checkpoints"
         echo "  从存档点恢复: $0 --resume-from <checkpoint>"
-        echo "  交互式恢复:   $0 --interactive-recovery"
+        echo "  恢复最新:     $0 --resume-latest"
         echo "  强制重新开始: $0 --force-restart"
     fi
     
@@ -626,12 +662,18 @@ if kill -0 $ANALYSIS_PID 2>/dev/null; then
     if [[ -f "$NOHUP_LOG" ]]; then
         echo ""
         print_info "初始日志内容:"
-        head -n 10 "$NOHUP_LOG" 2>/dev/null | sed 's/^/  /'
+        head -n 20 "$NOHUP_LOG" 2>/dev/null | sed 's/^/  /'
     fi
     
-    # 提供日志监控选项
+    # 🔥 新增：重要提示
     echo ""
-    read -p "是否现在查看实时日志？[y/N]: " -n 1 -r
+    print_success "进程已在后台运行，您可以安全地关闭此终端窗口"
+    print_info "稍后可通过以下方式查看进度："
+    print_info "  tail -f $NOHUP_LOG"
+    
+    # 提供日志监控选项（可选）
+    echo ""
+    read -t 10 -p "是否现在查看实时日志？[y/N] (10秒后自动跳过): " -n 1 -r || true
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         print_info "开始监控日志（按Ctrl+C退出监控，不会停止分析）..."
