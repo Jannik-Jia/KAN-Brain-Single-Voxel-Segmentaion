@@ -134,7 +134,18 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             is_auto=False
         )
     
-      
+
+    def load_checkpoint(self, checkpoint_identifier: str) -> bool:
+        """加载存档点 - 代理方法"""
+        if not self.checkpoint_manager:
+            logger.warning("存档点系统未启用")
+            return False
+        
+        return self.checkpoint_manager.load_checkpoint(
+            checkpoint_identifier=checkpoint_identifier,
+            analyzer_instance=self
+        )
+        
     def list_checkpoints(self):
         """列出所有存档点"""
         if not self.checkpoint_manager:
