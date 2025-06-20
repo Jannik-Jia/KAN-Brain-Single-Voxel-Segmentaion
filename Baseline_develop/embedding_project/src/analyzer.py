@@ -196,19 +196,30 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 return x
         
         if num_classes is None:
-            # 自动检测类别数
-            if hasattr(self, 'data') and 'y_train' in self.data:
-                if len(self.data['y_train'].shape) > 1 and self.data['y_train'].shape[1] > 1:
-                    num_classes = self.data['y_train'].shape[1]
+                # 自动检测类别数
+                if hasattr(self, 'data') and 'y_train' in self.data:
+                    if 'label_info' in self.data:
+                        # 🔥 优先使用label_info中的信息
+                        num_classes = self.data['label_info']['one_hot_dim']
+                        logger.info(f"    📌 使用label_info中的one-hot维度: {num_classes}")
+                    elif len(self.data['y_train'].shape) > 1 and self.data['y_train'].shape[1] > 1:
+                        # One-hot编码情况
+                        num_classes = self.data['y_train'].shape[1]
+                    else:
+                        # 类别索引情况
+                        num_classes = int(np.max(self.data['y_train'])) + 1
                 else:
-                    num_classes = len(np.unique(self.data['y_train']))
-            else:
-                num_classes = 102  # alex版本的默认值
-        
-        model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
-        logger.info(f"    🏗️ 创建alex版4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
-        
-        return model
+                    num_classes = 102  # 默认值
+            
+            model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
+            logger.info(f"    🏗️ 创建alex版4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
+            
+            if hasattr(self, 'data') and 'label_info' in self.data:
+                missing_classes = self.data['label_info']['missing_classes']
+                if missing_classes:
+                    logger.info(f"    📌 注意：类别 {missing_classes} 没有训练样本，但模型保留了对应输出")
+            
+            return model
 
     def _kernel_l2_regularization(self, model, weight_decay=0.00001):
         """L2正则化 - 只对权重矩阵，完全模拟你的TensorFlow版本"""
@@ -519,16 +530,40 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         # 🔥 构建脑区感知分析数据（保留原有逻辑）
         logger.info(f"\n🧠 构建脑区感知分析数据...")
         
+        
         # 解析one-hot标签到脑区ID  
         if len(y_train.shape) > 1 and y_train.shape[1] > 1:
             y_train_regions = np.argmax(y_train, axis=1)
+            one_hot_dim = y_train.shape[1]
+            
+            # 🔥 详细的标签分析
+            logger.info(f"  📌 One-hot编码维度: {one_hot_dim}")
+            logger.info(f"  📌 转换后标签范围: [{np.min(y_train_regions)}, {np.max(y_train_regions)}]")
+            
+            unique_regions = np.unique(y_train_regions)
+            logger.info(f"  📌 实际出现的脑区数: {len(unique_regions)}")
+            
+            # 检查缺失的脑区
+            all_possible_regions = set(range(one_hot_dim))
+            actual_regions = set(unique_regions.astype(int))
+            missing_regions = all_possible_regions - actual_regions
+            
+            if missing_regions:
+                logger.warning(f"  ⚠️ 缺失的脑区标签: {sorted(missing_regions)}")
+                logger.info(f"  💡 这些脑区在训练数据中没有样本，但模型仍会为它们保留输出")
+                
+                # 统计每个缺失脑区的情况
+                for missing_region in sorted(missing_regions)[:5]:  # 只显示前5个
+                    logger.info(f"     - 脑区 {missing_region}: 在one-hot编码中存在，但无实际样本")
         else:
             y_train_regions = y_train.flatten()
+            one_hot_dim = int(np.max(y_train_regions)) + 1
         
         # 构建subject×region张量
         brain_region_analysis = self._build_subject_region_tensor(
             X_train, y_train_regions, subjects_train
         )
+
         
         # 计算受试者样本统计（保留原有逻辑）
         subject_counts = {}
@@ -569,6 +604,15 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             'brain_region_analysis': brain_region_analysis,
             'y_train_regions': y_train_regions,
             
+            'label_info': {
+                'one_hot_dim': one_hot_dim,
+                'actual_classes': len(np.unique(y_train_regions)),
+                'missing_classes': sorted(missing_regions) if 'missing_regions' in locals() else [],
+                'max_label': int(np.max(y_train_regions)),
+                'min_label': int(np.min(y_train_regions)),
+                'total_expected_classes': one_hot_dim
+            },
+
             # 🔥 新增：深度网络相关元信息
             'deep_network_compatible': True,
             'feature_dim': X_train.shape[1],
@@ -578,6 +622,9 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         }
         
         duration = self._end_phase_timer("数据准备")
+        
+        # 🔥 在存档点中记录标签信息
+        self.config_info['label_info'] = self.data['label_info']
         
         # 🔥 创建Phase 0存档点
         if self.checkpoint_manager:
@@ -600,7 +647,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         logger.info(f"  - 类别数量: {self.data['n_classes']}")
         
         return self.data
-
+    
     def _build_subject_region_tensor(self, X, regions, subjects):
         """
         构建三维分析张量: [受试者 × 脑区 × 特征]
@@ -616,16 +663,30 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         unique_subjects = np.unique(subjects)
         unique_regions = np.unique(regions)
         
+        # 🔥 新增：获取完整的脑区范围（包括缺失的）
+        max_region = int(np.max(regions))
+        if hasattr(self, 'data') and 'label_info' in self.data:
+            # 如果已经有标签信息，使用one-hot维度
+            total_regions = self.data['label_info']['one_hot_dim']
+            all_possible_regions = np.arange(total_regions)
+        else:
+            # 否则基于最大值计算
+            all_possible_regions = np.arange(max_region + 1)
+        
+        missing_regions = set(all_possible_regions) - set(unique_regions.astype(int))
+        
         subject_region_features = {}
         sample_counts = {}
         
-        logger.info(f"    🔍 分析 {len(unique_subjects)} 个受试者 × {len(unique_regions)} 个脑区...")
+        logger.info(f"    🔍 分析 {len(unique_subjects)} 个受试者 × {len(all_possible_regions)} 个脑区...")
+        if missing_regions:
+            logger.info(f"    ⚠️ 注意：{len(missing_regions)} 个脑区没有数据: {sorted(missing_regions)[:10]}...")
         
         valid_combinations = 0
-        total_combinations = len(unique_subjects) * len(unique_regions)
+        total_combinations = len(unique_subjects) * len(all_possible_regions)
         
         for subject_id in unique_subjects:
-            for region_id in unique_regions:
+            for region_id in unique_regions:  # 只处理有数据的脑区
                 mask = (subjects == subject_id) & (regions == region_id)
                 n_samples = np.sum(mask)
                 
@@ -639,25 +700,37 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         
         # 统计每个脑区的受试者覆盖情况
         region_subject_counts = {}
-        for region_id in unique_regions:
-            region_subjects = [s for s, r in subject_region_features.keys() if r == region_id]
-            region_subject_counts[region_id] = len(region_subjects)
+        for region_id in all_possible_regions:  # 包括缺失的脑区
+            if region_id in unique_regions:
+                region_subjects = [s for s, r in subject_region_features.keys() if r == region_id]
+                region_subject_counts[region_id] = len(region_subjects)
+            else:
+                region_subject_counts[region_id] = 0  # 缺失的脑区
+        
+        # 🔥 特别报告缺失脑区的情况
+        if missing_regions:
+            logger.info(f"    📊 缺失脑区详情:")
+            for miss_region in sorted(missing_regions)[:5]:  # 显示前5个
+                logger.info(f"      - 脑区 {miss_region}: 无数据（0个受试者）")
         
         logger.info(f"    📊 脑区统计:")
-        logger.info(f"      - 平均每脑区覆盖受试者数: {np.mean(list(region_subject_counts.values())):.1f}")
+        logger.info(f"      - 有数据的脑区数: {len(unique_regions)}")
+        logger.info(f"      - 缺失的脑区数: {len(missing_regions)}")
+        logger.info(f"      - 平均每脑区覆盖受试者数: {np.mean([c for c in region_subject_counts.values() if c > 0]):.1f}")
         logger.info(f"      - 最大覆盖受试者数: {np.max(list(region_subject_counts.values()))}")
-        logger.info(f"      - 最小覆盖受试者数: {np.min(list(region_subject_counts.values()))}")
+        logger.info(f"      - 最小覆盖受试者数: {np.min([c for c in region_subject_counts.values() if c > 0])}")
         
         return {
             'subject_region_features': subject_region_features,
             'sample_counts': sample_counts,
             'unique_subjects': unique_subjects,
             'unique_regions': unique_regions,
+            'all_possible_regions': all_possible_regions,
+            'missing_regions': sorted(missing_regions),
             'region_subject_counts': region_subject_counts,
             'valid_combinations': valid_combinations,
             'total_combinations': total_combinations
         }
-
 
     def phase1_subject_differences_analysis(self):
         """Phase 1: 受试者间差异分析 - 🔥 带存档点功能"""
@@ -1071,9 +1144,19 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         else:
             y_classes = y_train.flatten()
         
+        # 🔥 使用存储的标签信息
+        if 'label_info' in self.data:
+            label_info = self.data['label_info']
+            logger.info(f"    📌 使用已分析的标签信息:")
+            logger.info(f"    - One-hot维度: {label_info['one_hot_dim']}")
+            logger.info(f"    - 实际类别数: {label_info['actual_classes']}")
+            logger.info(f"    - 标签范围: [{label_info['min_label']}, {label_info['max_label']}]")
+            if label_info['missing_classes']:
+                logger.info(f"    - 缺失类别: {label_info['missing_classes']}")
+        
         logger.info(f"    - 体素数量: {len(X_train):,}")
         logger.info(f"    - 特征维度: {X_train.shape[1]}")
-        logger.info(f"    - 脑区类别数: {len(np.unique(y_classes))}")
+        logger.info(f"    - 脑区类别数: {self.data['label_info']['one_hot_dim'] if 'label_info' in self.data else len(np.unique(y_classes))}")
         
         # 1. Baseline性能：随机分割（模拟你的训练方式）
         baseline_results = self._test_random_split_performance(X_train, y_classes)
@@ -5512,6 +5595,27 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 f.write(f"验证样本量: {len(self.data['X_val']):,}\n")
                 f.write(f"测试样本量: {len(self.data['X_test']):,}\n\n")
             
+            # 🔥 标签信息部分
+            if hasattr(self, 'data') and 'label_info' in self.data:
+                label_info = self.data['label_info']
+                f.write("📊 标签信息\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"One-hot编码维度: {label_info['one_hot_dim']}\n")
+                f.write(f"实际类别数: {label_info['actual_classes']}\n")
+                f.write(f"标签范围: [{label_info['min_label']}, {label_info['max_label']}]\n")
+                f.write(f"期望类别总数: {label_info['total_expected_classes']}\n")
+                
+                if label_info['missing_classes']:
+                    f.write(f"\n⚠️ 缺失的类别: {label_info['missing_classes']}\n")
+                    f.write(f"注意：类别 {label_info['missing_classes'][0]} 等在训练数据中不存在，但模型保留了对应输出\n")
+                    f.write("这些脑区可能:\n")
+                    f.write("  - 在成像过程中信号太弱\n")
+                    f.write("  - 体积太小难以准确标注\n")
+                    f.write("  - 在某些受试者中不存在或变异较大\n")
+                else:
+                    f.write("✅ 所有期望的类别都有训练数据\n")
+                f.write("\n")
+            
             # 脑区分析概况
             if hasattr(self, 'data') and 'brain_region_analysis' in self.data:
                 brain_data = self.data['brain_region_analysis']
@@ -5519,7 +5623,15 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 f.write("-" * 40 + "\n")
                 f.write(f"有效脑区×受试者组合: {brain_data['valid_combinations']}\n")
                 f.write(f"总可能组合: {brain_data['total_combinations']}\n")
-                f.write(f"覆盖率: {brain_data['valid_combinations']/brain_data['total_combinations']*100:.1f}%\n\n")
+                f.write(f"覆盖率: {brain_data['valid_combinations']/brain_data['total_combinations']*100:.1f}%\n")
+                
+                if 'missing_regions' in brain_data and brain_data['missing_regions']:
+                    f.write(f"\n缺失数据的脑区:\n")
+                    for i, missing_region in enumerate(brain_data['missing_regions'][:10]):
+                        f.write(f"  - 脑区 {missing_region}\n")
+                    if len(brain_data['missing_regions']) > 10:
+                        f.write(f"  ... 及其他 {len(brain_data['missing_regions'])-10} 个脑区\n")
+                f.write("\n")
             
             # 全局分析结果
             f.write("📈 全局分析结果\n")
@@ -5551,6 +5663,15 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                     specificity_scores = [r['subject_specificity_score'] for r in region_analysis.values()]
                     f.write(f"平均特异性得分: {np.mean(specificity_scores):.3f}\n")
                     f.write(f"特异性得分范围: [{np.min(specificity_scores):.3f}, {np.max(specificity_scores):.3f}]\n")
+                    
+                    # 🔥 新增：按特异性排序显示前5个脑区
+                    sorted_regions = sorted(region_analysis.items(), 
+                                        key=lambda x: x[1]['subject_specificity_score'], 
+                                        reverse=True)
+                    f.write("\n特异性最高的脑区:\n")
+                    for i, (region_id, data) in enumerate(sorted_regions[:5]):
+                        f.write(f"  {i+1}. 脑区 {region_id}: 特异性得分 {data['subject_specificity_score']:.3f}, "
+                            f"{data['n_subjects']} 个受试者\n")
             
             if 'region_wise_separability' in self.analysis_results:
                 region_sep = self.analysis_results['region_wise_separability']
@@ -5558,8 +5679,49 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                     successful_regions = {k: v for k, v in region_sep.items() if 'embedding_necessity_score' in v}
                     if successful_regions:
                         necessity_scores = [v['embedding_necessity_score'] for v in successful_regions.values()]
-                        f.write(f"平均Subject Embedding需求得分: {np.mean(necessity_scores):.3f}\n")
+                        f.write(f"\n平均Subject Embedding需求得分: {np.mean(necessity_scores):.3f}\n")
+                        
+                        # 统计各需求等级的脑区数
+                        critical_count = sum(1 for v in successful_regions.values() 
+                                        if v.get('embedding_necessity_level') == 'CRITICAL')
+                        high_count = sum(1 for v in successful_regions.values() 
+                                    if v.get('embedding_necessity_level') == 'HIGH')
+                        medium_count = sum(1 for v in successful_regions.values() 
+                                        if v.get('embedding_necessity_level') == 'MEDIUM')
+                        low_count = sum(1 for v in successful_regions.values() 
+                                    if v.get('embedding_necessity_level') == 'LOW')
+                        
+                        f.write(f"\nSubject Embedding需求等级分布:\n")
+                        f.write(f"  - CRITICAL级别: {critical_count} 个脑区\n")
+                        f.write(f"  - HIGH级别: {high_count} 个脑区\n")
+                        f.write(f"  - MEDIUM级别: {medium_count} 个脑区\n")
+                        f.write(f"  - LOW级别: {low_count} 个脑区\n")
             f.write("\n")
+            
+            # 🔥 深度网络分析结果
+            if 'deep_network_region_analysis' in self.analysis_results:
+                deep_analysis = self.analysis_results['deep_network_region_analysis']
+                if deep_analysis:
+                    f.write("🔥 深度网络脑区分析结果\n")
+                    f.write("-" * 40 + "\n")
+                    
+                    deep_accuracies = [data['deep_accuracy'] for data in deep_analysis.values()]
+                    specificity_strengths = [data['specificity_strength'] for data in deep_analysis.values()]
+                    
+                    f.write(f"深度网络验证脑区数: {len(deep_analysis)}\n")
+                    f.write(f"平均受试者识别准确率: {np.mean(deep_accuracies):.3f}\n")
+                    f.write(f"平均特异性强度: {np.mean(specificity_strengths):.2f}x 随机基线\n")
+                    
+                    # 显示深度网络表现最好的脑区
+                    if deep_analysis:
+                        sorted_deep_regions = sorted(deep_analysis.items(), 
+                                                key=lambda x: x[1]['specificity_strength'], 
+                                                reverse=True)
+                        f.write("\n深度网络特异性最强的脑区:\n")
+                        for i, (region_id, data) in enumerate(sorted_deep_regions[:5]):
+                            f.write(f"  {i+1}. 脑区 {region_id}: 特异性强度 {data['specificity_strength']:.2f}x, "
+                                f"准确率 {data['deep_accuracy']:.3f}\n")
+                    f.write("\n")
             
             # 最终决策
             f.write("🎯 最终综合决策\n")
@@ -5581,6 +5743,15 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 f.write("  主要阶段:\n")
                 for phase in impl_plan['phase2_development'][:3]:
                     f.write(f"    • {phase}\n")
+                
+                # 🔥 新增：缺失脑区的处理建议
+                if hasattr(self, 'data') and 'label_info' in self.data:
+                    if self.data['label_info']['missing_classes']:
+                        f.write("\n缺失脑区处理建议:\n")
+                        f.write("  • 模型保留所有102个输出，包括缺失的脑区\n")
+                        f.write("  • 在推理时，缺失脑区的预测可能不可靠\n")
+                        f.write("  • 建议在后处理中特别标注这些脑区\n")
+                        f.write("  • 如果获得新数据包含这些脑区，可以继续训练\n")
             
             # 🔥 存档点信息
             if self.checkpoint_manager:
@@ -5590,6 +5761,17 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 f.write(f"总存档点数: {len(checkpoints)}\n")
                 for ckpt in checkpoints[:5]:  # 显示最新5个
                     f.write(f"  • {ckpt['name']} - {ckpt['creation_time']} ({ckpt['file_size_mb']:.1f}MB)\n")
+            
+            # 🔥 技术建议
+            f.write("\n💡 技术建议\n")
+            f.write("-" * 40 + "\n")
+            if hasattr(self, 'data') and 'label_info' in self.data and self.data['label_info']['missing_classes']:
+                f.write("关于缺失类别的处理:\n")
+                f.write("1. 保持模型输出为102维，确保兼容性\n")
+                f.write("2. 在损失计算时可以考虑对缺失类别使用mask\n")
+                f.write("3. 在评估时单独统计有数据脑区的性能\n")
+                f.write("4. 可视化时标注哪些是缺失数据的脑区\n")
+                f.write("5. 考虑收集更多数据以覆盖缺失的脑区\n")
         
         logger.info(f"✅ 增强版完整报告已保存: {report_path}")
         return report_path
