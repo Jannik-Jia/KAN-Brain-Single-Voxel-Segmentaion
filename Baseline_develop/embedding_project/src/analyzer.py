@@ -186,7 +186,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
         """创建4×4096深度网络 - 🔥 严格对应alex版本架构"""
         
         class RegModel(nn.Module):
-            def __init__(self, input_dim=341, num_classes=102):
+            def __init__(self, input_dim=341, num_classes=101):
                 super(RegModel, self).__init__()
                 # 🔥 严格对应alex的TensorFlow版本的Dense层
                 self.fc1 = nn.Linear(input_dim, 4096)
@@ -216,10 +216,10 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                     # 类别索引情况：使用最大索引+1
                     num_classes = int(np.max(self.data['y_train'])) + 1
                 
-                # 🔥 关键修复：确保至少是102（因为标签范围是0-101）
-                num_classes = max(num_classes, 102)
+                # 🔥 关键修复：确保至少是101（因为标签范围是0-101）
+                num_classes = max(num_classes, 101)
             else:
-                num_classes = 102  # 🔥 修改默认值为102（因为标签范围是0-101）
+                num_classes = 101  # 🔥 修改默认值为101（因为标签范围是0-101）
         
         model = RegModel(input_dim=input_dim, num_classes=num_classes).to(self.device)
         logger.info(f"    🏗️ 创建alex版4×4096深度网络: {input_dim} → 4096×4 → {num_classes}")
@@ -553,13 +553,6 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             actual_regions = set(unique_regions.astype(int))
             missing_regions = all_possible_regions - actual_regions
             
-            if missing_regions:
-                logger.warning(f"  ⚠️ 缺失的脑区标签: {sorted(missing_regions)}")
-                logger.info(f"  💡 这些脑区在训练数据中没有样本，但模型仍会为它们保留输出")
-                
-                # 统计每个缺失脑区的情况
-                for missing_region in sorted(missing_regions)[:5]:  # 只显示前5个
-                    logger.info(f"     - 脑区 {missing_region}: 在one-hot编码中存在，但无实际样本")
         else:
             y_train_regions = y_train.flatten()
             one_hot_dim = int(np.max(y_train_regions)) + 1
@@ -1156,9 +1149,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             logger.info(f"    - One-hot维度: {label_info['one_hot_dim']}")
             logger.info(f"    - 实际类别数: {label_info['actual_classes']}")
             logger.info(f"    - 标签范围: [{label_info['min_label']}, {label_info['max_label']}]")
-            if label_info['missing_classes']:
-                logger.info(f"    - 缺失类别: {label_info['missing_classes']}")
-        
+
         logger.info(f"    - 体素数量: {len(X_train):,}")
         logger.info(f"    - 特征维度: {X_train.shape[1]}")
         logger.info(f"    - 脑区类别数: {self.data['label_info']['one_hot_dim'] if 'label_info' in self.data else len(np.unique(y_classes))}")
@@ -5753,7 +5744,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
                 if hasattr(self, 'data') and 'label_info' in self.data:
                     if self.data['label_info']['missing_classes']:
                         f.write("\n缺失脑区处理建议:\n")
-                        f.write("  • 模型保留所有102个输出，包括缺失的脑区\n")
+                        f.write("  • 模型保留所有101个输出，包括缺失的脑区\n")
                         f.write("  • 在推理时，缺失脑区的预测可能不可靠\n")
                         f.write("  • 建议在后处理中特别标注这些脑区\n")
                         f.write("  • 如果获得新数据包含这些脑区，可以继续训练\n")
@@ -5772,7 +5763,7 @@ class BrainAwareSubjectEmbeddingAnalyzer:
             f.write("-" * 40 + "\n")
             if hasattr(self, 'data') and 'label_info' in self.data and self.data['label_info']['missing_classes']:
                 f.write("关于缺失类别的处理:\n")
-                f.write("1. 保持模型输出为102维，确保兼容性\n")
+                f.write("1. 保持模型输出为101维，确保兼容性\n")
                 f.write("2. 在损失计算时可以考虑对缺失类别使用mask\n")
                 f.write("3. 在评估时单独统计有数据脑区的性能\n")
                 f.write("4. 可视化时标注哪些是缺失数据的脑区\n")
