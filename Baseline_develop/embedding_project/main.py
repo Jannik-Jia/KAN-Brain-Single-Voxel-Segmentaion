@@ -50,7 +50,7 @@ def parse_arguments():
     
     # 原有参数
     parser.add_argument('--data_path', type=str, 
-                       default='/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat',
+                       default='/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat',
                        help='数据文件路径')
     
     parser.add_argument('--train_start', type=int, default=1,

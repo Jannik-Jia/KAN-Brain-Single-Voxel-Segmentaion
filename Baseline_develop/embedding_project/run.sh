@@ -64,7 +64,7 @@ cleanup_on_error() {
 trap cleanup_on_error ERR
 
 # 默认参数
-DATA_PATH="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat"
+DATA_PATH="/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat"
 TRAIN_START=1
 TRAIN_END=31
 VAL_START=31

@@ -24,7 +24,7 @@ class Config:
     """配置类"""
     
     # 数据配置
-    DEFAULT_DATA_PATH = '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat'
+    DEFAULT_DATA_PATH = '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat'
     DEFAULT_RANDOM_STATE = 42
     
     # 受试者分割配置

@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 logger = logging.getLogger(__name__)
 
 
-def load_and_prepare_data_multi_subject_out(data_path='/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat',
+def load_and_prepare_data_multi_subject_out(data_path='/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat',
                                           train_subjects_range=(1, 31),    # 受试者1-30用于训练
                                           val_subjects_range=(31, 38),     # 受试者31-37用于验证  
                                           test_subject=38,                 # 受试者38用于测试
