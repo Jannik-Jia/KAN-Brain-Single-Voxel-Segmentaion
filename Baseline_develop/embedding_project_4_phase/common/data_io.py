@@ -191,7 +191,31 @@ class DataIO:
 
 class NumpyEncoder(json.JSONEncoder):
     """用于处理numpy类型的JSON编码器"""
-    
+
+    def encode(self, obj):
+        obj = self.convert_keys(obj)
+        return super().encode(obj)
+
+    def convert_keys(self, obj):
+        if isinstance(obj, dict):
+            return {self.convert_key(k): self.convert_keys(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self.convert_keys(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self.convert_keys(item) for item in obj)
+        else:
+            return obj
+
+    def convert_key(self, key):
+        if isinstance(key, (np.integer, np.int64, np.int32)):
+            return int(key)
+        elif isinstance(key, (np.floating, np.float64, np.float32)):
+            return float(key)
+        elif isinstance(key, np.bool_):
+            return bool(key)
+        else:
+            return key
+
     def default(self, obj):
         if isinstance(obj, np.integer):
             return int(obj)
