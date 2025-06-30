@@ -160,11 +160,35 @@ class DataIO:
         """
         output_file = Path(output_file)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
+        # 递归转换
+        def convert_keys(obj):
+            if isinstance(obj, dict):
+                return {convert_key(k): convert_keys(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_keys(item) for item in obj]
+            elif isinstance(obj, tuple):
+                return tuple(convert_keys(item) for item in obj)
+            else:
+                return obj
+
+        def convert_key(key):
+            if isinstance(key, (np.integer, np.int64, np.int32)):
+                return int(key)
+            elif isinstance(key, (np.floating, np.float64, np.float32)):
+                return float(key)
+            elif isinstance(key, np.bool_):
+                return bool(key)
+            else:
+                return key
+
+        data = convert_keys(data)
+
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2, cls=NumpyEncoder)
-        
+
         logger.info(f"JSON数据已保存到: {output_file}")
+
     
     @staticmethod
     def load_json(input_file: Union[str, Path]) -> Dict:
