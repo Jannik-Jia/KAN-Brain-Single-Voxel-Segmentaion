@@ -21,17 +21,7 @@ class DataIO:
     
     @staticmethod
     def save_phase_output(phase_number: int, output_dir: Path, results: Dict[str, Any], 
-                         scores: Dict[str, float], metadata: Optional[Dict] = None):
-        """
-        保存Phase输出的标准化数据包
-        
-        Args:
-            phase_number: Phase编号
-            output_dir: 输出目录
-            results: Phase特定的结果
-            scores: 决策相关得分
-            metadata: 元信息
-        """
+                        scores: Dict[str, float], metadata: Optional[Dict] = None):
         output_data = {
             "phase_info": {
                 "phase_number": phase_number,
@@ -42,13 +32,14 @@ class DataIO:
             "scores": scores,
             "metadata": metadata or {}
         }
-        
+
         output_file = output_dir / f'phase{phase_number}_results.json'
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=2, cls=NumpyEncoder)
-        
+
+        # 调用你已修复好的save_json方法
+        DataIO.save_json(output_data, output_file)
+
         logger.info(f"Phase {phase_number} 结果已保存到: {output_file}")
+
     
     @staticmethod
     def load_phase_output(phase_number: int, output_dir: Path) -> Dict[str, Any]:
