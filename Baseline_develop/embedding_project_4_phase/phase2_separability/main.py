@@ -134,6 +134,20 @@ def main():
         logger.info(f"验证数据形状: {X_val.shape}")
         logger.info(f"设备: {args.device}")
         
+
+        # 准备数据字典格式
+        train_data_dict = {
+            'X_scaled': X_train,
+            'y': y_train,
+            'subjects': subjects_train
+        }
+
+        val_data_dict = {
+            'X_scaled': X_val,
+            'y': y_val,
+            'subjects': subjects_val
+        }
+
         # 步骤1: Baseline性能测试
         logger.info("\n步骤1: 执行Baseline性能测试...")
         baseline_tester = BaselineTester(
@@ -142,13 +156,15 @@ def main():
             save_models=args.save_models,
             models_dir=models_dir if args.save_models else None
         )
-        
+
         baseline_results = baseline_tester.test_baseline_performance(
-            X_train, y_train, subjects_train,
-            X_val, y_val, subjects_val,
-            label_mapping=data['label_mapping']
+            train_data_dict,
+            val_data_dict,
+            data['label_mapping']
         )
-        
+
+
+
         # 保存baseline结果
         DataIO.save_json(baseline_results, output_dir / 'baseline_results.json')
         
@@ -409,11 +425,23 @@ def generate_visualizations(baseline_results, loso_results,
     baseline_accs = []
     loso_accs = []
     
-    for model_name in baseline_results['model_results']:
-        if model_name in loso_results['model_results']:
-            models.append(model_name)
-            baseline_accs.append(baseline_results['model_results'][model_name]['global_accuracy'])
-            loso_accs.append(loso_results['model_results'][model_name]['mean_accuracy'])
+    # for model_name in baseline_results['model_results']:
+    #     if model_name in loso_results['model_results']:
+    #         models.append(model_name)
+    #         baseline_accs.append(baseline_results['model_results'][model_name]['global_accuracy'])
+    #         loso_accs.append(loso_results['model_results'][model_name]['mean_accuracy'])
+
+    for model_name in baseline_results.get('global_analysis', {}):
+        if model_name in loso_results.get('model_results', {}):
+            baseline_result = baseline_results['global_analysis'][model_name]
+            loso_result = loso_results['model_results'][model_name]
+            
+            if (isinstance(baseline_result, dict) and 'accuracy' in baseline_result and
+                isinstance(loso_result, dict) and 'mean_accuracy' in loso_result):
+                models.append(model_name)
+                baseline_accs.append(baseline_result['accuracy'])
+                loso_accs.append(loso_result['mean_accuracy'])
+            
     
     if models:
         # 创建分组柱状图
