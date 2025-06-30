@@ -179,7 +179,7 @@ def main():
                 visualizer.plot_scatter_2d(
                     global_results['feature_variation']['pca_result'][:, :2],
                     y=global_results['subject_stats']['subject_ids'],
-                    title="受试者PCA投影",
+                    title="Subject PCA Projection",      # 原: "受试者PCA投影"
                     xlabel="PC1", ylabel="PC2",
                     save_name="subject_clustering.png"
                 )
@@ -187,17 +187,19 @@ def main():
             # 受试者相似性热图
             visualizer.plot_correlation_matrix(
                 global_results['similarity']['correlation_matrix'],
-                title="受试者间相关性矩阵",
+                title="Inter-subject Correlation Matrix",   # 原: "受试者间相关性矩阵"
                 labels=[f"S{int(sid)}" for sid in global_results['subject_stats']['subject_ids']],
                 save_name="subject_similarity_heatmap.png"
             )
+
+
             
             # 特征变异分布
             visualizer.plot_distribution(
                 global_results['feature_variation']['f_stats'],
-                title="特征变异分布",
-                xlabel="标准化F统计量",
-                ylabel="特征数量",
+                title="Feature Variation Distribution",     # 原: "特征变异分布"
+                xlabel="Standardized F-statistic",          # 原: "标准化F统计量"
+                ylabel="Number of Features",                # 原: "特征数量"
                 save_name="variation_distribution.png"
             )
             
@@ -216,10 +218,11 @@ def main():
                 if matrix_subset:
                     visualizer.plot_correlation_matrix(
                         np.array(matrix_subset),
-                        title="脑区特异性得分热图 (Top 20)",
+                        title="Region Specificity Score Heatmap (Top 20)",    # 原: "脑区特异性得分热图 (Top 20)"
                         labels=[f"R{r}" for r in top_regions],
                         save_name="region_specificity_heatmap.png"
                     )
+
         
         # 步骤4: 计算Phase 1决策得分
         logger.info("\n步骤4: 计算决策得分...")

@@ -423,8 +423,9 @@ def generate_visualizations(baseline_results, loso_results,
         x = np.arange(len(models))
         width = 0.35
         
-        bars1 = ax.bar(x - width/2, baseline_accs, width, label='Baseline (随机分割)', alpha=0.8)
-        bars2 = ax.bar(x + width/2, loso_accs, width, label='LOSO (跨受试者)', alpha=0.8)
+        bars1 = ax.bar(x - width/2, baseline_accs, width, label='Baseline (Random Split)', alpha=0.8)      # 'Baseline (随机分割)'
+        bars2 = ax.bar(x + width/2, loso_accs, width, label='LOSO (Cross-subject)', alpha=0.8)            # 'LOSO (跨受试者)'
+
         
         # 添加数值标签
         for bars in [bars1, bars2]:
@@ -433,9 +434,10 @@ def generate_visualizations(baseline_results, loso_results,
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
                        f'{height:.3f}', ha='center', va='bottom')
         
-        ax.set_xlabel('模型')
-        ax.set_ylabel('准确率')
-        ax.set_title('Baseline vs LOSO 性能对比')
+        ax.set_xlabel('Model')          # '模型'
+        ax.set_ylabel('Accuracy')       # '准确率'
+        ax.set_title('Baseline vs LOSO Performance Comparison')   # 'Baseline vs LOSO 性能对比'
+
         ax.set_xticks(x)
         ax.set_xticklabels(models)
         ax.legend()
@@ -468,8 +470,8 @@ def generate_visualizations(baseline_results, loso_results,
         
         visualizer.plot_bar_chart(
             scores, regions,
-            title="脑区Subject Embedding需求得分 (Top 30)",
-            ylabel="需求得分",
+            title="Region Subject Embedding Necessity Score (Top 30)",   # '脑区Subject Embedding需求得分 (Top 30)'
+            ylabel="Necessity Score",                                    # '需求得分'
             save_name="embedding_necessity_map.png",
             colors=colors
         )
