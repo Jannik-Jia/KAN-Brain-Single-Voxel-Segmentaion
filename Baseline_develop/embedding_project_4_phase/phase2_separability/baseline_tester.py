@@ -8,7 +8,7 @@ Baseline测试器
 import numpy as np
 import logging
 import time
-from pathlib import Path  # 添加缺失的导入
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
@@ -33,6 +33,7 @@ class DeepClassifierWrapper:
             self.config.update(config)
         self.network = None
         self.training_history = {'loss': [], 'accuracy': []}
+        self.device = deep_utils.device  # 添加设备处理
     
     def fit(self, X, y):
         # 确定类别数
@@ -71,6 +72,9 @@ class DeepClassifierWrapper:
             total = 0
             
             for batch_x, batch_y in train_loader:
+                batch_x = batch_x.to(self.device)  # 确保数据在正确设备上
+                batch_y = batch_y.to(self.device)
+                
                 optimizer.zero_grad()
                 
                 outputs = self.network(batch_x)
@@ -231,10 +235,10 @@ class BaselineTester:
         """测试全局性能"""
         
         classifiers = {
-            'RandomForest': RandomForestClassifier(
-                n_estimators=200, max_depth=20, 
-                min_samples_split=2, random_state=42, n_jobs=-1
-            ),
+            # 'RandomForest': RandomForestClassifier(
+            #     n_estimators=200, max_depth=20, 
+            #     min_samples_split=2, random_state=42, n_jobs=-1
+            # ),
             'LogisticRegression': LogisticRegression(
                 max_iter=1000, C=0.1, random_state=42
             )
@@ -304,6 +308,7 @@ class BaselineTester:
                 
             except Exception as e:
                 logger.error(f"训练 {name} 失败: {e}")
+                logger.exception("详细错误信息:")
                 results[name] = {'error': str(e)}
         
         return results
@@ -312,7 +317,14 @@ class BaselineTester:
                                   subjects: np.ndarray) -> Dict[str, np.ndarray]:
         """
         构建脑区感知数据集
-        注意：这里的regions参数就是脑区标签（y的类别索引）
+        
+        Args:
+            X: 特征数据
+            regions: 脑区标签（y的类别索引）
+            subjects: 受试者标签
+            
+        Returns:
+            脑区感知数据集
         """
         unique_subjects = np.unique(subjects)
         unique_regions = np.unique(regions)
@@ -410,6 +422,7 @@ class BaselineTester:
                 
             except Exception as e:
                 logger.error(f"训练分脑区 {name} 失败: {e}")
+                logger.exception("详细错误信息:")
                 results[name] = {'error': str(e)}
         
         return results

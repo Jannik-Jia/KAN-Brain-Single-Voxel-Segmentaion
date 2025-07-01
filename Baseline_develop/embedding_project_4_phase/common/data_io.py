@@ -207,9 +207,9 @@ class DataIO:
 class NumpyEncoder(json.JSONEncoder):
     """用于处理numpy类型的JSON编码器"""
 
-    def encode(self, obj):
-        obj = self.convert_keys(obj)
-        return super().encode(obj)
+    # def encode(self, obj):
+    #     obj = self.convert_keys(obj)
+    #     return super().encode(obj)
 
     def convert_keys(self, obj):
         if isinstance(obj, dict):

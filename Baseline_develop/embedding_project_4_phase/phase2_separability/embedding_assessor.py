@@ -7,10 +7,11 @@ Embedding需求评估器
 
 import numpy as np
 import logging
-from pathlib import Path  # 添加缺失的导入
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
+from scipy.spatial.distance import pdist  # 添加缺失的导入
 import torch
 
 from common.config import Config
@@ -288,7 +289,6 @@ class EmbeddingNeedAssessor:
                     subject_means.append(np.mean(X[subject_mask], axis=0))
             
             if len(subject_means) >= 3:
-                from scipy.spatial.distance import pdist
                 distances = pdist(np.array(subject_means))
                 
                 with np.errstate(divide='ignore', invalid='ignore'):
@@ -364,6 +364,15 @@ class EmbeddingNeedAssessor:
         # 根据Phase 1的特异性得分进行调整
         phase1_boost = region_analysis.get('phase1_specificity_score', 0) * 0.1
         necessity_score = min(1.0, necessity_score + phase1_boost)
+        
+        # 如果该脑区在LOSO中表现特别差，增加权重
+        if 'region_wise_details' in loso_results:
+            region_id = region_analysis['region_id']
+            region_loso = loso_results['region_wise_details'].get(region_id, {})
+            
+            if 'generalization_score' in region_loso:
+                poor_generalization = 1.0 - region_loso['generalization_score']
+                necessity_score = min(1.0, necessity_score + poor_generalization * 0.1)
         
         return float(necessity_score)
     

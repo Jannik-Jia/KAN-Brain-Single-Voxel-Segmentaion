@@ -9,7 +9,7 @@ LOSO评估器
 import numpy as np
 import logging
 import time
-from pathlib import Path  # 添加缺失的导入
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -72,7 +72,8 @@ class LOSOEvaluator:
             'model_results': {},
             'subject_generalization_gaps': {},
             'mean_generalization_gap': 0.0,
-            'deep_network_advantage': 0.0
+            'deep_network_advantage': 0.0,
+            'region_wise_summary': {}  # 添加分脑区汇总
         }
         
         # 1. 全局LOSO分析
@@ -99,13 +100,19 @@ class LOSOEvaluator:
                     'generalization_gap': global_loso_results[model_key].get('generalization_gap', 0)
                 }
                 
-                # 添加分脑区结果（如果存在）
-                if model_key in region_loso_results:
+                # 添加分脑区汇总信息
+                if 'summary' in region_loso_results and model_key in region_loso_results['summary']:
                     results['model_results'][model_type]['region_wise_accuracy'] = \
-                        region_loso_results[model_key]['mean_accuracy']
+                        region_loso_results['summary'][model_key].get('mean_accuracy', 0)
+        
+        # 保存分脑区详细结果
+        if 'region_results' in region_loso_results:
+            results['region_wise_details'] = region_loso_results['region_results']
+            results['region_wise_summary'] = region_loso_results.get('summary', {})
         
         # 计算平均泛化差距
-        gaps = [r['generalization_gap'] for r in results['model_results'].values()]
+        gaps = [r['generalization_gap'] for r in results['model_results'].values() 
+                if 'generalization_gap' in r]
         results['mean_generalization_gap'] = np.mean(gaps) if gaps else 0
         
         # 计算深度网络优势
@@ -179,14 +186,30 @@ class LOSOEvaluator:
                 start_time = time.time()
                 
                 try:
-                    if model_type == 'rf':
-                        model = RandomForestClassifier(
-                            n_estimators=100, max_depth=15, random_state=42, n_jobs=-1
-                        )
-                        model.fit(X_train, y_train)
-                        y_pred = model.predict(X_test)
+                    # if model_type == 'rf':
+                    #     model = RandomForestClassifier(
+                    #         n_estimators=100, max_depth=15, random_state=42, n_jobs=-1
+                    #     )
+                    #     model.fit(X_train, y_train)
+                    #     y_pred = model.predict(X_test)
                         
-                    elif model_type == 'lr':
+                    # elif model_type == 'lr':
+                    #     model = LogisticRegression(
+                    #         max_iter=1000, C=0.1, random_state=42
+                    #     )
+                    #     model.fit(X_train, y_train)
+                    #     y_pred = model.predict(X_test)
+                        
+                    # elif model_type == 'deep':
+                    #     # 深度网络
+                    #     model = DeepClassifierWrapper(self.deep_utils)
+                    #     model.fit(X_train, y_train)
+                    #     y_pred = model.predict(X_test)
+
+
+
+                        
+                    if model_type == 'lr':
                         model = LogisticRegression(
                             max_iter=1000, C=0.1, random_state=42
                         )
@@ -198,6 +221,7 @@ class LOSOEvaluator:
                         model = DeepClassifierWrapper(self.deep_utils)
                         model.fit(X_train, y_train)
                         y_pred = model.predict(X_test)
+                
                     
                     accuracy = accuracy_score(y_test, y_pred)
                     f1 = f1_score(y_test, y_pred, average='macro')
@@ -231,120 +255,303 @@ class LOSOEvaluator:
         return final_results
     
     def _evaluate_region_wise_loso(self, X: np.ndarray, y: np.ndarray,
-                                 subjects: np.ndarray) -> Dict[str, Any]:
-        """评估分脑区LOSO性能"""
-        # 构建分脑区数据集
-        region_dataset = self._build_region_dataset(X, y, subjects)
+                                subjects: np.ndarray) -> Dict[str, Any]:
+        """
+        评估分脑区LOSO性能
         
-        if len(region_dataset['features']) < 500:
-            logger.warning("分脑区数据不足，跳过LOSO分析")
-            return {}
+        对每个脑区评估：
+        1. 该脑区 vs 其他脑区的二分类LOSO性能
+        2. 该脑区在多分类中的LOSO性能
         
-        X_region = region_dataset['features']
-        subject_labels = region_dataset['subject_labels']
+        Args:
+            X: 特征数据
+            y: 脑区标签（每个体素属于哪个脑区）
+            subjects: 受试者标签（每个体素来自哪个受试者）
+            
+        Returns:
+            分脑区LOSO评估结果
+        """
+        unique_subjects = np.unique(subjects)
+        unique_regions = np.unique(y)
         
-        # 重新映射受试者标签
-        unique_subjects = np.unique(subject_labels)
-        subject_mapping = {orig_id: new_id for new_id, orig_id in enumerate(unique_subjects)}
-        y_region = np.array([subject_mapping[s] for s in subject_labels])
-        
-        logger.info(f"分脑区数据集: {len(X_region)} 样本, {len(unique_subjects)} 受试者")
-        
-        # 限制测试受试者
+        # 限制测试受试者数量
         test_subjects = unique_subjects[:min(self.max_subjects, len(unique_subjects))]
         
-        # 初始化结果
-        model_results = {}
+        logger.info(f"开始分脑区LOSO评估，共{len(unique_regions)}个脑区")
+        
+        # 存储每个脑区的评估结果
+        region_results = {}
+        
+        # 1. 先进行全脑区多分类LOSO，收集每个脑区的性能
+        logger.info("执行多分类LOSO以评估每个脑区的性能...")
+        multiclass_region_scores = self._evaluate_multiclass_region_loso(
+            X, y, subjects, test_subjects
+        )
+        
+        # 2. 对每个脑区进行二分类LOSO评估（可选，更细致的分析）
+        logger.info("执行分脑区二分类LOSO评估...")
+        binary_region_scores = self._evaluate_binary_region_loso(
+            X, y, subjects, test_subjects, unique_regions
+        )
+        
+        # 3. 整合结果
+        for region_id in unique_regions:
+            region_id_int = int(region_id)
+            
+            region_results[region_id_int] = {
+                'multiclass_performance': multiclass_region_scores.get(region_id_int, {}),
+                'binary_performance': binary_region_scores.get(region_id_int, {}),
+                'n_samples': int(np.sum(y == region_id)),
+                'n_subjects': int(len(np.unique(subjects[y == region_id])))
+            }
+            
+            # 计算综合泛化得分
+            multi_f1 = multiclass_region_scores.get(region_id_int, {}).get('mean_f1', 0)
+            binary_acc = binary_region_scores.get(region_id_int, {}).get('mean_accuracy', 0)
+            
+            # 综合得分（可以调整权重）
+            region_results[region_id_int]['generalization_score'] = (multi_f1 + binary_acc) / 2
+        
+        # 4. 汇总统计
+        summary_results = self._summarize_region_loso_results(region_results)
+        
+        # 5. 为每个模型类型计算分脑区平均性能
+        model_summary = {}
         for model_type in self.model_types:
             model_key = self._get_model_key(model_type)
-            model_results[model_key] = {
-                'accuracies': [],
-                'f1_scores': []
-            }
-        
-        # LOSO评估
-        for test_subject in test_subjects:
-            test_subject_mapped = subject_mapping[test_subject]
+            # 这里简化处理，使用多分类的平均性能作为分脑区性能
+            region_f1s = [r['multiclass_performance'].get('mean_f1', 0) 
+                         for r in region_results.values() 
+                         if 'mean_f1' in r.get('multiclass_performance', {})]
             
-            train_mask = y_region != test_subject_mapped
-            test_mask = y_region == test_subject_mapped
-            
-            if np.sum(test_mask) < 10:
-                continue
-            
-            X_train = X_region[train_mask]
-            y_train = y_region[train_mask]
-            X_test = X_region[test_mask]
-            y_test = y_region[test_mask]
-            
-            for model_type in self.model_types:
-                model_key = self._get_model_key(model_type)
-                
-                try:
-                    if model_type == 'rf':
-                        model = RandomForestClassifier(
-                            n_estimators=50, max_depth=10, random_state=42
-                        )
-                    elif model_type == 'lr':
-                        model = LogisticRegression(
-                            max_iter=500, C=0.1, random_state=42
-                        )
-                    elif model_type == 'deep':
-                        model = DeepClassifierWrapper(
-                            self.deep_utils,
-                            config={'batch_size': 32, 'no_epochs': 15}
-                        )
-                    
-                    model.fit(X_train, y_train)
-                    y_pred = model.predict(X_test)
-                    
-                    accuracy = accuracy_score(y_test, y_pred)
-                    f1 = f1_score(y_test, y_pred, average='macro')
-                    
-                    model_results[model_key]['accuracies'].append(accuracy)
-                    model_results[model_key]['f1_scores'].append(f1)
-                    
-                except Exception as e:
-                    logger.error(f"分脑区 {model_key} 失败: {e}")
-        
-        # 计算统计
-        final_results = {}
-        for model_key, results in model_results.items():
-            if results['accuracies']:
-                final_results[model_key] = {
-                    'mean_accuracy': np.mean(results['accuracies']),
-                    'std_accuracy': np.std(results['accuracies']),
-                    'mean_f1': np.mean(results['f1_scores']),
-                    'std_f1': np.std(results['f1_scores'])
+            if region_f1s:
+                model_summary[model_key] = {
+                    'mean_accuracy': np.mean(region_f1s),  # 使用F1作为准确率的代理
+                    'std_accuracy': np.std(region_f1s)
                 }
         
-        return final_results
+        return {
+            'region_results': region_results,
+            'summary': model_summary,
+            'detailed_summary': summary_results,
+            'test_subjects': test_subjects.tolist()
+        }
+
+    def _evaluate_multiclass_region_loso(self, X: np.ndarray, y: np.ndarray,
+                                    subjects: np.ndarray, 
+                                    test_subjects: np.ndarray) -> Dict[int, Dict]:
+        """
+        多分类LOSO：评估每个脑区在101类分类任务中的表现
+        """
+        from sklearn.metrics import classification_report, confusion_matrix
+        
+        # 初始化每个脑区的性能记录
+        unique_regions = np.unique(y)
+        region_scores = {int(r): {'precisions': [], 'recalls': [], 'f1s': []} 
+                        for r in unique_regions}
+        
+        # 对每个测试受试者执行LOSO
+        for test_subject in test_subjects:
+            train_mask = subjects != test_subject
+            test_mask = subjects == test_subject
+            
+            if np.sum(test_mask) < 50:  # 样本太少，跳过
+                continue
+            
+            X_train, y_train = X[train_mask], y[train_mask]
+            X_test, y_test = X[test_mask], y[test_mask]
+            
+            # 使用最佳模型（根据baseline结果选择）
+            if 'deep' in self.model_types:
+                model = DeepClassifierWrapper(self.deep_utils)
+            else:
+                # model = RandomForestClassifier(n_estimators=100, max_depth=15, random_state=42)
+                model = LogisticRegression(max_iter=1000, C=0.1, random_state=42)  # 使用LR代替RF
+            try:
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                
+                # 计算每个类别的性能
+                report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+                
+                # 记录每个脑区的性能
+                for region_id in unique_regions:
+                    region_key = str(int(region_id))
+                    if region_key in report:
+                        metrics = report[region_key]
+                        region_scores[int(region_id)]['precisions'].append(metrics['precision'])
+                        region_scores[int(region_id)]['recalls'].append(metrics['recall'])
+                        region_scores[int(region_id)]['f1s'].append(metrics['f1-score'])
+                        
+            except Exception as e:
+                logger.warning(f"多分类LOSO失败于受试者{test_subject}: {e}")
+                continue
+        
+        # 计算每个脑区的平均性能
+        final_scores = {}
+        for region_id, scores in region_scores.items():
+            if scores['f1s']:  # 如果有有效的评分
+                final_scores[region_id] = {
+                    'mean_precision': float(np.mean(scores['precisions'])),
+                    'mean_recall': float(np.mean(scores['recalls'])),
+                    'mean_f1': float(np.mean(scores['f1s'])),
+                    'std_f1': float(np.std(scores['f1s'])),
+                    'n_evaluations': len(scores['f1s'])
+                }
+        
+        return final_scores
+
+    def _evaluate_binary_region_loso(self, X: np.ndarray, y: np.ndarray,
+                                    subjects: np.ndarray, test_subjects: np.ndarray,
+                                    unique_regions: np.ndarray) -> Dict[int, Dict]:
+        """
+        二分类LOSO：对每个脑区评估"该脑区 vs 其他所有脑区"的分类性能
+        """
+        region_binary_scores = {}
+        
+        # 只评估样本充足的脑区
+        for region_id in unique_regions:
+            region_mask = y == region_id
+            n_region_samples = np.sum(region_mask)
+            
+            if n_region_samples < 500:  # 该脑区样本太少
+                continue
+                
+            region_subjects = subjects[region_mask]
+            n_region_subjects = len(np.unique(region_subjects))
+            
+            if n_region_subjects < 5:  # 该脑区涉及的受试者太少
+                continue
+            
+            logger.info(f"  评估脑区 {int(region_id)} (样本数: {n_region_samples}, "
+                    f"受试者数: {n_region_subjects})")
+            
+            # 对该脑区执行二分类LOSO
+            accuracies = []
+            f1_scores = []
+            
+            for test_subject in test_subjects:
+                train_mask = subjects != test_subject
+                test_mask = subjects == test_subject
+                
+                if np.sum(test_mask) < 20:
+                    continue
+                
+                # 创建二分类标签
+                y_binary_train = (y[train_mask] == region_id).astype(int)
+                y_binary_test = (y[test_mask] == region_id).astype(int)
+                
+                # 检查测试集中是否有该脑区的样本
+                if np.sum(y_binary_test) == 0 or np.sum(y_binary_test) == len(y_binary_test):
+                    continue  # 全是正样本或全是负样本，跳过
+                
+                X_train = X[train_mask]
+                X_test = X[test_mask]
+                
+                # 简单的逻辑回归
+                clf = LogisticRegression(max_iter=500, C=1.0, random_state=42, class_weight='balanced')
+                
+                try:
+                    clf.fit(X_train, y_binary_train)
+                    y_pred = clf.predict(X_test)
+                    
+                    acc = accuracy_score(y_binary_test, y_pred)
+                    f1 = f1_score(y_binary_test, y_pred)
+                    
+                    accuracies.append(acc)
+                    f1_scores.append(f1)
+                    
+                except Exception as e:
+                    logger.debug(f"二分类失败于脑区{region_id}和受试者{test_subject}: {e}")
+                    continue
+            
+            # 记录该脑区的二分类性能
+            if accuracies:
+                region_binary_scores[int(region_id)] = {
+                    'mean_accuracy': float(np.mean(accuracies)),
+                    'std_accuracy': float(np.std(accuracies)),
+                    'mean_f1': float(np.mean(f1_scores)),
+                    'std_f1': float(np.std(f1_scores)),
+                    'n_evaluations': len(accuracies)
+                }
+        
+        return region_binary_scores
+
+    def _summarize_region_loso_results(self, region_results: Dict[int, Dict]) -> Dict[str, Any]:
+        """
+        汇总分脑区LOSO结果
+        """
+        # 提取所有脑区的泛化得分
+        generalization_scores = []
+        multiclass_f1s = []
+        binary_accs = []
+        
+        for region_id, results in region_results.items():
+            if 'generalization_score' in results:
+                generalization_scores.append(results['generalization_score'])
+            
+            multi_perf = results.get('multiclass_performance', {})
+            if 'mean_f1' in multi_perf:
+                multiclass_f1s.append(multi_perf['mean_f1'])
+            
+            binary_perf = results.get('binary_performance', {})
+            if 'mean_accuracy' in binary_perf:
+                binary_accs.append(binary_perf['mean_accuracy'])
+        
+        # 识别泛化性能最差的脑区（最需要embedding的候选）
+        sorted_regions = sorted(region_results.items(), 
+                            key=lambda x: x[1].get('generalization_score', 1.0))
+        
+        poor_generalization_regions = [r[0] for r in sorted_regions[:10]]  # 最差的10个
+        good_generalization_regions = [r[0] for r in sorted_regions[-10:]]  # 最好的10个
+        
+        return {
+            'mean_generalization_score': float(np.mean(generalization_scores)) if generalization_scores else 0,
+            'std_generalization_score': float(np.std(generalization_scores)) if generalization_scores else 0,
+            'mean_multiclass_f1': float(np.mean(multiclass_f1s)) if multiclass_f1s else 0,
+            'mean_binary_accuracy': float(np.mean(binary_accs)) if binary_accs else 0,
+            'n_evaluated_regions': len(region_results),
+            'poor_generalization_regions': poor_generalization_regions,
+            'good_generalization_regions': good_generalization_regions
+        }
     
+
     def _build_region_dataset(self, X: np.ndarray, regions: np.ndarray,
                             subjects: np.ndarray) -> Dict[str, np.ndarray]:
-        """构建分脑区数据集"""
+        """
+        构建分脑区数据集
+        
+        修正说明：
+        - regions: 脑区标签（体素属于哪个脑区）
+        - subjects: 受试者标签（体素来自哪个受试者）
+        - 返回：每个受试者-脑区组合的平均特征
+        """
         unique_subjects = np.unique(subjects)
         unique_regions = np.unique(regions)
         
         X_list = []
-        subject_labels = []
-        region_labels = []
+        subject_labels = []  # 受试者标签
+        region_labels = []   # 脑区标签
         
         for subject_id in unique_subjects:
             for region_id in unique_regions:
+                # 找到属于特定受试者和脑区的体素
                 mask = (subjects == subject_id) & (regions == region_id)
                 n_voxels = np.sum(mask)
                 
                 if n_voxels >= Config.MIN_VOXELS_PER_REGION:
+                    # 计算该受试者在该脑区的平均特征
                     region_features = np.mean(X[mask], axis=0)
                     X_list.append(region_features)
-                    subject_labels.append(subject_id)
-                    region_labels.append(region_id)
+                    subject_labels.append(subject_id)  # 记录受试者ID
+                    region_labels.append(region_id)    # 记录脑区ID
+        
+        logger.info(f"构建了 {len(X_list)} 个受试者-脑区特征向量")
         
         return {
             'features': np.array(X_list),
-            'subject_labels': np.array(subject_labels),
-            'region_labels': np.array(region_labels)
+            'subject_labels': np.array(subject_labels),  # 受试者标签
+            'region_labels': np.array(region_labels)     # 脑区标签
         }
     
     def _print_loso_summary(self, results: Dict):
@@ -356,6 +563,18 @@ class LOSOEvaluator:
             logger.info(f"\n{model_type}:")
             logger.info(f"  平均准确率: {model_results['mean_accuracy']:.3f} ± {model_results['std_accuracy']:.3f}")
             logger.info(f"  泛化差距: {model_results['generalization_gap']:.3f}")
+            
+            if 'region_wise_accuracy' in model_results:
+                logger.info(f"  分脑区准确率: {model_results['region_wise_accuracy']:.3f}")
         
         logger.info(f"\n平均泛化差距: {results['mean_generalization_gap']:.3f}")
         logger.info(f"深度网络优势: {results['deep_network_advantage']:.3f}")
+        
+        # 打印分脑区汇总
+        if 'detailed_summary' in results.get('region_wise_summary', {}):
+            summary = results['region_wise_summary']['detailed_summary']
+            logger.info(f"\n分脑区评估汇总:")
+            logger.info(f"  评估脑区数: {summary['n_evaluated_regions']}")
+            logger.info(f"  平均泛化得分: {summary['mean_generalization_score']:.3f}")
+            logger.info(f"  泛化最差的脑区: {summary['poor_generalization_regions'][:5]}")
+            logger.info(f"  泛化最好的脑区: {summary['good_generalization_regions'][:5]}")

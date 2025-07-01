@@ -59,9 +59,14 @@ def parse_arguments():
     parser.add_argument('--save_models', action='store_true',
                        help='保存训练好的模型')
     
+    # parser.add_argument('--test_models', type=str, nargs='+',
+    #                    default=['rf', 'lr', 'deep'],
+    #                    choices=['rf', 'lr', 'deep'],
+    #                    help='要测试的模型类型')
+
     parser.add_argument('--test_models', type=str, nargs='+',
-                       default=['rf', 'lr', 'deep'],
-                       choices=['rf', 'lr', 'deep'],
+                       default=['lr', 'deep'],
+                       choices=['lr', 'deep'],
                        help='要测试的模型类型')
     
     parser.add_argument('--max_loso_subjects', type=int,
@@ -191,11 +196,12 @@ def main():
        
        # 计算泛化差距
        for model_type in loso_results['model_results']:
-           model_key = loso_evaluator._get_model_key(model_type)
-           if model_key in baseline_results['global_analysis']:
-               baseline_acc = baseline_results['global_analysis'][model_key].get('accuracy', 0)
-               loso_acc = loso_results['model_results'][model_type]['mean_accuracy']
-               loso_results['model_results'][model_type]['generalization_gap'] = baseline_acc - loso_acc
+           if model_type in ['rf', 'lr', 'deep']:  # 使用原始模型类型
+               model_key = loso_evaluator._get_model_key(model_type)
+               if model_key in baseline_results['global_analysis']:
+                   baseline_acc = baseline_results['global_analysis'][model_key].get('accuracy', 0)
+                   loso_acc = loso_results['model_results'][model_type]['mean_accuracy']
+                   loso_results['model_results'][model_type]['generalization_gap'] = baseline_acc - loso_acc
        
        # 保存LOSO结果
        DataIO.save_json(loso_results, output_dir / 'loso_results.json')
@@ -298,7 +304,7 @@ def analyze_deep_network_authority(baseline_results, loso_results):
    
    # 提取深度网络性能
    deep_baseline = baseline_results.get('global_analysis', {}).get('Deep4x4096')
-   deep_loso = loso_results.get('model_results', {}).get('deep')
+   deep_loso = loso_results.get('model_results', {}).get('deep')  # 使用原始模型类型
    
    if not deep_baseline or not deep_loso:
        return {
@@ -327,7 +333,7 @@ def analyze_deep_network_authority(baseline_results, loso_results):
    relative_gap = generalization_gap / deep_baseline['accuracy'] if deep_baseline['accuracy'] > 0 else 1
    
    # 3. 训练稳定性
-   training_stability = 1.0 - deep_baseline.get('overfitting_indicator', 0.1)
+   training_stability = 1.0 - abs(deep_baseline.get('overfitting_indicator', 0.1))
    
    # 综合权威性评分
    authority_score = (
@@ -477,7 +483,7 @@ def generate_visualizations(baseline_results, loso_results,
        
        plt.tight_layout()
        plt.savefig(viz_dir / 'performance_comparison.png', dpi=300, bbox_inches='tight')
-       plt.close()
+       plt.close('all')  # 确保释放内存
    
    # 2. 脑区Embedding需求热图
    if region_embedding_needs['region_scores']:
@@ -531,7 +537,7 @@ def generate_visualizations(baseline_results, loso_results,
        
        plt.tight_layout()
        plt.savefig(viz_dir / 'generalization_gap.png', dpi=300, bbox_inches='tight')
-       plt.close()
+       plt.close('all')  # 确保释放内存
 
 def print_key_findings(baseline_results, loso_results, 
                      deep_network_analysis, region_embedding_needs, phase2_scores):
