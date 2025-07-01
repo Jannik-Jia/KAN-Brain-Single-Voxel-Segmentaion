@@ -7,6 +7,7 @@ Embedding需求评估器
 
 import numpy as np
 import logging
+from pathlib import Path  # 添加缺失的导入
 from typing import Dict, Any, List, Optional, Tuple
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
@@ -50,27 +51,31 @@ class EmbeddingNeedAssessor:
         region_scores = {}
         region_analyses = {}
         
-        # 对每个脑区进行评估
-        for i, region_id in enumerate(unique_regions):
-            if i % 10 == 0:
-                logger.info(f"  进度: {i}/{len(unique_regions)} 脑区")
+        # 批量处理提高效率
+        batch_size = 10
+        for batch_start in range(0, len(unique_regions), batch_size):
+            batch_end = min(batch_start + batch_size, len(unique_regions))
+            batch_regions = unique_regions[batch_start:batch_end]
             
-            # 分析单个脑区
-            region_analysis = self._analyze_single_region(
-                region_id, X, regions, subjects,
-                region_specificity.get(str(region_id), {})
-            )
+            logger.info(f"  处理脑区批次: {batch_start//batch_size + 1}/{(len(unique_regions) + batch_size - 1)//batch_size}")
             
-            if region_analysis['status'] == 'success':
-                # 计算embedding需求得分
-                necessity_score = self._compute_necessity_score(
-                    region_analysis,
-                    baseline_results,
-                    loso_results
+            for region_id in batch_regions:
+                # 分析单个脑区
+                region_analysis = self._analyze_single_region(
+                    region_id, X, regions, subjects,
+                    region_specificity.get(str(int(region_id)), {})
                 )
                 
-                region_scores[int(region_id)] = necessity_score
-                region_analyses[int(region_id)] = region_analysis
+                if region_analysis['status'] == 'success':
+                    # 计算embedding需求得分
+                    necessity_score = self._compute_necessity_score(
+                        region_analysis,
+                        baseline_results,
+                        loso_results
+                    )
+                    
+                    region_scores[int(region_id)] = necessity_score
+                    region_analyses[int(region_id)] = region_analysis
         
         # 确定需求等级
         critical_regions = []
@@ -91,18 +96,18 @@ class EmbeddingNeedAssessor:
         results = {
             'region_scores': region_scores,
             'region_analyses': region_analyses,
-            'critical_regions': critical_regions,
-            'high_priority_regions': high_priority_regions,
-            'medium_priority_regions': medium_priority_regions,
-            'low_priority_regions': low_priority_regions,
-            'all_regions': list(region_scores.keys()),
+            'critical_regions': sorted(critical_regions),
+            'high_priority_regions': sorted(high_priority_regions),
+            'medium_priority_regions': sorted(medium_priority_regions),
+            'low_priority_regions': sorted(low_priority_regions),
+            'all_regions': sorted(list(region_scores.keys())),
             'summary': {
                 'total_regions': len(region_scores),
                 'critical_count': len(critical_regions),
                 'high_count': len(high_priority_regions),
                 'medium_count': len(medium_priority_regions),
                 'low_count': len(low_priority_regions),
-                'mean_necessity_score': np.mean(list(region_scores.values()))
+                'mean_necessity_score': np.mean(list(region_scores.values())) if region_scores else 0
             }
         }
         
@@ -117,8 +122,12 @@ class EmbeddingNeedAssessor:
         """分析单个脑区"""
         region_mask = regions == region_id
         
-        if np.sum(region_mask) < 100:
-            return {'status': 'insufficient_data', 'n_voxels': np.sum(region_mask)}
+        if np.sum(region_mask) < Config.MIN_SAMPLES_FOR_ANALYSIS:
+            return {
+                'status': 'insufficient_data', 
+                'region_id': int(region_id),
+                'n_voxels': int(np.sum(region_mask))
+            }
         
         region_X = X[region_mask]
         region_subjects = subjects[region_mask]
@@ -134,27 +143,31 @@ class EmbeddingNeedAssessor:
             region_X, region_subjects, phase1_specificity
         )
         
-        # 4. 深度网络评估（可选）
+        # 4. 深度网络评估（简化版）
         deep_network_assessment = self._deep_network_assessment(region_X, region_subjects)
         
         return {
             'status': 'success',
             'region_id': int(region_id),
-            'n_voxels': np.sum(region_mask),
-            'n_subjects': len(np.unique(region_subjects)),
+            'n_voxels': int(np.sum(region_mask)),
+            'n_subjects': int(len(np.unique(region_subjects))),
             'consistency': consistency_analysis,
             'cross_subject': cross_subject_test,
             'specificity_impact': specificity_impact,
             'deep_network': deep_network_assessment,
-            'phase1_specificity_score': phase1_specificity.get('specificity_score', 0)
+            'phase1_specificity_score': float(phase1_specificity.get('specificity_score', 0))
         }
     
     def _analyze_consistency(self, X: np.ndarray, subjects: np.ndarray) -> Dict[str, float]:
         """分析脑区内受试者一致性"""
         unique_subjects = np.unique(subjects)
         
-        if len(unique_subjects) < 3:
-            return {'consistency_score': 0.5, 'n_subjects': len(unique_subjects)}
+        if len(unique_subjects) < Config.MIN_SUBJECTS_FOR_ANALYSIS:
+            return {
+                'consistency_score': 0.5, 
+                'n_subjects': int(len(unique_subjects)),
+                'insufficient_subjects': True
+            }
         
         # 计算每个受试者的平均特征
         subject_means = []
@@ -164,21 +177,28 @@ class EmbeddingNeedAssessor:
                 subject_means.append(np.mean(X[subject_mask], axis=0))
         
         if len(subject_means) < 3:
-            return {'consistency_score': 0.5, 'n_subjects': len(subject_means)}
+            return {
+                'consistency_score': 0.5, 
+                'n_subjects': int(len(subject_means)),
+                'insufficient_samples': True
+            }
         
         subject_means = np.array(subject_means)
         
         # 计算变异系数
-        feature_cv = np.std(subject_means, axis=0) / (np.abs(np.mean(subject_means, axis=0)) + 1e-8)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            feature_cv = np.std(subject_means, axis=0) / (np.abs(np.mean(subject_means, axis=0)) + 1e-8)
+            feature_cv = np.nan_to_num(feature_cv, nan=0.0, posinf=1.0, neginf=0.0)
+        
         mean_cv = np.mean(feature_cv)
         
         # 转换为一致性得分（CV越低，一致性越高）
         consistency_score = 1.0 / (1.0 + mean_cv)
         
         return {
-            'consistency_score': consistency_score,
-            'mean_cv': mean_cv,
-            'n_subjects': len(subject_means)
+            'consistency_score': float(consistency_score),
+            'mean_cv': float(mean_cv),
+            'n_subjects': int(len(subject_means))
         }
     
     def _cross_subject_test(self, X: np.ndarray, subjects: np.ndarray) -> Dict[str, float]:
@@ -186,12 +206,17 @@ class EmbeddingNeedAssessor:
         unique_subjects = np.unique(subjects)
         
         if len(unique_subjects) < 4:
-            return {'generalization_quality': 0.5, 'tested': False}
+            return {
+                'generalization_quality': 0.5, 
+                'tested': False,
+                'reason': 'insufficient_subjects'
+            }
         
         # 简单的留一受试者验证
         accuracies = []
+        max_tests = min(5, len(unique_subjects))  # 最多测试5个受试者
         
-        for test_subject in unique_subjects[:5]:  # 最多测试5个受试者
+        for i, test_subject in enumerate(unique_subjects[:max_tests]):
             train_mask = subjects != test_subject
             test_mask = subjects == test_subject
             
@@ -233,7 +258,7 @@ class EmbeddingNeedAssessor:
                     accuracies.append(accuracy)
                     
             except Exception as e:
-                logger.debug(f"交叉受试者测试失败: {e}")
+                logger.warning(f"交叉受试者测试失败: {e}")
                 continue
         
         if accuracies:
@@ -242,9 +267,9 @@ class EmbeddingNeedAssessor:
             generalization_quality = 0.5
         
         return {
-            'generalization_quality': generalization_quality,
+            'generalization_quality': float(generalization_quality),
             'tested': len(accuracies) > 0,
-            'n_tests': len(accuracies)
+            'n_tests': int(len(accuracies))
         }
     
     def _analyze_specificity_impact(self, X: np.ndarray, subjects: np.ndarray,
@@ -265,7 +290,10 @@ class EmbeddingNeedAssessor:
             if len(subject_means) >= 3:
                 from scipy.spatial.distance import pdist
                 distances = pdist(np.array(subject_means))
-                distance_cv = np.std(distances) / (np.mean(distances) + 1e-8)
+                
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    distance_cv = np.std(distances) / (np.mean(distances) + 1e-8)
+                    distance_cv = np.nan_to_num(distance_cv, nan=0.0, posinf=1.0, neginf=0.0)
                 
                 # 高变异性意味着某些受试者很特殊
                 specificity_impact = min(1.0, distance_cv)
@@ -275,9 +303,9 @@ class EmbeddingNeedAssessor:
             specificity_impact = phase1_score
         
         return {
-            'specificity_impact': specificity_impact,
-            'embedding_benefit_potential': specificity_impact,
-            'phase1_score': phase1_score
+            'specificity_impact': float(specificity_impact),
+            'embedding_benefit_potential': float(specificity_impact),
+            'phase1_score': float(phase1_score)
         }
     
     def _deep_network_assessment(self, X: np.ndarray, subjects: np.ndarray) -> Dict[str, Any]:
@@ -285,7 +313,11 @@ class EmbeddingNeedAssessor:
         unique_subjects = np.unique(subjects)
         
         if len(unique_subjects) < 5 or len(X) < 500:
-            return {'tested': False, 'discrimination_strength': 1.0}
+            return {
+                'tested': False, 
+                'discrimination_strength': 1.0,
+                'reason': 'insufficient_data'
+            }
         
         # 这里可以添加深度网络的快速测试
         # 为了效率，Phase 2中可以跳过或使用简化版本
@@ -333,7 +365,7 @@ class EmbeddingNeedAssessor:
         phase1_boost = region_analysis.get('phase1_specificity_score', 0) * 0.1
         necessity_score = min(1.0, necessity_score + phase1_boost)
         
-        return necessity_score
+        return float(necessity_score)
     
     def _print_assessment_summary(self, results: Dict):
         """打印评估摘要"""

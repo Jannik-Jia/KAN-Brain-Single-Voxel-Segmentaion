@@ -3,11 +3,13 @@
 """
 LOSO评估器
 实现Leave-One-Subject-Out交叉验证
+评估脑区分类任务在不同受试者上的泛化能力
 """
 
 import numpy as np
 import logging
 import time
+from pathlib import Path  # 添加缺失的导入
 from typing import Dict, Any, List, Optional
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -17,6 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from common.config import Config
 from common.deep_network import DeepNetworkUtils
+from phase2_separability.baseline_tester import DeepClassifierWrapper  # 重用已定义的类
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +48,11 @@ class LOSOEvaluator:
                                 label_mapping: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行LOSO评估
+        评估脑区分类模型在留一受试者情况下的泛化性能
         
         Args:
             X: 特征数据
-            y: 标签数据
+            y: 标签数据（脑区标签）
             subjects: 受试者标签
             label_mapping: 标签映射信息
             
@@ -56,6 +60,7 @@ class LOSOEvaluator:
             LOSO评估结果
         """
         logger.info("开始Leave-One-Subject-Out评估...")
+        logger.info("评估脑区分类任务在不同受试者上的泛化能力")
         
         # 转换标签
         if label_mapping['is_one_hot']:
@@ -84,14 +89,20 @@ class LOSOEvaluator:
         
         # 3. 整合结果
         for model_type in self.model_types:
-            if model_type in global_loso_results and model_type in region_loso_results:
+            model_key = self._get_model_key(model_type)
+            
+            if model_key in global_loso_results:
                 results['model_results'][model_type] = {
-                    'mean_accuracy': global_loso_results[model_type]['mean_accuracy'],
-                    'std_accuracy': global_loso_results[model_type]['std_accuracy'],
-                    'per_subject_accuracies': global_loso_results[model_type]['accuracies'],
-                    'region_wise_accuracy': region_loso_results[model_type]['mean_accuracy'],
-                    'generalization_gap': global_loso_results[model_type]['generalization_gap']
+                    'mean_accuracy': global_loso_results[model_key]['mean_accuracy'],
+                    'std_accuracy': global_loso_results[model_key]['std_accuracy'],
+                    'per_subject_accuracies': global_loso_results[model_key]['accuracies'],
+                    'generalization_gap': global_loso_results[model_key].get('generalization_gap', 0)
                 }
+                
+                # 添加分脑区结果（如果存在）
+                if model_key in region_loso_results:
+                    results['model_results'][model_type]['region_wise_accuracy'] = \
+                        region_loso_results[model_key]['mean_accuracy']
         
         # 计算平均泛化差距
         gaps = [r['generalization_gap'] for r in results['model_results'].values()]
@@ -114,12 +125,20 @@ class LOSOEvaluator:
         
         return results
     
+    def _get_model_key(self, model_type: str) -> str:
+        """获取模型键名"""
+        model_mapping = {
+            'rf': 'RandomForest',
+            'lr': 'LogisticRegression',
+            'deep': 'Deep4x4096'
+        }
+        return model_mapping.get(model_type, model_type)
+    
     def _evaluate_global_loso(self, X: np.ndarray, y: np.ndarray, 
                             subjects: np.ndarray) -> Dict[str, Any]:
         """
         评估全局LOSO性能
-        注意：这里的y是脑区标签，不是受试者标签
-        LOSO是在不同受试者上测试脑区分类的泛化能力
+        留一受试者的脑区分类泛化能力评估
         """
         unique_subjects = np.unique(subjects)
         
@@ -130,7 +149,8 @@ class LOSOEvaluator:
         # 初始化结果存储
         model_results = {}
         for model_type in self.model_types:
-            model_results[model_type] = {
+            model_key = self._get_model_key(model_type)
+            model_results[model_key] = {
                 'accuracies': [],
                 'f1_scores': [],
                 'training_times': []
@@ -155,6 +175,7 @@ class LOSOEvaluator:
             
             # 测试每个模型
             for model_type in self.model_types:
+                model_key = self._get_model_key(model_type)
                 start_time = time.time()
                 
                 try:
@@ -174,7 +195,7 @@ class LOSOEvaluator:
                         
                     elif model_type == 'deep':
                         # 深度网络
-                        model = self._create_deep_classifier()
+                        model = DeepClassifierWrapper(self.deep_utils)
                         model.fit(X_train, y_train)
                         y_pred = model.predict(X_test)
                     
@@ -182,20 +203,21 @@ class LOSOEvaluator:
                     f1 = f1_score(y_test, y_pred, average='macro')
                     training_time = time.time() - start_time
                     
-                    model_results[model_type]['accuracies'].append(accuracy)
-                    model_results[model_type]['f1_scores'].append(f1)
-                    model_results[model_type]['training_times'].append(training_time)
+                    model_results[model_key]['accuracies'].append(accuracy)
+                    model_results[model_key]['f1_scores'].append(f1)
+                    model_results[model_key]['training_times'].append(training_time)
                     
-                    logger.info(f"    {model_type}: Acc={accuracy:.3f}, F1={f1:.3f}")
+                    logger.info(f"    {model_key}: Acc={accuracy:.3f}, F1={f1:.3f}")
                     
                 except Exception as e:
-                    logger.error(f"    {model_type} 失败: {e}")
+                    logger.error(f"    {model_key} 失败: {e}")
+                    logger.exception("详细错误信息:")
         
         # 计算统计信息
         final_results = {}
-        for model_type, results in model_results.items():
+        for model_key, results in model_results.items():
             if results['accuracies']:
-                final_results[model_type] = {
+                final_results[model_key] = {
                     'mean_accuracy': np.mean(results['accuracies']),
                     'std_accuracy': np.std(results['accuracies']),
                     'mean_f1': np.mean(results['f1_scores']),
@@ -234,7 +256,8 @@ class LOSOEvaluator:
         # 初始化结果
         model_results = {}
         for model_type in self.model_types:
-            model_results[model_type] = {
+            model_key = self._get_model_key(model_type)
+            model_results[model_key] = {
                 'accuracies': [],
                 'f1_scores': []
             }
@@ -255,6 +278,8 @@ class LOSOEvaluator:
             y_test = y_region[test_mask]
             
             for model_type in self.model_types:
+                model_key = self._get_model_key(model_type)
+                
                 try:
                     if model_type == 'rf':
                         model = RandomForestClassifier(
@@ -265,8 +290,9 @@ class LOSOEvaluator:
                             max_iter=500, C=0.1, random_state=42
                         )
                     elif model_type == 'deep':
-                        model = self._create_deep_classifier(
-                            config_override={'batch_size': 32, 'no_epochs': 15}
+                        model = DeepClassifierWrapper(
+                            self.deep_utils,
+                            config={'batch_size': 32, 'no_epochs': 15}
                         )
                     
                     model.fit(X_train, y_train)
@@ -275,17 +301,17 @@ class LOSOEvaluator:
                     accuracy = accuracy_score(y_test, y_pred)
                     f1 = f1_score(y_test, y_pred, average='macro')
                     
-                    model_results[model_type]['accuracies'].append(accuracy)
-                    model_results[model_type]['f1_scores'].append(f1)
+                    model_results[model_key]['accuracies'].append(accuracy)
+                    model_results[model_key]['f1_scores'].append(f1)
                     
                 except Exception as e:
-                    logger.error(f"分脑区 {model_type} 失败: {e}")
+                    logger.error(f"分脑区 {model_key} 失败: {e}")
         
         # 计算统计
         final_results = {}
-        for model_type, results in model_results.items():
+        for model_key, results in model_results.items():
             if results['accuracies']:
-                final_results[model_type] = {
+                final_results[model_key] = {
                     'mean_accuracy': np.mean(results['accuracies']),
                     'std_accuracy': np.std(results['accuracies']),
                     'mean_f1': np.mean(results['f1_scores']),
@@ -320,72 +346,6 @@ class LOSOEvaluator:
             'subject_labels': np.array(subject_labels),
             'region_labels': np.array(region_labels)
         }
-    
-    def _create_deep_classifier(self, config_override: Optional[Dict] = None):
-        """创建深度网络分类器包装器"""
-        
-        class DeepClassifierWrapper:
-            def __init__(self, deep_utils, config=None):
-                self.deep_utils = deep_utils
-                self.config = Config.ALEX_HYPERPARAMS.copy()
-                if config:
-                    self.config.update(config)
-                self.network = None
-            
-            def fit(self, X, y):
-                # 确定类别数
-                num_classes = len(np.unique(y))
-                
-                # 创建网络
-                self.network = self.deep_utils.create_network(
-                    input_dim=X.shape[1],
-                    num_classes=num_classes
-                )
-                
-                # 准备数据
-                X_tensor, y_tensor = self.deep_utils.prepare_data(X, y)
-                dataset = TensorDataset(X_tensor, y_tensor)
-                dataloader = DataLoader(
-                    dataset,
-                    batch_size=self.config['batch_size'],
-                    shuffle=True
-                )
-                
-                # 训练
-                optimizer = torch.optim.Adam(
-                    self.network.parameters(),
-                    lr=self.config['learning_rate']
-                )
-                criterion = torch.nn.CrossEntropyLoss()
-                
-                self.network.train()
-                for epoch in range(self.config['no_epochs']):
-                    for batch_x, batch_y in dataloader:
-                        optimizer.zero_grad()
-                        
-                        outputs = self.network(batch_x)
-                        loss = criterion(outputs, batch_y)
-                        
-                        # L2正则化
-                        l2_reg = self.deep_utils.kernel_l2_regularization(
-                            self.network, self.config['weight_decay']
-                        )
-                        total_loss = loss + l2_reg
-                        
-                        total_loss.backward()
-                        optimizer.step()
-            
-            def predict(self, X):
-                self.network.eval()
-                X_tensor, _ = self.deep_utils.prepare_data(X, None, is_training=False)
-                
-                with torch.no_grad():
-                    outputs = self.network(X_tensor)
-                    _, predicted = torch.max(outputs, 1)
-                
-                return predicted.cpu().numpy()
-        
-        return DeepClassifierWrapper(self.deep_utils, config_override)
     
     def _print_loso_summary(self, results: Dict):
         """打印LOSO评估摘要"""

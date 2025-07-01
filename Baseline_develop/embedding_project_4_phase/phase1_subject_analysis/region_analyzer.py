@@ -19,17 +19,6 @@ logger = logging.getLogger(__name__)
 class RegionSpecificityAnalyzer:
     """脑区特异性分析器"""
     
-    def __init__(self, min_samples_per_combination: int = 50):
-        """
-        初始化分析器
-        
-        Args:
-            min_samples_per_combination: 每个受试者-脑区组合的最小样本数
-        """
-        self.min_samples = min_samples_per_combination
-        self.metrics = Metrics()
-
-
     def __init__(self, min_samples_per_combination: int = 50, 
                 brain_region_analysis: Optional[Dict] = None):
         """
