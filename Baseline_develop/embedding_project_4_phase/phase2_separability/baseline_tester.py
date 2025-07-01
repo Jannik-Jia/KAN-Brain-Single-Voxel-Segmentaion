@@ -213,7 +213,10 @@ class BaselineTester:
     
     def _build_region_aware_dataset(self, X: np.ndarray, regions: np.ndarray,
                                   subjects: np.ndarray) -> Dict[str, np.ndarray]:
-        """构建脑区感知数据集"""
+        """
+        构建脑区感知数据集
+        注意：这里的regions参数就是脑区标签（y的类别索引）
+        """
         unique_subjects = np.unique(subjects)
         unique_regions = np.unique(regions)
         

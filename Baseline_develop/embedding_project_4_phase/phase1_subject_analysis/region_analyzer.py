@@ -28,6 +28,27 @@ class RegionSpecificityAnalyzer:
         """
         self.min_samples = min_samples_per_combination
         self.metrics = Metrics()
+
+
+    def __init__(self, min_samples_per_combination: int = 50, 
+                brain_region_analysis: Optional[Dict] = None):
+        """
+        初始化分析器
+        
+        Args:
+            min_samples_per_combination: 每个受试者-脑区组合的最小样本数
+            brain_region_analysis: Phase 0的脑区分析结果
+        """
+        self.min_samples = min_samples_per_combination
+        self.metrics = Metrics()
+        self.brain_region_analysis = brain_region_analysis
+        
+        # 如果有Phase 0的分析，提取有用信息
+        if brain_region_analysis:
+            self.small_regions = set(brain_region_analysis['region_size_analysis']['small_regions'])
+            self.large_regions = set(brain_region_analysis['region_size_analysis']['large_regions'])
+            self.region_balance_scores = brain_region_analysis['region_balance_scores']
+            
     
     def analyze(self, X: np.ndarray, regions: np.ndarray, 
                 subjects: np.ndarray) -> Dict[str, Any]:
@@ -193,7 +214,7 @@ class RegionSpecificityAnalyzer:
         discriminability = self._compute_discriminability(distances) if n_subjects > 2 else 0.0
         
         return {
-            'n_subjects': n_subjects,
+            'n_subjects': int(n_subjects),
             'mean_inter_subject_distance': float(mean_distance),
             'std_inter_subject_distance': float(std_distance),
             'mean_inter_subject_correlation': float(abs(mean_correlation)),
@@ -201,7 +222,7 @@ class RegionSpecificityAnalyzer:
             'subject_specificity_score': float(specificity_score),
             'discriminability': float(discriminability),
             'specificity_score': float(specificity_score),  # 主要指标
-            'valid_subjects': valid_subjects
+            'valid_subjects': [int(s) for s in valid_subjects],
         }
     
     def _compute_discriminability(self, distance_matrix: np.ndarray) -> float:

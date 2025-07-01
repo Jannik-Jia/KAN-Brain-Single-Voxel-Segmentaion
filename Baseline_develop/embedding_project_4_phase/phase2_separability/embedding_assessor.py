@@ -35,7 +35,7 @@ class EmbeddingNeedAssessor:
         
         Args:
             X: 特征数据
-            regions: 脑区标签
+            regions: 脑区标签（就是y的类别索引）
             subjects: 受试者标签
             region_specificity: Phase 1的脑区特异性结果
             baseline_results: baseline测试结果

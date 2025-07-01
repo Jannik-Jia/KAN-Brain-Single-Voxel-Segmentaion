@@ -59,8 +59,8 @@ def parse_arguments():
     
     return parser.parse_args()
 
-
 def load_phase0_data(input_dir: Path) -> dict:
+
     """加载Phase 0的输出数据"""
     logger.info("加载Phase 0数据...")
     
@@ -68,21 +68,41 @@ def load_phase0_data(input_dir: Path) -> dict:
     train_data = DataIO.load_numpy_data(input_dir / Config.TRAIN_DATA_FILE)
     val_data = DataIO.load_numpy_data(input_dir / Config.VAL_DATA_FILE)
     
+    # 转换受试者ID为Python原生int类型
+    train_data['subjects'] = train_data['subjects'].astype(int)
+    val_data['subjects'] = val_data['subjects'].astype(int)
+    
+    # 如果标签也需要转换
+    if 'y' in train_data and len(train_data['y'].shape) == 1:
+        train_data['y'] = train_data['y'].astype(int)
+    if 'y' in val_data and len(val_data['y'].shape) == 1:
+        val_data['y'] = val_data['y'].astype(int)
+    
     # 加载元数据
     data_stats = DataIO.load_json(input_dir / Config.DATA_STATS_FILE)
     label_mapping = DataIO.load_json(input_dir / Config.LABEL_MAPPING_FILE)
     
     # 加载Phase 0结果
     phase0_results = DataIO.load_phase_output(0, input_dir)
+
+    
+    # 加载增强的分析结果
+    brain_region_analysis = DataIO.load_json(input_dir / 'brain_region_analysis.json')
+    feature_group_analysis = DataIO.load_json(input_dir / 'feature_group_analysis.json')
+    phase1_quick_index = DataIO.load_json(input_dir / 'phase1_quick_index.json')
+    validation_report = DataIO.load_json(input_dir / 'validation_report.json')
     
     return {
         'train_data': train_data,
         'val_data': val_data,
         'data_stats': data_stats,
         'label_mapping': label_mapping,
-        'phase0_results': phase0_results
+        'phase0_results': phase0_results,
+        'brain_region_analysis': brain_region_analysis,
+        'feature_group_analysis': feature_group_analysis,
+        'phase1_quick_index': phase1_quick_index,
+        'validation_report': validation_report
     }
-
 
 def main():
     """主函数"""

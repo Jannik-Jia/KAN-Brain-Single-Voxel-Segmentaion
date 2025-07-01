@@ -116,7 +116,11 @@ class LOSOEvaluator:
     
     def _evaluate_global_loso(self, X: np.ndarray, y: np.ndarray, 
                             subjects: np.ndarray) -> Dict[str, Any]:
-        """评估全局LOSO性能"""
+        """
+        评估全局LOSO性能
+        注意：这里的y是脑区标签，不是受试者标签
+        LOSO是在不同受试者上测试脑区分类的泛化能力
+        """
         unique_subjects = np.unique(subjects)
         
         # 限制测试的受试者数量

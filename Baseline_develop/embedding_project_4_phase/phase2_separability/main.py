@@ -203,16 +203,18 @@ def main():
         
         # 处理标签
         if data['label_mapping']['is_one_hot']:
-            y_regions = np.argmax(y_all, axis=1)
+            regions_all = np.argmax(y_all, axis=1)
         else:
-            y_regions = y_all.flatten()
-        
+            regions_all = y_all.flatten().astype(int)
+
+        # 评估分脑区Embedding需求    
         region_embedding_needs = embedding_assessor.assess_region_embedding_needs(
-            X_all, y_regions, subjects_all,
-            region_specificity=data['region_specificity'],
-            baseline_results=baseline_results,
-            loso_results=loso_results
+        X_all, regions_all, subjects_all,  # 现在参数正确了
+        region_specificity=data['region_specificity'],
+        baseline_results=baseline_results,
+        loso_results=loso_results
         )
+        
         
         DataIO.save_json(region_embedding_needs, output_dir / 'region_embedding_needs.json')
         
