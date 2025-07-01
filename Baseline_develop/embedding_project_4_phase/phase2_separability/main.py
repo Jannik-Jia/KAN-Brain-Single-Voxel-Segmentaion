@@ -95,208 +95,262 @@ def load_data(phase0_dir: Path, phase1_dir: Path) -> dict:
     region_specificity = DataIO.load_json(phase1_dir / 'region_specificity.json')
     
     return {
-       'train_data': train_data,
-       'val_data': val_data,
-       'data_stats': data_stats,
-       'label_mapping': label_mapping,
-       'phase1_results': phase1_results,
-       'region_specificity': region_specificity
-   }
+        'train_data': train_data,
+        'val_data': val_data,
+        'data_stats': data_stats,
+        'label_mapping': label_mapping,
+        'phase1_results': phase1_results,
+        'region_specificity': region_specificity
+    }
+
+
+def verify_and_merge_data(X_train, y_train, subjects_train, X_val, y_val, subjects_val):
+    """验证数据对齐并安全合并"""
+    # 验证每个数据集内部的一致性
+    assert len(X_train) == len(y_train) == len(subjects_train), \
+        f"训练集长度不一致: X={len(X_train)}, y={len(y_train)}, subjects={len(subjects_train)}"
+    
+    assert len(X_val) == len(y_val) == len(subjects_val), \
+        f"验证集长度不一致: X={len(X_val)}, y={len(y_val)}, subjects={len(subjects_val)}"
+    
+    # 检查受试者ID
+    unique_train_subjects = np.unique(subjects_train)
+    unique_val_subjects = np.unique(subjects_val)
+    
+    logger.info(f"训练集受试者: {sorted(unique_train_subjects.astype(int))}")
+    logger.info(f"验证集受试者: {sorted(unique_val_subjects.astype(int))}")
+    logger.info(f"训练集样本数: {len(X_train)}, 验证集样本数: {len(X_val)}")
+    
+    # 确保没有重叠
+    overlap = np.intersect1d(unique_train_subjects, unique_val_subjects)
+    assert len(overlap) == 0, f"训练集和验证集受试者有重叠: {overlap}"
+    
+    # 安全合并数据
+    X_all = np.vstack([X_train, X_val])
+    
+    # 根据y的维度选择合并方式
+    if len(y_train.shape) > 1 and y_train.shape[1] > 1:  # one-hot编码
+        y_all = np.vstack([y_train, y_val])
+    else:  # 类别索引
+        y_all = np.concatenate([y_train, y_val])
+    
+    # subjects始终是1D
+    subjects_all = np.concatenate([subjects_train, subjects_val])
+    
+    # 验证合并后的对齐
+    assert len(X_all) == len(y_all) == len(subjects_all), \
+        f"合并后数据长度不一致: X={len(X_all)}, y={len(y_all)}, subjects={len(subjects_all)}"
+    
+    # 验证边界处的数据
+    boundary_idx = len(subjects_train)
+    logger.info(f"合并边界验证:")
+    logger.info(f"  训练集最后一个样本的受试者: {subjects_train[-1]}")
+    logger.info(f"  验证集第一个样本的受试者: {subjects_val[0]}")
+    logger.info(f"  合并后边界处受试者: {subjects_all[boundary_idx-1]} -> {subjects_all[boundary_idx]}")
+    
+    return X_all, y_all, subjects_all
+
 
 
 def main():
-   """主函数"""
-   args = parse_arguments()
-   
-   logger.info("="*80)
-   logger.info("Phase 2: 可分离性评估开始")
-   logger.info("="*80)
-   
-   # 设置路径
-   phase0_dir = Path(args.phase0_dir)
-   phase1_dir = Path(args.phase1_dir)
-   output_dir = Path(args.output_dir)
-   output_dir.mkdir(parents=True, exist_ok=True)
-   
-   # 创建子目录
-   viz_dir = output_dir / 'visualizations'
-   if not args.skip_visualization:
-       viz_dir.mkdir(parents=True, exist_ok=True)
-   
-   models_dir = None
-   if args.save_models:
-       models_dir = output_dir / 'trained_models'
-       models_dir.mkdir(parents=True, exist_ok=True)
-   
-   try:
-       # 加载数据
-       data = load_data(phase0_dir, phase1_dir)
-       
-       # 准备训练数据
-       X_train = data['train_data']['X_scaled']
-       y_train = data['train_data']['y']
-       subjects_train = data['train_data']['subjects']
-       
-       X_val = data['val_data']['X_scaled']
-       y_val = data['val_data']['y']
-       subjects_val = data['val_data']['subjects']
-       
-       logger.info(f"训练数据形状: {X_train.shape}")
-       logger.info(f"验证数据形状: {X_val.shape}")
-       logger.info(f"设备: {args.device}")
-       
-       # 准备数据字典格式
-       train_data_dict = {
-           'X_scaled': X_train,
-           'y': y_train,
-           'subjects': subjects_train
-       }
+    """主函数"""
+    args = parse_arguments()
+    
+    logger.info("="*80)
+    logger.info("Phase 2: 可分离性评估开始")
+    logger.info("="*80)
+    
+    # 设置路径
+    phase0_dir = Path(args.phase0_dir)
+    phase1_dir = Path(args.phase1_dir)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 创建子目录
+    viz_dir = output_dir / 'visualizations'
+    if not args.skip_visualization:
+        viz_dir.mkdir(parents=True, exist_ok=True)
+    
+    models_dir = None
+    if args.save_models:
+        models_dir = output_dir / 'trained_models'
+        models_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # 加载数据
+        data = load_data(phase0_dir, phase1_dir)
+        
+        # 准备训练数据
+        X_train = data['train_data']['X_scaled']
+        y_train = data['train_data']['y']
+        subjects_train = data['train_data']['subjects']
+        
+        X_val = data['val_data']['X_scaled']
+        y_val = data['val_data']['y']
+        subjects_val = data['val_data']['subjects']
+        
+        logger.info(f"训练数据形状: {X_train.shape}")
+        logger.info(f"验证数据形状: {X_val.shape}")
+        logger.info(f"设备: {args.device}")
+        
+        # 准备数据字典格式
+        train_data_dict = {
+            'X_scaled': X_train,
+            'y': y_train,
+            'subjects': subjects_train
+        }
 
-       val_data_dict = {
-           'X_scaled': X_val,
-           'y': y_val,
-           'subjects': subjects_val
-       }
+        val_data_dict = {
+            'X_scaled': X_val,
+            'y': y_val,
+            'subjects': subjects_val
+        }
 
-       # 步骤1: Baseline性能测试
-       logger.info("\n步骤1: 执行Baseline性能测试...")
-       baseline_tester = BaselineTester(
-           model_types=args.test_models,
-           device=args.device,
-           save_models=args.save_models,
-           models_dir=models_dir
-       )
+        # 步骤1: Baseline性能测试
+        logger.info("\n步骤1: 执行Baseline性能测试...")
+        baseline_tester = BaselineTester(
+            model_types=args.test_models,
+            device=args.device,
+            save_models=args.save_models,
+            models_dir=models_dir
+        )
 
-       baseline_results = baseline_tester.test_baseline_performance(
-           train_data_dict,
-           val_data_dict,
-           data['label_mapping']
-       )
+        baseline_results = baseline_tester.test_baseline_performance(
+            train_data_dict,
+            val_data_dict,
+            data['label_mapping']
+        )
 
-       # 保存baseline结果
-       DataIO.save_json(baseline_results, output_dir / 'baseline_results.json')
-       
-       # 步骤2: LOSO评估
-       logger.info("\n步骤2: 执行Leave-One-Subject-Out评估...")
-       loso_evaluator = LOSOEvaluator(
-           model_types=args.test_models,
-           device=args.device,
-           max_subjects=args.max_loso_subjects
-       )
-       
-       # 合并训练和验证数据用于LOSO
-       X_all = np.vstack([X_train, X_val])
-       y_all = np.vstack([y_train, y_val]) if len(y_train.shape) > 1 else np.concatenate([y_train, y_val])
-       subjects_all = np.concatenate([subjects_train, subjects_val])
-       
-       loso_results = loso_evaluator.evaluate_loso_performance(
-           X_all, y_all, subjects_all,
-           label_mapping=data['label_mapping']
-       )
-       
-       # 计算泛化差距
-       for model_type in loso_results['model_results']:
-           if model_type in ['rf', 'lr', 'deep']:  # 使用原始模型类型
-               model_key = loso_evaluator._get_model_key(model_type)
-               if model_key in baseline_results['global_analysis']:
-                   baseline_acc = baseline_results['global_analysis'][model_key].get('accuracy', 0)
-                   loso_acc = loso_results['model_results'][model_type]['mean_accuracy']
-                   loso_results['model_results'][model_type]['generalization_gap'] = baseline_acc - loso_acc
-       
-       # 保存LOSO结果
-       DataIO.save_json(loso_results, output_dir / 'loso_results.json')
-       
-       # 步骤3: 深度网络权威分析
-       logger.info("\n步骤3: 执行深度网络权威分析...")
-       deep_network_analysis = analyze_deep_network_authority(
-           baseline_results, loso_results
-       )
-       
-       DataIO.save_json(deep_network_analysis, output_dir / 'deep_network_analysis.json')
-       
-       # 步骤4: 分脑区Embedding需求评估
-       logger.info("\n步骤4: 执行分脑区Embedding需求评估...")
-       embedding_assessor = EmbeddingNeedAssessor(device=args.device)
-       
-       # 处理标签
-       if data['label_mapping']['is_one_hot']:
-           regions_all = np.argmax(y_all, axis=1)
-       else:
-           regions_all = y_all.flatten().astype(int)
+        # 保存baseline结果
+        DataIO.save_json(baseline_results, output_dir / 'baseline_results.json')
+        
+        # 步骤2: LOSO评估
+        logger.info("\n步骤2: 执行Leave-One-Subject-Out评估...")
+        loso_evaluator = LOSOEvaluator(
+            model_types=args.test_models,
+            device=args.device,
+            max_subjects=args.max_loso_subjects
+        )
+        
+        # 验证并合并训练和验证数据用于LOSO
+        logger.info("\n合并数据用于LOSO评估...")
+        X_all, y_all, subjects_all = verify_and_merge_data(
+            X_train, y_train, subjects_train,
+            X_val, y_val, subjects_val
+        )
+        
+        logger.info(f"合并后数据形状: X={X_all.shape}, y={y_all.shape}, subjects={subjects_all.shape}")
+        logger.info(f"合并后唯一受试者: {sorted(np.unique(subjects_all).astype(int))}")
+        
+        loso_results = loso_evaluator.evaluate_loso_performance(
+            X_all, y_all, subjects_all,
+            label_mapping=data['label_mapping']
+        )
 
-       # 评估分脑区Embedding需求    
-       region_embedding_needs = embedding_assessor.assess_region_embedding_needs(
-           X_all, regions_all, subjects_all,
-           region_specificity=data['region_specificity'],
-           baseline_results=baseline_results,
-           loso_results=loso_results
-       )
        
-       DataIO.save_json(region_embedding_needs, output_dir / 'region_embedding_needs.json')
-       
-       # 步骤5: 计算Phase 2决策得分
-       logger.info("\n步骤5: 计算决策得分...")
-       phase2_scores = compute_phase2_scores(
-           baseline_results, loso_results, 
-           deep_network_analysis, region_embedding_needs
-       )
-       
-       DataIO.save_json(phase2_scores, output_dir / 'phase2_scores.json')
-       
-       # 步骤6: 生成可视化
-       if not args.skip_visualization:
-           logger.info("\n步骤6: 生成可视化图表...")
-           generate_visualizations(
-               baseline_results, loso_results, 
-               region_embedding_needs, viz_dir
-           )
-       
-       # 保存Phase 2完整结果
-       phase2_results = {
-           'baseline_summary': {
-               'best_model': baseline_results['best_model'],
-               'best_accuracy': float(baseline_results['best_accuracy']),
-               'global_vs_region_improvement': float(baseline_results.get('global_vs_region_improvement', 0))
-           },
-           'loso_summary': {
-               'mean_generalization_gap': float(loso_results['mean_generalization_gap']),
-               'deep_network_advantage': float(loso_results.get('deep_network_advantage', 0))
-           },
-           'deep_network_authority': deep_network_analysis['authority_level'],
-           'embedding_recommendation': {
-               'global_recommendation': deep_network_analysis['recommendation'],
-               'critical_regions_count': len(region_embedding_needs['critical_regions']),
-               'high_priority_regions_count': len(region_embedding_needs['high_priority_regions'])
-           }
-       }
-       
-       DataIO.save_phase_output(
-           phase_number=2,
-           output_dir=output_dir,
-           results=phase2_results,
-           scores=phase2_scores,
-           metadata={
-               'models_tested': args.test_models,
-               'device': args.device,
-               'execution_time': datetime.now().isoformat()
-           }
-       )
-       
-       logger.info("\n" + "="*80)
-       logger.info("Phase 2: 可分离性评估完成!")
-       logger.info("="*80)
-       logger.info(f"结果已保存到: {output_dir}")
-       
-       # 打印关键发现
-       print_key_findings(baseline_results, loso_results, 
-                         deep_network_analysis, region_embedding_needs, phase2_scores)
-       
-       return 0
-       
-   except Exception as e:
-       logger.error(f"Phase 2 执行失败: {e}")
-       logger.exception("详细错误信息:")
-       return 1
+        # 计算泛化差距
+        for model_type in loso_results['model_results']:
+            if model_type in ['rf', 'lr', 'deep']:  # 使用原始模型类型
+                model_key = loso_evaluator._get_model_key(model_type)
+                if model_key in baseline_results['global_analysis']:
+                    baseline_acc = baseline_results['global_analysis'][model_key].get('accuracy', 0)
+                    loso_acc = loso_results['model_results'][model_type]['mean_accuracy']
+                    loso_results['model_results'][model_type]['generalization_gap'] = baseline_acc - loso_acc
+        
+        # 保存LOSO结果
+        DataIO.save_json(loso_results, output_dir / 'loso_results.json')
+        
+        # 步骤3: 深度网络权威分析
+        logger.info("\n步骤3: 执行深度网络权威分析...")
+        deep_network_analysis = analyze_deep_network_authority(
+            baseline_results, loso_results
+        )
+        
+        DataIO.save_json(deep_network_analysis, output_dir / 'deep_network_analysis.json')
+        
+        # 步骤4: 分脑区Embedding需求评估
+        logger.info("\n步骤4: 执行分脑区Embedding需求评估...")
+        embedding_assessor = EmbeddingNeedAssessor(device=args.device)
+        
+        # 处理标签
+        if data['label_mapping']['is_one_hot']:
+            regions_all = np.argmax(y_all, axis=1)
+        else:
+            regions_all = y_all.flatten().astype(int)
+
+        # 评估分脑区Embedding需求    
+        region_embedding_needs = embedding_assessor.assess_region_embedding_needs(
+            X_all, regions_all, subjects_all,
+            region_specificity=data['region_specificity'],
+            baseline_results=baseline_results,
+            loso_results=loso_results
+        )
+        
+        DataIO.save_json(region_embedding_needs, output_dir / 'region_embedding_needs.json')
+        
+        # 步骤5: 计算Phase 2决策得分
+        logger.info("\n步骤5: 计算决策得分...")
+        phase2_scores = compute_phase2_scores(
+            baseline_results, loso_results, 
+            deep_network_analysis, region_embedding_needs
+        )
+        
+        DataIO.save_json(phase2_scores, output_dir / 'phase2_scores.json')
+        
+        # 步骤6: 生成可视化
+        if not args.skip_visualization:
+            logger.info("\n步骤6: 生成可视化图表...")
+            generate_visualizations(
+                baseline_results, loso_results, 
+                region_embedding_needs, viz_dir
+            )
+        
+        # 保存Phase 2完整结果
+        phase2_results = {
+            'baseline_summary': {
+                'best_model': baseline_results['best_model'],
+                'best_accuracy': float(baseline_results['best_accuracy']),
+                'global_vs_region_improvement': float(baseline_results.get('global_vs_region_improvement', 0))
+            },
+            'loso_summary': {
+                'mean_generalization_gap': float(loso_results['mean_generalization_gap']),
+                'deep_network_advantage': float(loso_results.get('deep_network_advantage', 0))
+            },
+            'deep_network_authority': deep_network_analysis['authority_level'],
+            'embedding_recommendation': {
+                'global_recommendation': deep_network_analysis['recommendation'],
+                'critical_regions_count': len(region_embedding_needs['critical_regions']),
+                'high_priority_regions_count': len(region_embedding_needs['high_priority_regions'])
+            }
+        }
+        
+        DataIO.save_phase_output(
+            phase_number=2,
+            output_dir=output_dir,
+            results=phase2_results,
+            scores=phase2_scores,
+            metadata={
+                'models_tested': args.test_models,
+                'device': args.device,
+                'execution_time': datetime.now().isoformat()
+            }
+        )
+        
+        logger.info("\n" + "="*80)
+        logger.info("Phase 2: 可分离性评估完成!")
+        logger.info("="*80)
+        logger.info(f"结果已保存到: {output_dir}")
+        
+        # 打印关键发现
+        print_key_findings(baseline_results, loso_results, 
+                            deep_network_analysis, region_embedding_needs, phase2_scores)
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Phase 2 执行失败: {e}")
+        logger.exception("详细错误信息:")
+        return 1
 
 
 def analyze_deep_network_authority(baseline_results, loso_results):

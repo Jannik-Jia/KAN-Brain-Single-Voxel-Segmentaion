@@ -377,9 +377,9 @@ class BaselineTester:
         )
         
         classifiers = {
-            'RandomForest': RandomForestClassifier(
-                n_estimators=100, max_depth=15, random_state=42, n_jobs=-1
-            ),
+            # 'RandomForest': RandomForestClassifier(
+            #     n_estimators=100, max_depth=15, random_state=42, n_jobs=-1
+            # ),
             'LogisticRegression': LogisticRegression(
                 max_iter=1000, C=0.1, random_state=42
             )
