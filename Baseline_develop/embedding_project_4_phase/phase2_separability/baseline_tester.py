@@ -105,13 +105,29 @@ class DeepClassifierWrapper:
     
     def predict(self, X):
         self.network.eval()
-        X_tensor, _ = self.deep_utils.prepare_data(X, None, is_training=False)
+        
+        # 分批预测
+        batch_size = 1024  # 或更小，根据GPU内存调整
+        n_samples = len(X)
+        predictions = []
         
         with torch.no_grad():
-            outputs = self.network(X_tensor)
-            _, predicted = torch.max(outputs, 1)
+            for start_idx in range(0, n_samples, batch_size):
+                end_idx = min(start_idx + batch_size, n_samples)
+                batch_X = X[start_idx:end_idx]
+                
+                X_tensor, _ = self.deep_utils.prepare_data(batch_X, None, is_training=False)
+                outputs = self.network(X_tensor)
+                _, predicted = torch.max(outputs, 1)
+                
+                predictions.append(predicted.cpu().numpy())
+                
+                # 清理中间变量
+                del X_tensor, outputs, predicted
+                torch.cuda.empty_cache()
         
-        return predicted.cpu().numpy()
+        return np.concatenate(predictions)
+
 
 
 class BaselineTester:
@@ -365,7 +381,7 @@ class BaselineTester:
         subject_labels = region_dataset['subject_labels']
         
         # 重新映射受试者标签
-        unique_subjects = np.unique(subject_labels)
+        unique_subjects = np.unique(subject_labnvidiaels)
         subject_mapping = {orig_id: new_id for new_id, orig_id in enumerate(unique_subjects)}
         y_region = np.array([subject_mapping[s] for s in subject_labels])
         
