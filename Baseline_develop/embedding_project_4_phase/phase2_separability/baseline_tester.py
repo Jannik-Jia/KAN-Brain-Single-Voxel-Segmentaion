@@ -32,10 +32,30 @@ class DeepClassifierWrapper:
         if config:
             self.config.update(config)
         self.network = None
-        self.training_history = {'loss': [], 'accuracy': []}
-        self.device = deep_utils.device  # 添加设备处理
+        # 保留原有的training_history结构，同时扩展
+        self.training_history = {
+            'loss': [], 'accuracy': [],  
+            'train_loss': [], 'train_accuracy': [], 'train_f1': [],
+            'val_loss': [], 'val_accuracy': [], 'val_f1': []
+        }
+        self.device = deep_utils.device
+        self.X_val = None  # 存储验证集
+        self.y_val = None
     
-    def fit(self, X, y):
+    def fit(self, X, y, X_val=None, y_val=None):
+        """
+        训练模型（扩展版本，向后兼容）
+        
+        Args:
+            X: 训练特征
+            y: 训练标签
+            X_val: 验证特征（可选）
+            y_val: 验证标签（可选）
+        """
+        # 存储验证集供后续使用
+        self.X_val = X_val
+        self.y_val = y_val
+        
         # 确定类别数
         if len(np.unique(y)) > 50:  # 脑区分类
             num_classes = 101
@@ -48,7 +68,7 @@ class DeepClassifierWrapper:
             num_classes=num_classes
         )
         
-        # 准备数据
+        # 准备训练数据
         X_tensor, y_tensor = self.deep_utils.prepare_data(X, y)
         train_dataset = TensorDataset(X_tensor, y_tensor)
         train_loader = DataLoader(
@@ -56,6 +76,17 @@ class DeepClassifierWrapper:
             batch_size=self.config['batch_size'],
             shuffle=True
         )
+        
+        # 准备验证数据（如果提供）
+        val_loader = None
+        if X_val is not None and y_val is not None:
+            X_val_tensor, y_val_tensor = self.deep_utils.prepare_data(X_val, y_val)
+            val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=self.config['batch_size'],
+                shuffle=False
+            )
         
         # 训练设置
         optimizer = torch.optim.Adam(
@@ -70,9 +101,12 @@ class DeepClassifierWrapper:
             epoch_loss = 0
             correct = 0
             total = 0
+            all_train_predictions = []
+            all_train_labels = []
             
+            # 训练阶段
             for batch_x, batch_y in train_loader:
-                batch_x = batch_x.to(self.device)  # 确保数据在正确设备上
+                batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
                 
                 optimizer.zero_grad()
@@ -93,21 +127,89 @@ class DeepClassifierWrapper:
                 _, predicted = torch.max(outputs.data, 1)
                 total += batch_y.size(0)
                 correct += (predicted == batch_y).sum().item()
+                
+                # 收集预测结果用于F1计算
+                all_train_predictions.extend(predicted.cpu().numpy())
+                all_train_labels.extend(batch_y.cpu().numpy())
             
-            accuracy = correct / total
-            self.training_history['loss'].append(epoch_loss / len(train_loader))
-            self.training_history['accuracy'].append(accuracy)
+            # 计算训练集指标
+            train_accuracy = correct / total
+            train_loss_avg = epoch_loss / len(train_loader)
+            train_f1 = f1_score(all_train_labels, all_train_predictions, average='macro', zero_division=0)
             
-            if epoch % 5 == 0:
-                logger.info(f"    Epoch {epoch}/{self.config['no_epochs']}, "
-                           f"Loss: {epoch_loss/len(train_loader):.4f}, "
-                           f"Acc: {accuracy:.3f}")
+            # 保留原有的历史记录（向后兼容）
+            self.training_history['loss'].append(train_loss_avg)
+            self.training_history['accuracy'].append(train_accuracy)
+            
+            # 新的详细历史记录
+            self.training_history['train_loss'].append(train_loss_avg)
+            self.training_history['train_accuracy'].append(train_accuracy)
+            self.training_history['train_f1'].append(train_f1)
+            
+            # 验证阶段（如果有验证集）
+            val_loss_avg = 0
+            val_accuracy = 0
+            val_f1 = 0
+            
+            if val_loader is not None:
+                self.network.eval()
+                val_loss = 0
+                val_correct = 0
+                val_total = 0
+                all_val_predictions = []
+                all_val_labels = []
+                
+                with torch.no_grad():
+                    for batch_x, batch_y in val_loader:
+                        batch_x = batch_x.to(self.device)
+                        batch_y = batch_y.to(self.device)
+                        
+                        outputs = self.network(batch_x)
+                        loss = criterion(outputs, batch_y)
+                        l2_reg = self.deep_utils.kernel_l2_regularization(
+                            self.network, self.config['weight_decay']
+                        )
+                        total_loss = loss + l2_reg
+                        
+                        val_loss += total_loss.item()
+                        _, predicted = torch.max(outputs, 1)
+                        val_total += batch_y.size(0)
+                        val_correct += (predicted == batch_y).sum().item()
+                        
+                        all_val_predictions.extend(predicted.cpu().numpy())
+                        all_val_labels.extend(batch_y.cpu().numpy())
+                
+                val_loss_avg = val_loss / len(val_loader)
+                val_accuracy = val_correct / val_total
+                val_f1 = f1_score(all_val_labels, all_val_predictions, average='macro', zero_division=0)
+                
+                self.network.train()  # 切换回训练模式
+            
+            # 记录验证集历史
+            self.training_history['val_loss'].append(val_loss_avg)
+            self.training_history['val_accuracy'].append(val_accuracy)
+            self.training_history['val_f1'].append(val_f1)
+            
+            # 详细的日志输出
+            if epoch % 1 == 0:  # 每个epoch都打印
+                if val_loader is not None:
+                    logger.info(
+                        f"    Epoch {epoch+1}/{self.config['no_epochs']} | "
+                        f"Train: Loss={train_loss_avg:.4f}, Acc={train_accuracy:.3f}, F1={train_f1:.3f} | "
+                        f"Val: Loss={val_loss_avg:.4f}, Acc={val_accuracy:.3f}, F1={val_f1:.3f}"
+                    )
+                else:
+                    logger.info(
+                        f"    Epoch {epoch+1}/{self.config['no_epochs']} | "
+                        f"Train: Loss={train_loss_avg:.4f}, Acc={train_accuracy:.3f}, F1={train_f1:.3f}"
+                    )
     
     def predict(self, X):
+        """预测"""
         self.network.eval()
         
         # 分批预测
-        batch_size = 1024  # 或更小，根据GPU内存调整
+        batch_size = 1024
         n_samples = len(X)
         predictions = []
         
@@ -122,12 +224,10 @@ class DeepClassifierWrapper:
                 
                 predictions.append(predicted.cpu().numpy())
                 
-                # 清理中间变量
                 del X_tensor, outputs, predicted
                 torch.cuda.empty_cache()
         
         return np.concatenate(predictions)
-
 
 
 class BaselineTester:
@@ -143,18 +243,12 @@ class BaselineTester:
         self.models_dir = models_dir
         self.skip_deep_network = 'deep' not in self.model_types
         self.deep_utils = DeepNetworkUtils() if not self.skip_deep_network else None
-    
+        
     def test_baseline_performance(self, train_data: Dict[str, np.ndarray],
                                 val_data: Dict[str, np.ndarray],
                                 label_mapping: Dict[str, Any]) -> Dict[str, Any]:
         """
         测试baseline性能
-        
-        返回结构符合设计文档：
-        - global_analysis: 全局分析结果
-        - region_wise_analysis: 分脑区分析结果
-        - comparative_analysis: 对比分析
-        - deep_network_detailed_analysis: 深度网络详细分析
         """
         logger.info("开始Baseline性能测试...")
         
@@ -180,7 +274,8 @@ class BaselineTester:
         # 1. 全局分析
         logger.info("\n1. 全局受试者识别分析...")
         results['global_analysis'] = self._test_global_performance(
-            X_train, y_train_classes, X_val, y_val_classes, label_mapping
+            X_train, y_train_classes, X_val, y_val_classes, label_mapping,
+            X_val_raw=X_val, y_val_raw=y_val_classes  
         )
         
         # 2. 分脑区分析
@@ -207,7 +302,7 @@ class BaselineTester:
         # 4. 深度网络权威性分析
         if 'Deep4x4096' in results['global_analysis']:
             results['deep_network_detailed_analysis'] = self.analyze_deep_network_authority(
-                results, {}  # LOSO结果将在main.py中提供
+                results, {}
             )
 
         # 找出最佳模型
@@ -246,23 +341,20 @@ class BaselineTester:
             return y.flatten().astype(int)
     
     def _test_global_performance(self, X_train: np.ndarray, y_train: np.ndarray,
-                               X_val: np.ndarray, y_val: np.ndarray,
-                               label_mapping: Dict[str, Any]) -> Dict[str, Any]:
+                            X_val: np.ndarray, y_val: np.ndarray,
+                            label_mapping: Dict[str, Any],
+                            X_val_raw: np.ndarray = None,
+                            y_val_raw: np.ndarray = None) -> Dict[str, Any]:
         """测试全局性能"""
         
         classifiers = {
-            # 'RandomForest': RandomForestClassifier(
-            #     n_estimators=200, max_depth=20, 
-            #     min_samples_split=2, random_state=42, n_jobs=-1
-            # ),
             'LogisticRegression': LogisticRegression(
                 max_iter=1000, C=0.1, random_state=42
             )
         }
         
-        # 添加深度网络
         if not self.skip_deep_network:
-            classifiers['Deep4x4096'] = 'deep'  # 标记为深度网络
+            classifiers['Deep4x4096'] = 'deep'
         
         results = {}
         
@@ -272,18 +364,19 @@ class BaselineTester:
             
             try:
                 if name == 'Deep4x4096':
-                    # 深度网络特殊处理
+                    # 深度网络特殊处理 - 使用验证集
                     clf_wrapper = self._create_deep_classifier_wrapper()
-                    clf_wrapper.fit(X_train, y_train)
+                    # 传递验证集进行训练时监控
+                    clf_wrapper.fit(X_train, y_train, X_val_raw, y_val_raw)
                     y_pred = clf_wrapper.predict(X_val)
                     
-                    # 获取训练历史
                     training_history = clf_wrapper.training_history
                     
                     accuracy = accuracy_score(y_val, y_pred)
                     f1_macro = f1_score(y_val, y_pred, average='macro')
                     f1_weighted = f1_score(y_val, y_pred, average='weighted')
                     
+                    # 保持原有的输出结构
                     results[name] = {
                         'accuracy': float(accuracy),
                         'f1_macro': float(f1_macro),
@@ -301,7 +394,7 @@ class BaselineTester:
                     }
                     
                 else:
-                    # 传统分类器
+                    # 传统分类器保持完全不变
                     clf.fit(X_train, y_train)
                     y_pred = clf.predict(X_val)
                     accuracy = accuracy_score(y_val, y_pred)
@@ -320,7 +413,7 @@ class BaselineTester:
                     }
                 
                 logger.info(f"  {name}: Acc={accuracy:.3f}, F1_macro={f1_macro:.3f}, "
-                           f"训练时间={results[name]['training_time']/60:.1f}分钟")
+                        f"训练时间={results[name]['training_time']/60:.1f}分钟")
                 
             except Exception as e:
                 logger.error(f"训练 {name} 失败: {e}")
