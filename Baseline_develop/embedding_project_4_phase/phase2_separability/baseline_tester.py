@@ -474,7 +474,7 @@ class BaselineTester:
         subject_labels = region_dataset['subject_labels']
         
         # 重新映射受试者标签
-        unique_subjects = np.unique(subject_labnvidiaels)
+        unique_subjects = np.unique(subject_labels)
         subject_mapping = {orig_id: new_id for new_id, orig_id in enumerate(unique_subjects)}
         y_region = np.array([subject_mapping[s] for s in subject_labels])
         
@@ -544,7 +544,8 @@ class BaselineTester:
         if region_results.get('insufficient_data'):
             return {'error': 'insufficient_region_data'}
         
-        for method in ['RandomForest', 'LogisticRegression', 'Deep4x4096']:
+        # for method in ['RandomForest', 'LogisticRegression', 'Deep4x4096']:
+        for method in ['LogisticRegression', 'Deep4x4096']:
             if method in global_results and method in region_results:
                 global_result = global_results[method]
                 region_result = region_results[method]
@@ -600,15 +601,28 @@ class BaselineTester:
         # 1. 性能优越性
         if 'global_analysis' in baseline_results:
             deep_result = baseline_results['global_analysis'].get('Deep4x4096', {})
+            # if 'accuracy' in deep_result:
+            #     deep_acc = deep_result['accuracy']
+            #     rf_acc = baseline_results['global_analysis'].get('RandomForest', {}).get('accuracy', 0)
+            #     lr_acc = baseline_results['global_analysis'].get('LogisticRegression', {}).get('accuracy', 0)
+                
+            #     if rf_acc > 0 and lr_acc > 0:
+            #         avg_traditional = (rf_acc + lr_acc) / 2
+            #         authority_factors['performance_superiority'] = max(0, min(1, 
+            #             (deep_acc - avg_traditional) / avg_traditional * 2))
+
             if 'accuracy' in deep_result:
                 deep_acc = deep_result['accuracy']
-                rf_acc = baseline_results['global_analysis'].get('RandomForest', {}).get('accuracy', 0)
                 lr_acc = baseline_results['global_analysis'].get('LogisticRegression', {}).get('accuracy', 0)
                 
-                if rf_acc > 0 and lr_acc > 0:
-                    avg_traditional = (rf_acc + lr_acc) / 2
+                if lr_acc > 0:
+                    avg_traditional = lr_acc  # 只有一个传统模型
+                    # 这里需要添加计算 performance_superiority 的代码
                     authority_factors['performance_superiority'] = max(0, min(1, 
                         (deep_acc - avg_traditional) / avg_traditional * 2))
+                    
+
+
         
         # 2. 收敛质量
         if 'Deep4x4096' in baseline_results.get('global_analysis', {}):

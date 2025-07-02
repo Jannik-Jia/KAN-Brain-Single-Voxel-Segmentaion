@@ -38,7 +38,8 @@ class LOSOEvaluator:
             device: 计算设备
             max_subjects: 最大测试受试者数（节省时间）
         """
-        self.model_types = model_types or ['rf', 'lr', 'deep']
+        # self.model_types = model_types or ['rf', 'lr', 'deep']
+        self.model_types = model_types or ['lr', 'deep']
         self.device = device
         self.max_subjects = max_subjects
         self.deep_utils = DeepNetworkUtils()
