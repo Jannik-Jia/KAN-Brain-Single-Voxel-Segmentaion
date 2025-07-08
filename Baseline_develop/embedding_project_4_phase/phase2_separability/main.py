@@ -7,6 +7,7 @@ Phase 2: 可分离性评估模块主程序
 
 import sys
 import logging
+from logging.handlers import RotatingFileHandler
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -29,12 +30,53 @@ from phase2_separability.baseline_tester import BaselineTester
 from phase2_separability.loso_evaluator import LOSOEvaluator
 from phase2_separability.embedding_assessor import EmbeddingNeedAssessor
 
-# 设置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+
+def setup_logging(output_dir: Path):
+    """
+    设置日志系统，同时输出到控制台和文件
+    
+    Args:
+        output_dir: 输出目录
+    """
+    # 创建日志文件路径
+    log_file = output_dir / f'phase2_execution_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    
+    # 创建formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # 获取root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # 清除已有的handlers（避免重复）
+    root_logger.handlers.clear()
+    
+    # 文件handler - 使用RotatingFileHandler避免日志文件过大
+    file_handler = RotatingFileHandler(
+        log_file, 
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,          # 保留5个备份
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.INFO)
+    
+    # 控制台handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    
+    # 添加handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # 记录日志文件位置
+    logger = logging.getLogger(__name__)
+    logger.info(f"日志文件已创建: {log_file}")
+    
+    return log_file
 
 
 def parse_arguments():
@@ -59,11 +101,6 @@ def parse_arguments():
     parser.add_argument('--save_models', action='store_true',
                        help='保存训练好的模型')
     
-    # parser.add_argument('--test_models', type=str, nargs='+',
-    #                    default=['rf', 'lr', 'deep'],
-    #                    choices=['rf', 'lr', 'deep'],
-    #                    help='要测试的模型类型')
-
     parser.add_argument('--test_models', type=str, nargs='+',
                        default=['lr', 'deep'],
                        choices=['lr', 'deep'],
@@ -77,11 +114,15 @@ def parse_arguments():
                        default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='计算设备')
     
+    parser.add_argument('--no_log_file', action='store_true',
+                       help='不保存日志文件（仅输出到控制台）')
+    
     return parser.parse_args()
 
 
 def load_data(phase0_dir: Path, phase1_dir: Path) -> dict:
     """加载Phase 0和Phase 1的数据"""
+    logger = logging.getLogger(__name__)
     logger.info("加载数据...")
     
     # 加载Phase 0数据
@@ -106,6 +147,8 @@ def load_data(phase0_dir: Path, phase1_dir: Path) -> dict:
 
 def verify_and_merge_data(X_train, y_train, subjects_train, X_val, y_val, subjects_val):
     """验证数据对齐并安全合并"""
+    logger = logging.getLogger(__name__)
+    
     # 验证每个数据集内部的一致性
     assert len(X_train) == len(y_train) == len(subjects_train), \
         f"训练集长度不一致: X={len(X_train)}, y={len(y_train)}, subjects={len(subjects_train)}"
@@ -151,20 +194,34 @@ def verify_and_merge_data(X_train, y_train, subjects_train, X_val, y_val, subjec
     return X_all, y_all, subjects_all
 
 
-
 def main():
     """主函数"""
     args = parse_arguments()
-    
-    logger.info("="*80)
-    logger.info("Phase 2: 可分离性评估开始")
-    logger.info("="*80)
     
     # 设置路径
     phase0_dir = Path(args.phase0_dir)
     phase1_dir = Path(args.phase1_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 设置日志系统
+    if not args.no_log_file:
+        log_file = setup_logging(output_dir)
+    else:
+        # 仅设置控制台日志
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+    
+    logger = logging.getLogger(__name__)
+    
+    logger.info("="*80)
+    logger.info("Phase 2: 可分离性评估开始")
+    logger.info("="*80)
+    logger.info(f"输出目录: {output_dir}")
+    if not args.no_log_file:
+        logger.info(f"日志文件: {log_file}")
     
     # 创建子目录
     viz_dir = output_dir / 'visualizations'
@@ -332,7 +389,8 @@ def main():
             metadata={
                 'models_tested': args.test_models,
                 'device': args.device,
-                'execution_time': datetime.now().isoformat()
+                'execution_time': datetime.now().isoformat(),
+                'log_file': str(log_file) if not args.no_log_file else None
             }
         )
         
@@ -340,6 +398,8 @@ def main():
         logger.info("Phase 2: 可分离性评估完成!")
         logger.info("="*80)
         logger.info(f"结果已保存到: {output_dir}")
+        if not args.no_log_file:
+            logger.info(f"执行日志已保存到: {log_file}")
         
         # 打印关键发现
         print_key_findings(baseline_results, loso_results, 
@@ -596,6 +656,8 @@ def generate_visualizations(baseline_results, loso_results,
 def print_key_findings(baseline_results, loso_results, 
                      deep_network_analysis, region_embedding_needs, phase2_scores):
    """打印关键发现"""
+   logger = logging.getLogger(__name__)
+   
    logger.info("\n" + "="*80)
    logger.info("关键发现总结:")
    logger.info("="*80)

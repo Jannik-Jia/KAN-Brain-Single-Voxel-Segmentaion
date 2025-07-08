@@ -23,7 +23,7 @@ from common.config import Config
 class PhaseOrchestrator:
     """Phase编排器"""
     
-    def __init__(self):
+    def __init__(self, save_logs=True):
         self.phase_scripts = {
             0: 'phase0_data_preparation/main.py',
             1: 'phase1_subject_analysis/main.py',
@@ -32,8 +32,15 @@ class PhaseOrchestrator:
             4: 'phase4_decision_maker/main.py'
         }
         
+        self.save_logs = save_logs
+        
         # 确保输出目录存在
         Config.ensure_directories()
+        
+        # 创建日志目录
+        if self.save_logs:
+            self.log_dir = Path('./data_exchange/orchestrator_logs')
+            self.log_dir.mkdir(parents=True, exist_ok=True)
     
     def run_phase(self, phase_num: int, args: list = None) -> int:
         """
@@ -64,12 +71,55 @@ class PhaseOrchestrator:
         print(f"运行 Phase {phase_num}: {script_path.name}")
         print(f"{'='*80}\n")
         
-        # 运行Phase
-        result = subprocess.run(cmd)
+        # 设置日志文件
+        if self.save_logs:
+            log_file = self.log_dir / f'phase{phase_num}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+            print(f"日志将保存到: {log_file}")
+            
+            # 运行Phase并同时输出到控制台和日志文件
+            with open(log_file, 'w', encoding='utf-8') as f:
+                # 写入头部信息
+                f.write(f"{'='*80}\n")
+                f.write(f"Phase {phase_num} 执行日志\n")
+                f.write(f"脚本: {script_path}\n")
+                f.write(f"命令: {' '.join(cmd)}\n")
+                f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"{'='*80}\n\n")
+                f.flush()
+                
+                # 使用Popen以便实时输出
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                # 实时读取输出并同时写入控制台和文件
+                for line in process.stdout:
+                    print(line, end='')  # 输出到控制台
+                    f.write(line)        # 写入日志文件
+                    f.flush()            # 确保实时写入
+                
+                # 等待进程结束
+                return_code = process.wait()
+                
+                # 写入结束信息
+                f.write(f"\n{'='*80}\n")
+                f.write(f"Phase {phase_num} 执行{'成功' if return_code == 0 else '失败'}\n")
+                f.write(f"返回码: {return_code}\n")
+                f.write(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"{'='*80}\n")
+        else:
+            # 不保存日志，直接运行
+            result = subprocess.run(cmd)
+            return_code = result.returncode
         
-        if result.returncode != 0:
+        if return_code != 0:
             print(f"\n错误: Phase {phase_num} 执行失败")
-            return result.returncode
+            return return_code
         
         print(f"\n✅ Phase {phase_num} 执行成功")
         return 0
@@ -88,18 +138,46 @@ class PhaseOrchestrator:
         print(f"开始运行分析流程 (从Phase {start_from}开始)")
         print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
+        # 创建总日志文件
+        if self.save_logs:
+            summary_log = self.log_dir / f'all_phases_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+            with open(summary_log, 'w', encoding='utf-8') as f:
+                f.write(f"完整分析流程执行日志\n")
+                f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"从Phase {start_from}开始\n")
+                f.write(f"{'='*80}\n\n")
+        
         for phase_num in range(start_from, 5):
             args = args_dict.get(phase_num, []) if args_dict else []
             ret_code = self.run_phase(phase_num, args)
             
+            # 记录到总日志
+            if self.save_logs:
+                with open(summary_log, 'a', encoding='utf-8') as f:
+                    f.write(f"Phase {phase_num}: {'成功' if ret_code == 0 else '失败'}\n")
+            
             if ret_code != 0:
                 print(f"\n分析流程在Phase {phase_num}失败")
+                
+                if self.save_logs:
+                    with open(summary_log, 'a', encoding='utf-8') as f:
+                        f.write(f"\n分析流程失败于Phase {phase_num}\n")
+                        f.write(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                
                 return ret_code
         
         print(f"\n{'='*80}")
         print(f"🎉 所有Phase执行成功!")
         print(f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*80}")
+        
+        if self.save_logs:
+            with open(summary_log, 'a', encoding='utf-8') as f:
+                f.write(f"\n所有Phase执行成功!\n")
+                f.write(f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"日志文件保存在: {self.log_dir}\n")
+            
+            print(f"\n所有日志已保存到: {self.log_dir}")
         
         return 0
     
@@ -134,6 +212,14 @@ class PhaseOrchestrator:
             print(f"Phase {phase_num}: {status}")
         
         print("-" * 50)
+        
+        # 如果有日志，列出最近的日志文件
+        if self.save_logs and self.log_dir.exists():
+            log_files = sorted(self.log_dir.glob('*.log'), key=lambda x: x.stat().st_mtime, reverse=True)
+            if log_files:
+                print(f"\n最近的日志文件:")
+                for log_file in log_files[:5]:  # 显示最近5个
+                    print(f"  - {log_file.name}")
 
 
 def main():
@@ -153,6 +239,9 @@ def main():
     parser.add_argument('--list-status', action='store_true',
                        help='列出所有Phase的执行状态')
     
+    parser.add_argument('--no-log', action='store_true',
+                       help='不保存日志文件')
+    
     # Phase 0参数
     parser.add_argument('--data-path', type=str,
                        help='数据文件路径（Phase 0）')
@@ -169,7 +258,7 @@ def main():
     
     args = parser.parse_args()
     
-    orchestrator = PhaseOrchestrator()
+    orchestrator = PhaseOrchestrator(save_logs=not args.no_log)
     
     # 列出状态
     if args.list_status:
