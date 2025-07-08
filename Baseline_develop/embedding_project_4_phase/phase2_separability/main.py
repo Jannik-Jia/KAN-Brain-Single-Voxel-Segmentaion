@@ -325,6 +325,16 @@ def main():
         
         DataIO.save_json(deep_network_analysis, output_dir / 'deep_network_analysis.json')
         
+        # 步骤3.5: 评估分脑区分类性能（新增）
+        logger.info("\n步骤3.5: 评估分脑区Subject分类性能...")
+        region_classification_performance = embedding_assessor.evaluate_region_classification_performance(
+            X_train, y_train, subjects_train,
+            X_val, y_val, subjects_val
+        )
+        DataIO.save_json(region_classification_performance, output_dir / 'region_classification_performance.json')
+
+
+
         # 步骤4: 分脑区Embedding需求评估
         logger.info("\n步骤4: 执行分脑区Embedding需求评估...")
         embedding_assessor = EmbeddingNeedAssessor(device=args.device)
@@ -336,12 +346,15 @@ def main():
             regions_all = y_all.flatten().astype(int)
 
         # 评估分脑区Embedding需求    
+
         region_embedding_needs = embedding_assessor.assess_region_embedding_needs(
             X_all, regions_all, subjects_all,
             region_specificity=data['region_specificity'],
             baseline_results=baseline_results,
-            loso_results=loso_results
+            loso_results=loso_results,
+            region_performance=region_classification_performance.get('region_performances', {})  # 新增参数
         )
+
         
         DataIO.save_json(region_embedding_needs, output_dir / 'region_embedding_needs.json')
         

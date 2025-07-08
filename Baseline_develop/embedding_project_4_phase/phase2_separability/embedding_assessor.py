@@ -27,11 +27,13 @@ class EmbeddingNeedAssessor:
         self.device = device
         self.deep_utils = DeepNetworkUtils()
     
+
     def assess_region_embedding_needs(self, X: np.ndarray, regions: np.ndarray,
-                                    subjects: np.ndarray,
-                                    region_specificity: Dict[str, Any],
-                                    baseline_results: Dict[str, Any],
-                                    loso_results: Dict[str, Any]) -> Dict[str, Any]:
+                                subjects: np.ndarray,
+                                region_specificity: Dict[str, Any],
+                                baseline_results: Dict[str, Any],
+                                loso_results: Dict[str, Any],
+                                region_performance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         评估每个脑区的Subject Embedding需求
         
@@ -72,8 +74,10 @@ class EmbeddingNeedAssessor:
                     necessity_score = self._compute_necessity_score(
                         region_analysis,
                         baseline_results,
-                        loso_results
+                        loso_results,
+                        region_performance  # 添加这个参数
                     )
+
                     
                     region_scores[int(region_id)] = necessity_score
                     region_analyses[int(region_id)] = region_analysis
@@ -158,6 +162,105 @@ class EmbeddingNeedAssessor:
             'deep_network': deep_network_assessment,
             'phase1_specificity_score': float(phase1_specificity.get('specificity_score', 0))
         }
+    
+    def evaluate_region_classification_performance(self, X_train: np.ndarray, y_train: np.ndarray,
+                                             subjects_train: np.ndarray,
+                                             X_val: np.ndarray, y_val: np.ndarray,
+                                             subjects_val: np.ndarray) -> Dict[str, Any]:
+        """
+        评估分脑区分类在验证集上的性能
+        
+        Args:
+            X_train, y_train, subjects_train: 训练数据
+            X_val, y_val, subjects_val: 验证数据
+            
+        Returns:
+            包含F1分数的性能评估结果
+        """
+        logger.info("评估分脑区Subject-specific分类性能...")
+        
+        # 将y转换为脑区标签（如果是one-hot编码）
+        if len(y_train.shape) > 1 and y_train.shape[1] > 1:
+            regions_train = np.argmax(y_train, axis=1)
+            regions_val = np.argmax(y_val, axis=1)
+        else:
+            regions_train = y_train.flatten().astype(int)
+            regions_val = y_val.flatten().astype(int)
+        
+        unique_regions = np.unique(regions_train)
+        region_performances = {}
+        
+        # 对每个脑区评估性能
+        for region_id in unique_regions:
+            # 该脑区的训练和验证数据
+            train_mask = regions_train == region_id
+            val_mask = regions_val == region_id
+            
+            if np.sum(train_mask) < Config.MIN_SAMPLES_FOR_ANALYSIS or np.sum(val_mask) < 10:
+                continue
+            
+            # 使用简单的逻辑回归评估受试者分类性能
+            X_region_train = X_train[train_mask]
+            subjects_region_train = subjects_train[train_mask]
+            X_region_val = X_val[val_mask]
+            subjects_region_val = subjects_val[val_mask]
+            
+            # 确保验证集有足够的受试者
+            unique_val_subjects = np.unique(subjects_region_val)
+            if len(unique_val_subjects) < 2:
+                continue
+            
+            try:
+                from sklearn.linear_model import LogisticRegression
+                from sklearn.metrics import f1_score, accuracy_score
+                
+                # 训练受试者分类器
+                clf = LogisticRegression(max_iter=500, C=0.1, random_state=42)
+                clf.fit(X_region_train, subjects_region_train)
+                
+                # 在验证集上预测
+                y_pred = clf.predict(X_region_val)
+                
+                # 计算指标
+                accuracy = accuracy_score(subjects_region_val, y_pred)
+                f1_macro = f1_score(subjects_region_val, y_pred, average='macro', zero_division=0)
+                f1_weighted = f1_score(subjects_region_val, y_pred, average='weighted', zero_division=0)
+                
+                region_performances[int(region_id)] = {
+                    'accuracy': float(accuracy),
+                    'f1_macro': float(f1_macro),
+                    'f1_weighted': float(f1_weighted),
+                    'n_train_samples': int(np.sum(train_mask)),
+                    'n_val_samples': int(np.sum(val_mask)),
+                    'n_unique_subjects_train': int(len(np.unique(subjects_region_train))),
+                    'n_unique_subjects_val': int(len(unique_val_subjects))
+                }
+                
+            except Exception as e:
+                logger.warning(f"脑区 {region_id} 分类评估失败: {e}")
+                continue
+        
+        # 计算整体性能
+        if region_performances:
+            mean_f1_macro = np.mean([r['f1_macro'] for r in region_performances.values()])
+            mean_accuracy = np.mean([r['accuracy'] for r in region_performances.values()])
+            
+            return {
+                'region_performances': region_performances,
+                'overall_mean_f1_macro': float(mean_f1_macro),
+                'overall_mean_accuracy': float(mean_accuracy),
+                'n_evaluated_regions': len(region_performances),
+                'total_regions': len(unique_regions)
+            }
+        else:
+            return {
+                'region_performances': {},
+                'overall_mean_f1_macro': 0.0,
+                'overall_mean_accuracy': 0.0,
+                'n_evaluated_regions': 0,
+                'total_regions': len(unique_regions)
+            }
+    
     
     def _analyze_consistency(self, X: np.ndarray, subjects: np.ndarray) -> Dict[str, float]:
         """分析脑区内受试者一致性"""
@@ -329,16 +432,28 @@ class EmbeddingNeedAssessor:
         }
     
     def _compute_necessity_score(self, region_analysis: Dict[str, Any],
-                               baseline_results: Dict[str, Any],
-                               loso_results: Dict[str, Any]) -> float:
+                            baseline_results: Dict[str, Any],
+                            loso_results: Dict[str, Any],
+                            region_performance: Optional[Dict[str, Any]] = None) -> float:
+
+
         """计算embedding必要性得分"""
         # 基础权重
+        # weights = {
+        #     'consistency': 0.3,
+        #     'generalization': 0.3,
+        #     'specificity': 0.2,
+        #     'baseline_gap': 0.2
+        # }
         weights = {
-            'consistency': 0.3,
-            'generalization': 0.3,
+            'consistency': 0.25,      # 降低一点
+            'generalization': 0.25,   # 降低一点
             'specificity': 0.2,
-            'baseline_gap': 0.2
+            'baseline_gap': 0.15,     # 降低一点
+            'classification_difficulty': 0.15  # 新增
         }
+
+
         
         # 1. 一致性得分（越不一致越需要embedding）
         consistency_score = 1.0 - region_analysis['consistency']['consistency_score']
@@ -352,14 +467,24 @@ class EmbeddingNeedAssessor:
         # 4. Baseline差距得分
         baseline_gap = loso_results.get('mean_generalization_gap', 0.1)
         baseline_gap_score = min(1.0, baseline_gap * 2)  # 放大差距影响
+
+        # 5. 分类难度得分（新增）
+        classification_difficulty_score = 0.5  # 默认中等
+        if region_performance and region_analysis['region_id'] in region_performance:
+            region_f1 = region_performance[region_analysis['region_id']].get('f1_macro', 0)
+            # F1越低，分类越困难，越需要embedding
+            classification_difficulty_score = 1.0 - region_f1
         
         # 综合得分
         necessity_score = (
             consistency_score * weights['consistency'] +
             generalization_score * weights['generalization'] +
             specificity_score * weights['specificity'] +
-            baseline_gap_score * weights['baseline_gap']
+            baseline_gap_score * weights['baseline_gap'] +
+            classification_difficulty_score * weights['classification_difficulty']
         )
+
+
         
         # 根据Phase 1的特异性得分进行调整
         phase1_boost = region_analysis.get('phase1_specificity_score', 0) * 0.1
