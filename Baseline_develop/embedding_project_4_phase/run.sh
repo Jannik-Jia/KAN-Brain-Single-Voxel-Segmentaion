@@ -110,7 +110,7 @@ run_phase2_step() {
     print_info "从Phase 2的步骤 $step 开始执行..."
     
     # 检查是否有baseline结果
-    if [ $step -gt 1 ] && [ ! -f "data_exchange/phase2_output/baseline_results.json" ]; then
+    if [ "$step" -gt 1 ] && [ ! -f "data_exchange/phase2_output/baseline_results.json" ]; then
         print_warning "未找到baseline_results.json，将使用--use_existing_baseline参数"
         python3 phase2_separability/main.py --start_from_step "$step" --use_existing_baseline "$@"
     else
