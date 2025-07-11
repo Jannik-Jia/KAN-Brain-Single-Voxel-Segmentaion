@@ -146,9 +146,12 @@ case "$1" in
             exit 1
         fi
         
+        # 先保存步骤编号
+        step_num="$2"
+        
         # 验证步骤编号
-        if ! [[ "$2" =~ ^[1-6]$ ]]; then
-            print_error "无效的步骤编号: $2 (必须是1-6)"
+        if ! [[ "$step_num" =~ ^[1-6]$ ]]; then
+            print_error "无效的步骤编号: $step_num (必须是1-6)"
             exit 1
         fi
         
@@ -157,7 +160,7 @@ case "$1" in
         
         # 获取额外参数
         shift 2
-        run_phase2_step "$2" "$@"
+        run_phase2_step "$step_num" "$@"
         ;;
     
     status)
