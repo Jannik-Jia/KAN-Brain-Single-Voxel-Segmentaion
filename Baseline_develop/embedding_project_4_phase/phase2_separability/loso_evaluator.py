@@ -29,7 +29,8 @@ class LOSOEvaluator:
     
     def __init__(self, model_types: List[str] = None,
                  device: str = 'cpu',
-                 max_subjects: int = 8):
+                 max_subjects: int = 8,
+                 save_best_models: bool = False):
         """
         初始化LOSO评估器
         
@@ -37,11 +38,12 @@ class LOSOEvaluator:
             model_types: 要测试的模型类型
             device: 计算设备
             max_subjects: 最大测试受试者数（节省时间）
+            save_best_models: 是否保存每个LOSO折的最佳模型
         """
-        # self.model_types = model_types or ['rf', 'lr', 'deep']
         self.model_types = model_types or ['lr', 'deep']
         self.device = device
         self.max_subjects = max_subjects
+        self.save_best_models = save_best_models
         self.deep_utils = DeepNetworkUtils()
     
     def evaluate_loso_performance(self, X: np.ndarray, y: np.ndarray, 
@@ -74,7 +76,8 @@ class LOSOEvaluator:
             'subject_generalization_gaps': {},
             'mean_generalization_gap': 0.0,
             'deep_network_advantage': 0.0,
-            'region_wise_summary': {}  # 添加分脑区汇总
+            'region_wise_summary': {},
+            'deep_network_epoch_wise_results': {}  # 新增：存储深度网络每个epoch的结果
         }
         
         # 1. 全局LOSO分析
@@ -100,6 +103,15 @@ class LOSOEvaluator:
                     'per_subject_accuracies': global_loso_results[model_key]['accuracies'],
                     'generalization_gap': global_loso_results[model_key].get('generalization_gap', 0)
                 }
+                
+                # 添加深度网络的详细结果
+                if model_type == 'deep' and 'epoch_wise_results' in global_loso_results[model_key]:
+                    results['model_results'][model_type]['epoch_wise_results'] = \
+                        global_loso_results[model_key]['epoch_wise_results']
+                    results['model_results'][model_type]['best_epoch_info'] = \
+                        global_loso_results[model_key].get('best_epoch_info', {})
+                    results['model_results'][model_type]['overfitting_analysis'] = \
+                        global_loso_results[model_key].get('overfitting_analysis', {})
                 
                 # 添加分脑区汇总信息
                 if 'summary' in region_loso_results and model_key in region_loso_results['summary']:
@@ -161,7 +173,9 @@ class LOSOEvaluator:
             model_results[model_key] = {
                 'accuracies': [],
                 'f1_scores': [],
-                'training_times': []
+                'training_times': [],
+                'epoch_wise_results': [] if model_type == 'deep' else None,  # 深度网络存储每个epoch结果
+                'per_subject_epoch_results': {} if model_type == 'deep' else None  # 每个受试者的epoch结果
             }
         
         # 对每个测试受试者执行LOSO
@@ -208,8 +222,7 @@ class LOSOEvaluator:
                     #     y_pred = model.predict(X_test)
 
 
-
-                        
+                    
                     if model_type == 'lr':
                         model = LogisticRegression(
                             max_iter=1000, C=0.1, random_state=42
@@ -217,23 +230,69 @@ class LOSOEvaluator:
                         model.fit(X_train, y_train)
                         y_pred = model.predict(X_test)
                         
+                        accuracy = accuracy_score(y_test, y_pred)
+                        f1 = f1_score(y_test, y_pred, average='macro')
+                        training_time = time.time() - start_time
+                        
+                        model_results[model_key]['accuracies'].append(accuracy)
+                        model_results[model_key]['f1_scores'].append(f1)
+                        model_results[model_key]['training_times'].append(training_time)
+                        
+                        logger.info(f"    {model_key}: Acc={accuracy:.3f}, F1={f1:.3f}")
+                        
                     elif model_type == 'deep':
-                        # 深度网络
+                        # 深度网络 - 使用留出的测试集作为验证集
                         model = DeepClassifierWrapper(self.deep_utils)
-                        model.fit(X_train, y_train)
+                        # 关键修改：将测试集传入作为验证集，在每个epoch评估
+                        model.fit(X_train, y_train, X_val=X_test, y_val=y_test)
+                        
+                        # 获取最终预测
                         y_pred = model.predict(X_test)
+                        accuracy = accuracy_score(y_test, y_pred)
+                        f1 = f1_score(y_test, y_pred, average='macro')
+                        training_time = time.time() - start_time
+                        
+                        model_results[model_key]['accuracies'].append(accuracy)
+                        model_results[model_key]['f1_scores'].append(f1)
+                        model_results[model_key]['training_times'].append(training_time)
+                        
+                        # 保存每个epoch的验证结果
+                        epoch_results = {
+                            'subject_id': int(test_subject),
+                            'train_losses': model.training_history['train_loss'],
+                            'train_accuracies': model.training_history['train_accuracy'],
+                            'train_f1s': model.training_history['train_f1'],
+                            'val_losses': model.training_history['val_loss'],
+                            'val_accuracies': model.training_history['val_accuracy'],
+                            'val_f1s': model.training_history['val_f1'],
+                            'final_test_accuracy': accuracy,
+                            'final_test_f1': f1
+                        }
+                        
+                        # 分析最佳epoch
+                        if model.training_history['val_f1']:
+                            best_epoch_idx = np.argmax(model.training_history['val_f1'])
+                            best_val_f1 = model.training_history['val_f1'][best_epoch_idx]
+                            best_val_acc = model.training_history['val_accuracy'][best_epoch_idx]
+                            
+                            epoch_results['best_epoch'] = best_epoch_idx + 1
+                            epoch_results['best_epoch_val_f1'] = best_val_f1
+                            epoch_results['best_epoch_val_accuracy'] = best_val_acc
+                            
+                            # 检测过拟合
+                            final_epoch_val_f1 = model.training_history['val_f1'][-1]
+                            overfitting_degree = best_val_f1 - final_epoch_val_f1
+                            epoch_results['overfitting_degree'] = overfitting_degree
+                            epoch_results['overfitting_detected'] = overfitting_degree > 0.05
+                            
+                            logger.info(f"    {model_key}: Final Acc={accuracy:.3f}, F1={f1:.3f}")
+                            logger.info(f"              Best Epoch={best_epoch_idx+1}, Best Val F1={best_val_f1:.3f}")
+                            if epoch_results['overfitting_detected']:
+                                logger.warning(f"              过拟合检测: F1下降{overfitting_degree:.3f}")
+                        
+                        model_results[model_key]['epoch_wise_results'].append(epoch_results)
+                        model_results[model_key]['per_subject_epoch_results'][int(test_subject)] = epoch_results
                 
-                    
-                    accuracy = accuracy_score(y_test, y_pred)
-                    f1 = f1_score(y_test, y_pred, average='macro')
-                    training_time = time.time() - start_time
-                    
-                    model_results[model_key]['accuracies'].append(accuracy)
-                    model_results[model_key]['f1_scores'].append(f1)
-                    model_results[model_key]['training_times'].append(training_time)
-                    
-                    logger.info(f"    {model_key}: Acc={accuracy:.3f}, F1={f1:.3f}")
-                    
                 except Exception as e:
                     logger.error(f"    {model_key} 失败: {e}")
                     logger.exception("详细错误信息:")
@@ -252,6 +311,53 @@ class LOSOEvaluator:
                     'n_subjects_tested': len(results['accuracies']),
                     'generalization_gap': 0  # 将在后续计算
                 }
+                
+                # 添加深度网络的epoch分析
+                if model_key == 'Deep4x4096' and results['epoch_wise_results']:
+                    # 计算所有受试者的平均epoch性能
+                    all_val_f1s = []
+                    all_val_accs = []
+                    overfitting_subjects = []
+                    
+                    for epoch_result in results['epoch_wise_results']:
+                        all_val_f1s.append(epoch_result['val_f1s'])
+                        all_val_accs.append(epoch_result['val_accuracies'])
+                        if epoch_result.get('overfitting_detected', False):
+                            overfitting_subjects.append(epoch_result['subject_id'])
+                    
+                    # 计算每个epoch的平均性能
+                    n_epochs = len(all_val_f1s[0]) if all_val_f1s else 0
+                    mean_val_f1_per_epoch = []
+                    mean_val_acc_per_epoch = []
+                    
+                    for epoch_idx in range(n_epochs):
+                        epoch_f1s = [f1s[epoch_idx] for f1s in all_val_f1s if epoch_idx < len(f1s)]
+                        epoch_accs = [accs[epoch_idx] for accs in all_val_accs if epoch_idx < len(accs)]
+                        
+                        if epoch_f1s:
+                            mean_val_f1_per_epoch.append(np.mean(epoch_f1s))
+                            mean_val_acc_per_epoch.append(np.mean(epoch_accs))
+                    
+                    # 找到平均最佳epoch
+                    if mean_val_f1_per_epoch:
+                        best_avg_epoch = np.argmax(mean_val_f1_per_epoch)
+                        best_avg_f1 = mean_val_f1_per_epoch[best_avg_epoch]
+                        
+                        final_results[model_key]['best_epoch_info'] = {
+                            'average_best_epoch': best_avg_epoch + 1,
+                            'average_best_f1': float(best_avg_f1),
+                            'mean_val_f1_per_epoch': mean_val_f1_per_epoch,
+                            'mean_val_acc_per_epoch': mean_val_acc_per_epoch
+                        }
+                    
+                    final_results[model_key]['overfitting_analysis'] = {
+                        'n_subjects_overfitted': len(overfitting_subjects),
+                        'overfitting_rate': len(overfitting_subjects) / len(results['epoch_wise_results']),
+                        'overfitted_subjects': overfitting_subjects
+                    }
+                    
+                    final_results[model_key]['epoch_wise_results'] = results['epoch_wise_results']
+                    final_results[model_key]['per_subject_epoch_results'] = results['per_subject_epoch_results']
         
         return final_results
     
@@ -343,6 +449,7 @@ class LOSOEvaluator:
                                     test_subjects: np.ndarray) -> Dict[int, Dict]:
         """
         多分类LOSO：评估每个脑区在101类分类任务中的表现
+        修改版：对深度网络使用epoch-wise验证
         """
         from sklearn.metrics import classification_report, confusion_matrix
         
@@ -365,11 +472,13 @@ class LOSOEvaluator:
             # 使用最佳模型（根据baseline结果选择）
             if 'deep' in self.model_types:
                 model = DeepClassifierWrapper(self.deep_utils)
+                # 使用测试集作为验证集
+                model.fit(X_train, y_train, X_val=X_test, y_val=y_test)
             else:
-                # model = RandomForestClassifier(n_estimators=100, max_depth=15, random_state=42)
-                model = LogisticRegression(max_iter=1000, C=0.1, random_state=42)  # 使用LR代替RF
-            try:
+                model = LogisticRegression(max_iter=1000, C=0.1, random_state=42)
                 model.fit(X_train, y_train)
+                
+            try:
                 y_pred = model.predict(X_test)
                 
                 # 计算每个类别的性能
@@ -556,7 +665,7 @@ class LOSOEvaluator:
         }
     
     def _print_loso_summary(self, results: Dict):
-        """打印LOSO评估摘要"""
+        """打印LOSO评估摘要（增强版，包含epoch分析）"""
         logger.info("\nLOSO评估摘要:")
         logger.info("="*50)
         
@@ -567,6 +676,26 @@ class LOSOEvaluator:
             
             if 'region_wise_accuracy' in model_results:
                 logger.info(f"  分脑区准确率: {model_results['region_wise_accuracy']:.3f}")
+            
+            # 打印深度网络的epoch分析
+            if model_type == 'deep' and 'best_epoch_info' in model_results:
+                best_info = model_results['best_epoch_info']
+                logger.info(f"\n  深度网络Epoch分析:")
+                logger.info(f"    平均最佳Epoch: {best_info['average_best_epoch']}")
+                logger.info(f"    平均最佳F1: {best_info['average_best_f1']:.3f}")
+                
+                if 'overfitting_analysis' in model_results:
+                    overfit_info = model_results['overfitting_analysis']
+                    logger.info(f"    过拟合率: {overfit_info['overfitting_rate']:.2%} "
+                              f"({overfit_info['n_subjects_overfitted']}/{len(model_results['per_subject_accuracies'])} 个受试者)")
+                
+                # 打印每个epoch的平均性能趋势
+                if 'mean_val_f1_per_epoch' in best_info:
+                    logger.info(f"\n    各Epoch平均验证F1趋势:")
+                    for epoch_idx, f1 in enumerate(best_info['mean_val_f1_per_epoch'][:5]):  # 只显示前5个epoch
+                        logger.info(f"      Epoch {epoch_idx+1}: {f1:.3f}")
+                    if len(best_info['mean_val_f1_per_epoch']) > 5:
+                        logger.info(f"      ... (共{len(best_info['mean_val_f1_per_epoch'])}个epoch)")
         
         logger.info(f"\n平均泛化差距: {results['mean_generalization_gap']:.3f}")
         logger.info(f"深度网络优势: {results['deep_network_advantage']:.3f}")

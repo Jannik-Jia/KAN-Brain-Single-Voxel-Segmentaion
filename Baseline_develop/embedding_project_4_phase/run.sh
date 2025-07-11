@@ -35,6 +35,7 @@ show_help() {
     echo "选项:"
     echo "  all                    运行所有Phase (0-4)"
     echo "  phase <N>              运行单个Phase (N=0,1,2,3,4)"
+    echo "  phase2-step <N>        从Phase 2的指定步骤开始 (N=1-6)"
     echo "  status                 显示所有Phase的执行状态"
     echo "  clean                  清理所有输出"
     echo "  help                   显示此帮助信息"
@@ -43,7 +44,16 @@ show_help() {
     echo "  $0 all                 # 运行完整分析"
     echo "  $0 phase 0             # 只运行数据准备"
     echo "  $0 phase 1             # 只运行受试者分析"
+    echo "  $0 phase2-step 2       # 从Phase 2的LOSO步骤开始"
     echo "  $0 status              # 查看执行状态"
+    echo ""
+    echo "Phase 2步骤说明:"
+    echo "  1: Baseline性能测试"
+    echo "  2: LOSO评估（新的epoch-wise版本）"
+    echo "  3: 深度网络权威分析"
+    echo "  4: 分脑区Subject分类性能"
+    echo "  5: Embedding需求评估"
+    echo "  6: 生成可视化"
     echo ""
     echo "高级用法:"
     echo "  运行Phase 0并指定数据路径:"
@@ -92,6 +102,22 @@ clean_outputs() {
     fi
 }
 
+# 运行Phase 2的特定步骤
+run_phase2_step() {
+    local step=$1
+    shift  # 移除第一个参数，剩下的都是额外参数
+    
+    print_info "从Phase 2的步骤 $step 开始执行..."
+    
+    # 检查是否有baseline结果
+    if [ $step -gt 1 ] && [ ! -f "data_exchange/phase2_output/baseline_results.json" ]; then
+        print_warning "未找到baseline_results.json，将使用--use_existing_baseline参数"
+        python3 phase2_separability/main.py --start_from_step "$step" --use_existing_baseline "$@"
+    else
+        python3 phase2_separability/main.py --start_from_step "$step" "$@"
+    fi
+}
+
 # 主逻辑
 case "$1" in
     all)
@@ -111,6 +137,27 @@ case "$1" in
         check_dependencies
         print_info "运行Phase $2..."
         python3 orchestrator.py --run phase --phase "$2"
+        ;;
+    
+    phase2-step)
+        if [ -z "$2" ]; then
+            print_error "请指定Phase 2的步骤编号 (1-6)"
+            show_help
+            exit 1
+        fi
+        
+        # 验证步骤编号
+        if ! [[ "$2" =~ ^[1-6]$ ]]; then
+            print_error "无效的步骤编号: $2 (必须是1-6)"
+            exit 1
+        fi
+        
+        check_python
+        check_dependencies
+        
+        # 获取额外参数
+        shift 2
+        run_phase2_step "$2" "$@"
         ;;
     
     status)
