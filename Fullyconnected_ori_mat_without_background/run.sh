@@ -78,37 +78,35 @@ lr=${lr:-1e-5}
 EXPERIMENT_NAME="BrainVoxel_101Labels${EXPERIMENT_SUFFIX}_$(date +%Y%m%d_%H%M%S)"
 
 # 运行命令
-CMD="python -u main.py \
-    --experiment_name $EXPERIMENT_NAME \
-    --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat" \
-    --standardization_method $STD_METHOD \
-    --val_prob_idx 20 \
-    --test_prob_idx 38 \
-    --batch_size $batch_size \
-    --epochs $epochs \
-    --device 0 \
-    --model_type base_mlp \
-    --hidden_units '4096,4096,4096,4096' \
-    --activation relu \
-    --dropout_rate 0.5 \
-    --lr $lr \
-    --weight_decay 1e-5 \
-    --optimizer adam \
-    --use_lr_scheduler \
-    --lr_scheduler_type cosine \
-    --save_dir ./results \
-    --log_dir ./logs \
-    $BG_PARAMS \
-    $SAMPLER_PARAMS"
-
 echo ""
-echo "即将执行命令:"
-echo "$CMD"
-echo ""
+echo "即将执行实验..."
 read -p "确认执行? (y/n): " confirm
 
 if [[ $confirm =~ ^[Yy]$ ]]; then
-    nohup $CMD > logs/${EXPERIMENT_NAME}.log 2>&1 &
+    # 直接在nohup中构建命令，避免引号问题
+    nohup python -u main.py \
+        --experiment_name "$EXPERIMENT_NAME" \
+        --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat" \
+        --standardization_method "$STD_METHOD" \
+        --val_prob_idx 20 \
+        --test_prob_idx 38 \
+        --batch_size "$batch_size" \
+        --epochs "$epochs" \
+        --device 0 \
+        --model_type base_mlp \
+        --hidden_units "4096,4096,4096,4096" \
+        --activation relu \
+        --dropout_rate 0.5 \
+        --lr "$lr" \
+        --weight_decay 1e-5 \
+        --optimizer adam \
+        --use_lr_scheduler \
+        --lr_scheduler_type cosine \
+        --save_dir ./results \
+        --log_dir ./logs \
+        $BG_PARAMS \
+        $SAMPLER_PARAMS \
+        > "logs/${EXPERIMENT_NAME}.log" 2>&1 &
     PID=$!
     
     echo ""
