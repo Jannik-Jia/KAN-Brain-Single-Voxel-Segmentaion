@@ -75,10 +75,23 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         'learning_rate': trial.suggest_float('learning_rate', 1e-6, 1e-3, log=True),
         'weight_decay': trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True),
         'optimizer': trial.suggest_categorical('optimizer', ['adam', 'adamw']),
-        'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.7),  # 统一的dropout范围
+        'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.7),
         'activation': trial.suggest_categorical('activation', ['relu', 'gelu', 'swish']),
         'lr_scheduler': trial.suggest_categorical('lr_scheduler', ['cosine', 'step', 'plateau', 'none']),
     }
+    
+    # 🔧 新增：是否将标准化方法作为超参数
+    if config and config.get('optimize_standardization', False):
+        standardization_method = trial.suggest_categorical('standardization_method', ['global', 'patientwise'])
+        # 临时更新config以使用试验的标准化方法
+        original_method = config.get('standardization_method', 'global')
+        config['standardization_method'] = standardization_method
+        
+        # 重新加载数据（如果标准化方法改变）
+        if standardization_method != original_method:
+            print(f"试验使用标准化方法: {standardization_method}")
+            # 这里需要重新加载数据
+            # 注意：这会增加计算开销，建议固定标准化方法
     
     # 首先选择模型类型
     model_type = trial.suggest_categorical('model_type', ['base_mlp', 'deep_mlp', 'residual_mlp'])
@@ -239,13 +252,106 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         # 提前停止
         if trial.should_prune():
             raise optuna.TrialPruned()
+    # 在函数结束前恢复原始配置（如果修改了）
+    if config and config.get('optimize_standardization', False):
+        config['standardization_method'] = original_method
     
-    # 返回最佳F1分数
     return max(val_f1_values)
+
+
+# 新增函数：针对Patientwise的专门优化
+def run_patientwise_optimization(data_loaders, input_dim, num_classes, device, 
+                                 n_trials=30, study_name="patientwise_optimization", 
+                                 save_path="./results", config=None):
+    """
+    专门针对Patientwise标准化的贝叶斯优化
+    
+    这个函数假设数据已经使用patientwise标准化处理
+    主要优化模型架构和训练超参数
+    """
+    import optuna
+    
+    # 确保使用patientwise标准化
+    if config:
+        config['standardization_method'] = 'patientwise'
+    
+    # 定义参数空间 - 可能需要针对patientwise调整
+    param_space = {
+        'learning_rate': (1e-6, 1e-4),  # 可能需要更小的学习率
+        'batch_size': [64, 128, 256],   # 批次大小可能影响患者分布
+        'weight_decay': (1e-6, 1e-3),
+        'dropout_rate': (0.3, 0.7),      # 可能需要更高的dropout
+        'activation': ['relu', 'gelu', 'swish'],
+        'optimizer': ['adam', 'adamw'],
+        'lr_scheduler': ['cosine', 'plateau', 'none'],  # 去掉step调度器
+        'model_type': ['base_mlp', 'deep_mlp', 'residual_mlp'],
+    }
+    
+    # 创建研究
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(
+            seed=np.random.randint(1, 10000),
+            n_startup_trials=10,
+            n_ei_candidates=24,
+            prior_weight=1.0,
+        ),
+        pruner=optuna.pruners.MedianPruner(
+            n_warmup_steps=5,
+            n_min_trials=5  # 确保至少有5个试验完成
+        ),
+        study_name=study_name
+    )
+    
+    # 定义专门的目标函数
+    def patientwise_objective(trial):
+        # 特别注意：验证集只有一个患者(20)，可能需要特殊处理
+        # 可以考虑使用训练集的一部分患者作为额外验证
+        
+        return objective(trial, data_loaders, input_dim, num_classes, device, param_space, config)
+    
+    # 运行优化
+    study.optimize(
+        patientwise_objective,
+        n_trials=n_trials,
+        callbacks=[
+            lambda study, trial: print_optimization_progress(study, trial),
+            lambda study, trial: check_patient_performance(study, trial, config)
+        ]
+    )
+    
+    # ... 保存结果等后续处理 ...
+    
+    return study, study.best_params
+
+def check_patient_performance(study, trial, config):
+    """
+    检查每个患者的性能，确保模型不会过度偏向某些患者
+    """
+    if trial.state == optuna.trial.TrialState.COMPLETE and trial.value is not None:
+        # 这里可以添加代码来分析不同患者的性能差异
+        # 例如，记录训练集中不同患者的平均损失
+        pass
+
+def print_optimization_progress(study, trial):
+    """
+    打印优化进度，包括当前最佳结果
+    """
+    if trial.state == optuna.trial.TrialState.COMPLETE:
+        print(f"\n试验 {trial.number} 完成:")
+        print(f"  F1分数: {trial.value:.4f}")
+        print(f"  当前最佳F1: {study.best_value:.4f}")
+        
+        # 打印关键参数
+        important_params = ['model_type', 'learning_rate', 'dropout_rate', 'standardization_method']
+        for param in important_params:
+            if param in trial.params:
+                print(f"  {param}: {trial.params[param]}")
 
 
 def run_bayesian_optimization(data_loaders, input_dim, num_classes, device, param_space=None, 
                              n_trials=30, study_name="mlp_optimization", save_path="./results", config=None):
+
     """
     运行贝叶斯优化
     
@@ -264,6 +370,15 @@ def run_bayesian_optimization(data_loaders, input_dim, num_classes, device, para
         study: Optuna study对象
         best_params: 最佳参数
     """
+    # 检查是否使用patientwise标准化
+    if config and config.get('standardization_method') == 'patientwise':
+        print("检测到Patientwise标准化，使用专门的优化策略")
+        return run_patientwise_optimization(
+            data_loaders, input_dim, num_classes, device, 
+            n_trials, study_name + "_patientwise", save_path, config
+        )
+    
+
     # 创建研究
     study = optuna.create_study(
         direction="maximize",

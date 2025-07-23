@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-标签处理工具函数
+标签处理工具函数 - 支持101个标签的数据集
 """
 
 import numpy as np
@@ -28,23 +28,22 @@ def process_labels_for_training(labels, config):
     
     labels = np.array(labels, dtype=int)
     
-    if config.get('filter_background', True):
-        # 模式1: 过滤背景（当前默认行为）
-        # 假设背景已经在数据加载时过滤，这里只做映射
-        # 标签应该是1-102，映射到0-101
+    if config.get('filter_background', False):
+        # 模式1: 过滤背景（假设背景已经在数据加载时过滤）
+        # 标签应该是1-100，映射到0-99
         processed = labels - 1
         # 确保没有负值（防止意外的背景标签）
         processed = np.maximum(processed, 0)
         return processed
     else:
         # 模式2: 保留背景
-        if config.get('include_background_in_classes', False):
+        if config.get('include_background_in_classes', True):
             # 子模式2a: 背景作为分类类别
-            # 0-102 → 0-102 (不变)
+            # 0-100 → 0-100 (不变)
             return labels
         else:
             # 子模式2b: 背景被忽略
-            # 0 → -1, 1-102 → 0-101
+            # 0 → -1, 1-100 → 0-99
             processed = labels.copy()
             processed[labels == 0] = -1
             processed[labels > 0] = labels[labels > 0] - 1
@@ -57,7 +56,7 @@ def should_filter_background_samples(config):
     返回:
         bool: True表示需要过滤背景样本
     """
-    return config.get('filter_background', True)
+    return config.get('filter_background', False)
 
 def get_ignore_index(config):
     """
@@ -66,10 +65,10 @@ def get_ignore_index(config):
     返回:
         int or None: ignore_index值，None表示不忽略任何标签
     """
-    if config.get('filter_background', True):
+    if config.get('filter_background', False):
         return None  # 过滤模式不需要ignore
     else:
-        if config.get('include_background_in_classes', False):
+        if config.get('include_background_in_classes', True):
             return None  # 背景作为分类类别，不忽略
         else:
             return -1  # 背景映射为-1并忽略
@@ -101,26 +100,25 @@ def get_label_info_string(config):
     返回:
         str: 描述字符串
     """
-    if config.get('filter_background', True):
-        return "背景已过滤，标签范围0-101"
+    if config.get('filter_background', False):
+        return "背景已过滤，标签范围0-99"
     else:
-        if config.get('include_background_in_classes', False):
-            return "包含背景分类，标签范围0-102"
+        if config.get('include_background_in_classes', True):
+            return "包含背景分类，标签范围0-100"
         else:
-            return "背景被忽略，标签范围0-101，背景=-1"
-        
+            return "背景被忽略，标签范围0-99，背景=-1"
 
 def get_effective_num_classes(config):
     """
-    获取实际的类别数量
+    获取实际的类别数量（101标签数据集）
     
     返回:
         int: 实际类别数量
     """
-    if config.get('filter_background', True):
-        return 102  # 过滤背景：1-102 → 0-101
+    if config.get('filter_background', False):
+        return 100  # 过滤背景：1-100 → 0-99
     else:
-        if config.get('include_background_in_classes', False):
-            return 103  # 包含背景：0-102 → 0-102
+        if config.get('include_background_in_classes', True):
+            return 101  # 包含背景：0-100 → 0-100
         else:
-            return 102  # 忽略背景：0→-1, 1-102 → 0-101
+            return 100  # 忽略背景：0→-1, 1-100 → 0-99

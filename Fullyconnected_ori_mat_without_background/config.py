@@ -24,43 +24,45 @@ CONFIG = {
     },
     
     # 方式2：MAT文件格式（如果设置了mat_file_path，将优先使用这种方式）
-
-    'mat_file_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38.mat", 
+    'mat_file_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat",
     'test_size': 0.01,      # 从训练集中分割出测试集的比例（仅在随机划分模式下使用）
     'demo_mat_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/DEMO38.mat",  # 用于评估的DEMO38.mat文件路径
     
-    # 🔧 新增：固定测试集配置（MAT格式专用）
-    'test_prob_idx': [13, 23, 38],     # 固定测试集的prob_idx列表，例如: [13, 23, 38]
-                               # 设为None则使用原有的随机划分模式
-    'train_val_ratio': 0.75,   # 在排除测试集后，训练集在训练+验证中的比例
-                               # 0.75表示训练:验证 = 3:1 (75%:25%)
-    
-    # MAT文件的患者ID配置 - 自定义数据集分割（已废弃，建议使用test_prob_idx）
+    # 🔧 固定测试集配置（MAT格式专用）
+    'test_prob_idx': [38],          # 固定测试集的prob_idx列表
+    'val_prob_idx': [20],           # 固定验证集的prob_idx列表
+    'train_val_ratio': 0.75,        # 废弃，现在使用固定的验证集
+
+    # 🔧 标准化方法配置
+    'standardization_method': 'patientwise',  # 'global' 或 'patientwise'
+    'standardization_epsilon': 1e-10,         # 避免除零的小值
+
+    # MAT文件的患者ID配置 - 自定义数据集分割（已废弃，建议使用test_prob_idx和val_prob_idx）
     'dataset_split': {
         'train_patients': [28, 5, 25, 30, 34, 32, 33, 11, 12, 20, 29, 17, 37, 7, 26, 1, 36, 14, 19, 3, 35, 31, 22, 8],
         'val_patients': [4, 24, 9, 15, 16, 18, 2],
         'test_patients': [38, 6, 21, 13, 10, 23, 27]
     },
     
+    # 背景像素处理配置 - 默认不过滤背景
+    'filter_background': False,             # 是否过滤背景像素（默认False，保留背景）
+    'background_label_original': 0,         # 原始数据中的背景标签值
+    'background_label_target': 0,           # 训练时的背景标签值（0表示作为第0类）
+    'include_background_in_classes': True,  # 是否将背景作为一个分类类别（默认True）
 
-    # 背景像素处理配置
-    'filter_background': True,          # 是否过滤背景像素（默认True保持向后兼容）
-    'background_label_original': 0,     # 原始数据中的背景标签值
-    'background_label_target': -1,      # 训练时的背景标签值（-1表示ignore，仅在filter_background=False时使用）
-    'include_background_in_classes': False,  # 是否将背景作为一个分类类别（仅在filter_background=False时使用）
-
+    # 标签处理配置
+    'label_format': 'auto',  # 'original', 'mat', 'auto' (自动检测)
+    
+    # 数据预处理
     'apply_pca': False,  # 是否应用PCA降维
     'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
     'norm': True,        # 是否进行数据标准化
     
-    # 模型基本参数
-    'model_name': 'BrainVoxel_102Class_MLP',
-    'dataset_name': 'BrainVoxel',
+    # 模型基本参数 - 101类数据集
+    'model_name': 'BrainVoxel_101Class_MLP',
+    'dataset_name': 'BrainVoxel_101Labels',
     'feature_dim': 341,  # 原始特征维度
-    'num_class': 102,    # 类别数量
-    
-    # 标签处理配置
-    'label_format': 'auto',  # 'original' (1-102, 背景-1), 'mat' (0-101, 背景0), 'auto' (自动检测)
+    'num_class': 101,    # 类别数量（100个有效类别 + 1个背景 = 101）
     
     # 模型架构参数
     'model_type': 'base_mlp',  # 'base_mlp', 'deep_mlp', 'residual_mlp'
@@ -85,7 +87,7 @@ CONFIG = {
     'optimizer': 'adamw',  # 'adam', 'adamw'
     
     # 贝叶斯优化参数
-    'run_bayesian_opt': True,  # 是否运行贝叶斯优化
+    'run_bayesian_opt': False,  # 是否运行贝叶斯优化（默认关闭）
     'n_trials': 30,            # 贝叶斯优化的试验次数
     'pruning_patience': 5,     # 提前终止的耐心值
     
@@ -351,41 +353,45 @@ def get_effective_num_classes(config):
     返回:
         int: 实际类别数量
     """
-    if config.get('filter_background', True):
-        return 102  # 过滤背景：1-102 → 0-101
+    if config.get('filter_background', False):
+        # 过滤背景模式：1-100 → 0-99
+        return 100
     else:
-        if config.get('include_background_in_classes', False):
-            return 103  # 包含背景：0-102 → 0-102
+        if config.get('include_background_in_classes', True):
+            # 包含背景模式：0-100 → 0-100 (共101个类)
+            return 101
         else:
-            return 102  # 忽略背景：0→-1, 1-102 → 0-101
-
+            # 忽略背景模式：0→-1, 1-100 → 0-99
+            return 100
+        
 def print_background_config_info(config):
     """
     打印背景处理配置信息
     """
     print("\n🎯 背景处理配置:")
-    filter_bg = config.get('filter_background', True)
+    filter_bg = config.get('filter_background', False)
     
     if filter_bg:
-        print("  模式: 过滤背景像素（当前默认）")
+        print("  模式: 过滤背景像素")
         print("  处理: 在数据加载阶段移除background=0的样本")
-        print("  标签映射: 1-102 → 0-101")
-        print("  模型输出: 102个类别")
+        print("  标签映射: 1-100 → 0-99")
+        print("  模型输出: 100个类别")
         print("  损失函数: CrossEntropyLoss（无ignore_index）")
     else:
-        include_bg = config.get('include_background_in_classes', False)
-        bg_target = config.get('background_label_target', -1)
+        include_bg = config.get('include_background_in_classes', True)
+        bg_target = config.get('background_label_target', 0)
         
-        print("  模式: 保留背景像素")
+        print("  模式: 保留背景像素（当前默认）")
         if include_bg:
             print("  处理: 背景作为第0类进行分类")
-            print("  标签映射: 0-102 → 0-102")
-            print("  模型输出: 103个类别")
+            print("  标签映射: 0-100 → 0-100")
+            print("  模型输出: 101个类别")
             print("  损失函数: CrossEntropyLoss（无ignore_index）")
+            print("  说明: 背景(0)和有效标签(1-100)都作为分类目标")
         else:
             print("  处理: 背景像素在训练时被忽略")
-            print("  标签映射: 0→-1, 1-102→0-101")
-            print("  模型输出: 102个类别")
+            print("  标签映射: 0→-1, 1-100→0-99")
+            print("  模型输出: 100个类别")
             print("  损失函数: CrossEntropyLoss（ignore_index=-1）")
     
     print(f"  实际类别数: {get_effective_num_classes(config)}")
@@ -394,9 +400,41 @@ def print_background_config_info(config):
 
 # 🔧 新增：预设配置模板
 PRESET_CONFIGS = {
+    'patientwise_101_with_bg': {
+        'test_prob_idx': [38],
+        'val_prob_idx': [20],
+        'standardization_method': 'patientwise',
+        'filter_background': False,
+        'include_background_in_classes': True,
+        'num_class': 101,
+        'mat_file_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat",
+        'description': 'Patientwise标准化：101类数据集，背景作为类别'
+    },
+    'patientwise_101_no_bg': {
+        'test_prob_idx': [38],
+        'val_prob_idx': [20],
+        'standardization_method': 'patientwise',
+        'filter_background': True,
+        'include_background_in_classes': False,
+        'num_class': 100,
+        'mat_file_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat",
+        'description': 'Patientwise标准化：101类数据集，过滤背景（100类）'
+    },
+    'global_101_with_bg': {
+        'test_prob_idx': [38],
+        'val_prob_idx': [20],
+        'standardization_method': 'global',
+        'filter_background': False,
+        'include_background_in_classes': True,
+        'num_class': 101,
+        'mat_file_path': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat",
+        'description': '全局标准化：101类数据集，背景作为类别'
+    },
     'default_fixed_test': {
         'test_prob_idx': [13, 23, 38],
+        'val_prob_idx': None,  # 使用随机划分
         'train_val_ratio': 0.75,
+        'standardization_method': 'global',
         'description': '默认固定测试集配置：prob_idx [13,23,38] 作为测试集，75%训练25%验证'
     },
     'small_test_set': {
@@ -442,21 +480,27 @@ def apply_preset_config(config, preset_name):
     print(f"   {preset['description']}")
     return True
 
+
 def print_data_split_info(config):
     """
-    🔧 新增：打印数据划分信息
+    🔧 更新：打印数据划分信息，包括标准化方法
     """
     print("\n📊 数据划分配置信息:")
     print(f"  数据格式: {'MAT格式' if is_mat_format(config) else '原版格式'}")
+    print(f"  标准化方法: {config.get('standardization_method', 'global')}")
     
     split_mode = get_data_split_mode(config)
     if split_mode == 'fixed_test':
-        print(f"  划分模式: 固定prob_idx测试集")
-        print(f"  测试集prob_idx: {config['test_prob_idx']}")
-        print(f"  训练/验证比例: {config.get('train_val_ratio', 0.75):.2f}/{1-config.get('train_val_ratio', 0.75):.2f}")
+        print(f"  划分模式: 固定prob_idx")
+        print(f"  验证集prob_idx: {config.get('val_prob_idx', '未设置')}")
+        print(f"  测试集prob_idx: {config.get('test_prob_idx', [])}")
     elif split_mode == 'random':
         print(f"  划分模式: 随机划分")
         print(f"  测试集比例: {config.get('test_size', 0.01):.2f}")
     else:
         print(f"  划分模式: 原版格式（使用数据目录）")
+    
+    # 添加标准化详情
+    if config.get('standardization_method') == 'patientwise':
+        print(f"  标准化epsilon: {config.get('standardization_epsilon', 1e-10)}")
     print()
