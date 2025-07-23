@@ -80,7 +80,7 @@ EXPERIMENT_NAME="BrainVoxel_101Labels${EXPERIMENT_SUFFIX}_$(date +%Y%m%d_%H%M%S)
 # 运行命令
 CMD="python -u main.py \
     --experiment_name $EXPERIMENT_NAME \
-    --mat_file_path '/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat' \
+    --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat" \
     --standardization_method $STD_METHOD \
     --val_prob_idx 20 \
     --test_prob_idx 38 \
