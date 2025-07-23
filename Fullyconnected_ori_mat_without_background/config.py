@@ -311,27 +311,29 @@ def validate_background_config(config):
     include_bg = config.get('include_background_in_classes', False)
     num_classes = config.get('num_class', 102)
     
+
     if filter_bg:
         # 过滤背景模式
-        if num_classes != 102:
-            warnings.append(f"过滤背景模式下，num_class应为102，当前为{num_classes}")
+        if num_classes != 100:
+            warnings.append(f"过滤背景模式下，num_class应为100，当前为{num_classes}")
         if include_bg:
             warnings.append("过滤背景模式下，include_background_in_classes将被忽略")
     else:
         # 保留背景模式
         if include_bg:
             # 背景作为分类类别
-            if num_classes != 103:
-                errors.append(f"包含背景分类模式下，num_class应为103，当前为{num_classes}")
+            if num_classes != 101:
+                errors.append(f"包含背景分类模式下，num_class应为101，当前为{num_classes}")
             if bg_target != 0:
                 warnings.append(f"包含背景分类模式下，background_label_target应为0，当前为{bg_target}")
         else:
             # 背景被忽略
-            if num_classes != 102:
-                warnings.append(f"忽略背景模式下，num_class应为102，当前为{num_classes}")
+            if num_classes != 100:
+                warnings.append(f"忽略背景模式下，num_class应为100，当前为{num_classes}")
             if bg_target != -1:
                 warnings.append(f"忽略背景模式下，background_label_target应为-1，当前为{bg_target}")
     
+
     # 输出结果
     if errors:
         print("❌ 背景配置验证失败:")
