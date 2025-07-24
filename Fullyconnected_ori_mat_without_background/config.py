@@ -58,12 +58,13 @@ CONFIG = {
     'n_pca': 0,          # PCA保留的主成分数量，0表示不进行PCA
     'norm': True,        # 是否进行数据标准化
     
+    
     # 模型基本参数 - 101类数据集
     'model_name': 'BrainVoxel_101Class_MLP',
     'dataset_name': 'BrainVoxel_101Labels',
     'feature_dim': 341,  # 原始特征维度
     'num_class': 101,    # 类别数量（100个有效类别 + 1个背景 = 101）
-    
+
     # 模型架构参数
     'model_type': 'base_mlp',  # 'base_mlp', 'deep_mlp', 'residual_mlp'
     'hidden_units': [4096, 4096, 4096, 4096],  # MLP隐藏层大小
@@ -173,10 +174,9 @@ def _auto_detect_data_format(config):
     
     # 修改：更新标签格式说明
     print("标签格式说明:")
-    print('- 原始数据: 0=背景, 1-102=有效类别')
-    print('- 处理后数据: 1-102=有效类别 (背景已过滤)')  
-    print('- 训练时: 0-101=有效类别 (映射后)')
-    print("- 模型输出: 102个类别 (0-101)")
+    print('- 原始数据: 0=背景, 1-100=有效类别')
+    print('- 训练时: 0-100 (保持原始标签)')
+    print("- 模型输出: 101个类别 (0-100)")
 
 def save_config(config, filepath):
     """
@@ -306,15 +306,14 @@ def validate_background_config(config):
     errors = []
     warnings = []
     
-    filter_bg = config.get('filter_background', True)
-    bg_target = config.get('background_label_target', -1)
-    include_bg = config.get('include_background_in_classes', False)
-    num_classes = config.get('num_class', 102)
+    filter_bg = config.get('filter_background', False)
+    bg_target = config.get('background_label_target', 0)
+    include_bg = config.get('include_background_in_classes', True)
+    num_classes = config.get('num_class', 101)  # 默认改为101
     
-
     if filter_bg:
         # 过滤背景模式
-        if num_classes != 100:
+        if num_classes != 100:  # 过滤背景后应该是100个类
             warnings.append(f"过滤背景模式下，num_class应为100，当前为{num_classes}")
         if include_bg:
             warnings.append("过滤背景模式下，include_background_in_classes将被忽略")
@@ -322,13 +321,13 @@ def validate_background_config(config):
         # 保留背景模式
         if include_bg:
             # 背景作为分类类别
-            if num_classes != 101:
+            if num_classes != 101:  # 应该是101而不是103
                 errors.append(f"包含背景分类模式下，num_class应为101，当前为{num_classes}")
             if bg_target != 0:
                 warnings.append(f"包含背景分类模式下，background_label_target应为0，当前为{bg_target}")
         else:
             # 背景被忽略
-            if num_classes != 100:
+            if num_classes != 100:  # 忽略背景后是100个类
                 warnings.append(f"忽略背景模式下，num_class应为100，当前为{num_classes}")
             if bg_target != -1:
                 warnings.append(f"忽略背景模式下，background_label_target应为-1，当前为{bg_target}")

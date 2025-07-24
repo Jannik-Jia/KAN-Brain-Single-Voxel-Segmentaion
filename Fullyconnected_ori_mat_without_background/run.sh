@@ -14,6 +14,7 @@ echo "=========================================="
 echo "脑体素分类训练脚本 - 101标签数据集版本"
 echo "数据集: TRAIN38_no_label43.mat"
 echo "标签范围: 0-100 (背景0 + 有效标签1-100)"
+echo "自动模式: 将测试所有架构(base_mlp, deep_mlp, residual_mlp)"
 echo "=========================================="
 
 # 标准化方法选择
@@ -63,27 +64,34 @@ if [ "$STD_METHOD" = "patientwise" ]; then
     fi
 fi
 
-# 基础训练参数
+# 训练参数
 echo ""
-echo "设置训练参数:"
-read -p "训练轮数 (默认25): " epochs
+echo "设置优化参数:"
+read -p "贝叶斯优化试验次数 (默认50，将自动分配给3种架构): " n_trials
+read -p "最终训练轮数 (默认30): " epochs
 read -p "批次大小 (默认128): " batch_size
-read -p "学习率 (默认1e-5): " lr
 
-epochs=${epochs:-25}
+n_trials=${n_trials:-50}
+epochs=${epochs:-30}
 batch_size=${batch_size:-128}
-lr=${lr:-1e-5}
 
 # 实验名称
+EXPERIMENT_SUFFIX="${EXPERIMENT_SUFFIX}_AutoSelect"
 EXPERIMENT_NAME="BrainVoxel_101Labels${EXPERIMENT_SUFFIX}_$(date +%Y%m%d_%H%M%S)"
 
 # 运行命令
 echo ""
-echo "即将执行实验..."
+echo "=========================================="
+echo "实验配置摘要:"
+echo "- 自动测试3种架构: base_mlp, deep_mlp, residual_mlp"
+echo "- 贝叶斯优化试验: ${n_trials}次"
+echo "- 每种架构至少测试: $((n_trials/3))次"
+echo "- 最终选择: 验证集F1分数最高的架构和参数"
+echo "=========================================="
 read -p "确认执行? (y/n): " confirm
 
 if [[ $confirm =~ ^[Yy]$ ]]; then
-    # 直接在nohup中构建命令，避免引号问题
+    # 运行贝叶斯优化，自动选择最佳架构
     nohup python -u main.py \
         --experiment_name "$EXPERIMENT_NAME" \
         --mat_file_path "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/DATA/TRAIN38_no_label43.mat" \
@@ -93,17 +101,10 @@ if [[ $confirm =~ ^[Yy]$ ]]; then
         --batch_size "$batch_size" \
         --epochs "$epochs" \
         --device 0 \
-        --model_type base_mlp \
-        --hidden_units "4096,4096,4096,4096" \
-        --activation relu \
-        --dropout_rate 0.5 \
-        --lr "$lr" \
-        --weight_decay 1e-5 \
-        --optimizer adam \
-        --use_lr_scheduler \
-        --lr_scheduler_type cosine \
         --save_dir ./results \
         --log_dir ./logs \
+        --run_bayesian_opt \
+        --n_trials "$n_trials" \
         $BG_PARAMS \
         $SAMPLER_PARAMS \
         > "logs/${EXPERIMENT_NAME}.log" 2>&1 &
@@ -116,10 +117,14 @@ if [[ $confirm =~ ^[Yy]$ ]]; then
     echo "进程ID: $PID"
     echo "标准化方法: $STD_METHOD"
     echo "类别数: $([ "$bg_choice" = "2" ] && echo "100" || echo "101")"
+    echo "贝叶斯优化: ${n_trials}次试验"
     echo "=========================================="
     echo ""
     echo "监控命令:"
     echo "tail -f logs/${EXPERIMENT_NAME}.log"
+    echo ""
+    echo "查看架构分布:"
+    echo "grep '当前架构分布情况' -A 5 logs/${EXPERIMENT_NAME}.log"
     echo ""
     
     # 等待并显示初始日志

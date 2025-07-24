@@ -30,25 +30,25 @@ def process_labels_for_training(labels, config):
     
     if config.get('filter_background', False):
         # 模式1: 过滤背景（假设背景已经在数据加载时过滤）
-        # 标签应该是1-100，映射到0-99
+        # 此时传入的标签应该是1-100，需要映射到0-99
         processed = labels - 1
-        # 确保没有负值（防止意外的背景标签）
+        # 确保没有负值
         processed = np.maximum(processed, 0)
         return processed
     else:
         # 模式2: 保留背景
         if config.get('include_background_in_classes', True):
             # 子模式2a: 背景作为分类类别
-            # 0-100 → 0-100 (不变)
+            # 标签0-100保持不变
             return labels
         else:
             # 子模式2b: 背景被忽略
-            # 0 → -1, 1-100 → 0-99
+            # 标签0 → -1 (在损失函数中忽略)
+            # 标签1-100 → 0-99
             processed = labels.copy()
             processed[labels == 0] = -1
             processed[labels > 0] = labels[labels > 0] - 1
             return processed
-
 def should_filter_background_samples(config):
     """
     判断是否需要在数据加载时过滤背景样本
@@ -116,9 +116,9 @@ def get_effective_num_classes(config):
         int: 实际类别数量
     """
     if config.get('filter_background', False):
-        return 100  # 过滤背景：1-100 → 0-99
+        return 100  # 过滤背景：移除标签0的样本，标签1-100映射到0-99
     else:
         if config.get('include_background_in_classes', True):
-            return 101  # 包含背景：0-100 → 0-100
+            return 101  # 包含背景：标签0-100保持不变，共101个类
         else:
-            return 100  # 忽略背景：0→-1, 1-100 → 0-99
+            return 100  # 忽略背景：标签0→-1(忽略)，标签1-100映射到0-99

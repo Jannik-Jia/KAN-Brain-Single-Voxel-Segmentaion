@@ -14,127 +14,113 @@ from sklearn.metrics import f1_score
 from models import get_model
 from utils.label_processing import create_criterion_with_background_config
 
-
-def create_mlp_model(trial, input_dim, num_classes, param_space=None):
-    """
-    使用Optuna trial创建MLP模型
-    
-    参数:
-        trial: Optuna trial对象
-        input_dim: 输入特征维度
-        num_classes: 类别数量
-        param_space: 参数空间字典
-    
-    返回:
-        model: MLP模型
-    """
-    if param_space is None:
-        # 默认参数空间
-        param_space = {
-            'dropout_rate': (0.3, 0.7),
-            'activation': ['relu', 'gelu', 'swish'],
-            'layer_sizes': [
-                [4096, 4096, 4096, 4096],  # 标准4x4096网络
-                [3072, 3072, 3072, 3072],  # 更小的网络
-                [2048, 4096, 4096, 2048]   # 钟形网络
-            ]
-        }
-    
-    # 从参数空间采样
-    dropout_rate = trial.suggest_float('dropout_rate', *param_space['dropout_rate'])
-    activation = trial.suggest_categorical('activation', param_space['activation'])
-    layer_sizes_idx = trial.suggest_int('layer_sizes_idx', 0, len(param_space['layer_sizes'])-1)
-    hidden_dims = param_space['layer_sizes'][layer_sizes_idx]
-    
-    # 创建模型
-    model_type = trial.suggest_categorical('model_type', ['base_mlp', 'deep_mlp', 'residual_mlp'])
-    model = get_model(
-        model_type,
-        input_dim=input_dim,
-        hidden_dims=hidden_dims,
-        num_classes=num_classes,
-        dropout_rate=dropout_rate,
-        activation=activation
-    )
-    
-    return model
-
 def objective(trial, data_loaders, input_dim, num_classes, device, param_space=None, config=None):
     """
-    Optuna优化目标函数，保持共享参数空间一致性
+    扩展版的Optuna优化目标函数 - 更大的搜索空间
     """
-    # 配置信息
     epochs = config.get('epochs', 30) if config else 30
-    # 确保epochs至少为5，防止t_max参数出错
-    train_epochs = max(5, min(epochs, 15))  # 贝叶斯优化时使用较少的epoch，但至少5轮
+    train_epochs = max(5, min(epochs, 20))  # 优化时使用15-20轮
     
-    
-    # ===== 共享参数空间（所有架构通用）=====
-    # 这些参数对所有架构保持一致
+    # ===== 大幅扩展的共享参数空间 =====
     shared_params = {
-        'learning_rate': trial.suggest_float('learning_rate', 1e-6, 1e-3, log=True),
-        'weight_decay': trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True),
-        'optimizer': trial.suggest_categorical('optimizer', ['adam', 'adamw']),
-        'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.7),
+        # 学习率：扩大范围，更细致的搜索
+        'learning_rate': trial.suggest_float('learning_rate', 1e-7, 1e-2, log=True),
+        
+        # 权重衰减：使用log scale，但避免0值
+        'weight_decay': trial.suggest_float('weight_decay', 1e-8, 1e-2, log=True),
+        
+        # 优化器：添加更多选项
+        'optimizer': trial.suggest_categorical('optimizer', ['adam', 'adamw', 'sgd', 'rmsprop']),
+        
+        # Dropout：更大范围
+        'dropout_rate': trial.suggest_float('dropout_rate', 0.0, 0.8),
+        
+        # 激活函数：只使用现有模型支持的激活函数
         'activation': trial.suggest_categorical('activation', ['relu', 'gelu', 'swish']),
-        'lr_scheduler': trial.suggest_categorical('lr_scheduler', ['cosine', 'step', 'plateau', 'none']),
+        
+        # 学习率调度器
+        'lr_scheduler': trial.suggest_categorical('lr_scheduler', 
+            ['cosine', 'step', 'plateau', 'none']),
     }
     
-    # 🔧 新增：是否将标准化方法作为超参数
-    if config and config.get('optimize_standardization', False):
-        standardization_method = trial.suggest_categorical('standardization_method', ['global', 'patientwise'])
-        # 临时更新config以使用试验的标准化方法
-        original_method = config.get('standardization_method', 'global')
-        config['standardization_method'] = standardization_method
-        
-        # 重新加载数据（如果标准化方法改变）
-        if standardization_method != original_method:
-            print(f"试验使用标准化方法: {standardization_method}")
-            # 这里需要重新加载数据
-            # 注意：这会增加计算开销，建议固定标准化方法
+    # SGD特有参数
+    if shared_params['optimizer'] == 'sgd':
+        shared_params['momentum'] = trial.suggest_float('momentum', 0.5, 0.99)
+        shared_params['nesterov'] = trial.suggest_categorical('nesterov', [True, False])
     
-    # 首先选择模型类型
+    # RMSprop特有参数
+    if shared_params['optimizer'] == 'rmsprop':
+        shared_params['rmsprop_alpha'] = trial.suggest_float('rmsprop_alpha', 0.9, 0.999)
+    
+    # 模型类型
     model_type = trial.suggest_categorical('model_type', ['base_mlp', 'deep_mlp', 'residual_mlp'])
     
-    # ===== 架构特定参数空间 =====
+    # ===== 架构特定参数空间（大幅扩展）=====
     if model_type == 'base_mlp':
-        # 基础MLP特有参数
+        # 更多层数和宽度选项
         layer_sizes_options = [
-            [4096, 4096, 4096, 4096],  # 标准4x4096网络
-            [3072, 3072, 3072, 3072],  # 更小的网络
-            [2048, 2048, 2048, 2048],  # 更小的网络
+            [8192, 8192, 8192, 8192],           # 超大网络
+            [6144, 6144, 6144, 6144],           # 大网络
+            [4096, 4096, 4096, 4096],           # 标准大网络
+            [3072, 3072, 3072, 3072],           # 中等网络
+            [2048, 2048, 2048, 2048],           # 较小网络
+            [1024, 1024, 1024, 1024],           # 小网络
+            [4096, 2048, 1024, 512],            # 递减网络
+            [512, 1024, 2048, 4096],            # 递增网络
+            [2048, 4096, 4096, 2048],           # 钟形网络
+            [4096, 2048, 2048, 4096],           # 沙漏网络
+            [1024, 2048, 4096, 2048, 1024],    # 5层钟形
+            [4096, 4096, 4096, 4096, 4096, 4096], # 6层网络
         ]
         layer_sizes_idx = trial.suggest_int('layer_sizes_idx', 0, len(layer_sizes_options)-1)
         hidden_dims = layer_sizes_options[layer_sizes_idx]
-        model_params = {}  # 基础MLP没有额外参数
+        model_params = {}
         
     elif model_type == 'deep_mlp':
-        # 深层MLP特有参数
-        depth = trial.suggest_int('depth', 5, 8)  # 更深的网络
-        width_factor = trial.suggest_categorical('width_factor', [1024, 2048, 3072])
-        hidden_dims = [width_factor] * depth
+        # 深度网络：更多层数选择
+        depth = trial.suggest_int('depth', 4, 12)  # 4-12层
+        
+        # 宽度策略
+        width_strategy = trial.suggest_categorical('width_strategy', 
+            ['constant', 'decreasing', 'increasing', 'hourglass', 'bell'])
+        
+        base_width = trial.suggest_categorical('base_width', 
+            [512, 768, 1024, 1536, 2048, 3072, 4096, 6144])
+        
+        # 根据策略生成层宽度
+        if width_strategy == 'constant':
+            hidden_dims = [base_width] * depth
+        elif width_strategy == 'decreasing':
+            hidden_dims = [max(256, int(base_width * (0.8 ** i))) for i in range(depth)]
+        elif width_strategy == 'increasing':
+            hidden_dims = [min(8192, int(base_width * (1.2 ** i))) for i in range(depth)]
+        elif width_strategy == 'hourglass':
+            mid = depth // 2
+            hidden_dims = ([max(256, int(base_width * (0.7 ** i))) for i in range(mid)] + 
+                          [max(256, int(base_width * (0.7 ** (depth-i-1)))) for i in range(mid, depth)])
+        else:  # bell
+            mid = depth // 2
+            hidden_dims = ([min(8192, int(base_width * (1.3 ** i))) for i in range(mid)] + 
+                          [min(8192, int(base_width * (1.3 ** (depth-i-1)))) for i in range(mid, depth)])
+        
         model_params = {
-            'use_skip_connections': trial.suggest_categorical('use_skip_connections', [True, False])
+            'use_skip_connections': trial.suggest_categorical('use_skip_connections', [True, False]),
         }
         
     elif model_type == 'residual_mlp':
-        # 残差MLP特有参数
-        layer_sizes_options = [
-            [4096, 4096, 4096, 4096],  # 标准尺寸
-            [2048, 2048, 2048, 2048],  # 较小尺寸
-            [1024, 2048, 2048, 1024],  # 钟形结构
-            [4096, 2048, 2048, 4096]   # 沙漏形结构
-        ]
-        layer_sizes_idx = trial.suggest_int('layer_sizes_idx', 0, len(layer_sizes_options)-1)
-        hidden_dims = layer_sizes_options[layer_sizes_idx]
+        # 残差网络：更多配置选项
+        num_blocks = trial.suggest_int('num_blocks', 2, 8)
+        block_width = trial.suggest_categorical('block_width', 
+            [512, 768, 1024, 1536, 2048, 3072, 4096, 6144])
+        
+        # 每个块使用相同宽度
+        hidden_dims = [block_width] * (num_blocks * 2)  # 每个残差块通常有2层
+        
         model_params = {
             'use_bottleneck': trial.suggest_categorical('use_bottleneck', [True, False]),
         }
-        # 只有当use_bottleneck为True时才添加bottleneck_factor参数
         if model_params['use_bottleneck']:
-            model_params['bottleneck_factor'] = trial.suggest_float('bottleneck_factor', 0.25, 0.5)
-        else:
-            model_params['bottleneck_factor'] = 0.5  # 默认值
+            model_params['bottleneck_factor'] = trial.suggest_float('bottleneck_factor', 0.1, 0.5)
     
     # 创建模型
     model_kwargs = {
@@ -143,7 +129,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         'num_classes': num_classes,
         'dropout_rate': shared_params['dropout_rate'],
         'activation': shared_params['activation'],
-        **model_params  # 添加模型特定参数
+        **model_params
     }
     
     model = get_model(model_type, **model_kwargs)
@@ -156,61 +142,83 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
             lr=shared_params['learning_rate'], 
             weight_decay=shared_params['weight_decay']
         )
-    else:  # adamw
+    elif shared_params['optimizer'] == 'adamw':
         optimizer = torch.optim.AdamW(
             model.parameters(), 
             lr=shared_params['learning_rate'], 
             weight_decay=shared_params['weight_decay']
         )
+    elif shared_params['optimizer'] == 'sgd':
+        optimizer = torch.optim.SGD(
+            model.parameters(), 
+            lr=shared_params['learning_rate'], 
+            weight_decay=shared_params['weight_decay'],
+            momentum=shared_params.get('momentum', 0.9),
+            nesterov=shared_params.get('nesterov', False)
+        )
+    elif shared_params['optimizer'] == 'rmsprop':
+        optimizer = torch.optim.RMSprop(
+            model.parameters(), 
+            lr=shared_params['learning_rate'], 
+            weight_decay=shared_params['weight_decay'],
+            alpha=shared_params.get('rmsprop_alpha', 0.99)
+        )
     
     # 学习率调度器
     lr_scheduler = None
     if shared_params['lr_scheduler'] == 'cosine':
-        # 修复t_max参数：确保low <= high
-        t_max = min(train_epochs, max(2, train_epochs // 2))  # 确保t_max在合理范围内
-        eta_min = trial.suggest_float('cosine_eta_min', 1e-7, 1e-5, log=True)
+        t_max = train_epochs
+        eta_min = trial.suggest_float('cosine_eta_min', 1e-8, 1e-6, log=True)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=t_max, eta_min=eta_min
         )
     elif shared_params['lr_scheduler'] == 'step':
-        # 确保step_size <= train_epochs
         step_size = trial.suggest_int('step_size', 1, max(1, train_epochs // 2))
         gamma = trial.suggest_float('step_gamma', 0.1, 0.5)
         lr_scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=step_size, gamma=gamma
         )
     elif shared_params['lr_scheduler'] == 'plateau':
-        # 确保patience不超过训练轮数
         patience = trial.suggest_int('plateau_patience', 1, max(1, train_epochs // 3))
         factor = trial.suggest_float('plateau_factor', 0.1, 0.5)
         threshold = trial.suggest_float('plateau_threshold', 1e-4, 1e-2, log=True)
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='max', factor=factor, patience=patience, 
-            threshold=threshold, verbose=True
+            threshold=threshold, verbose=False
         )
     
+    # 创建损失函数
     criterion = create_criterion_with_background_config(config)
     
-    # 训练模型 - 简化版本，只训练几个epoch用于评估
+    # 训练模型
     val_f1_values = []
     
-    # 训练循环
     for epoch in range(train_epochs):
         model.train()
+        train_loss = 0
+        num_batches = 0
+        
         for batch_idx, (data, target) in enumerate(data_loaders['train']):
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
             output = model(data)
             loss = criterion(output, target)
             loss.backward()
+            
+            # 梯度裁剪（如果需要）
+            if trial.suggest_categorical('use_gradient_clip', [True, False]):
+                grad_clip_value = trial.suggest_float('grad_clip_value', 0.5, 5.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_value)
+            
             optimizer.step()
+            train_loss += loss.item()
+            num_batches += 1
         
         # 验证
         model.eval()
         all_preds = []
         all_targets = []
         
-        # 🔧 修改：考虑ignore_index的验证
         from utils.label_processing import get_ignore_index
         ignore_index = get_ignore_index(config) if config else None
         
@@ -221,13 +229,11 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
                 _, preds = torch.max(output, 1)
                 
                 if ignore_index is not None:
-                    # 只评估非ignore标签
                     valid_mask = (target != ignore_index)
                     if valid_mask.sum() > 0:
                         all_preds.extend(preds[valid_mask].cpu().numpy())
                         all_targets.extend(target[valid_mask].cpu().numpy())
                 else:
-                    # 评估所有标签
                     all_preds.extend(preds.cpu().numpy())
                     all_targets.extend(target.cpu().numpy())
         
@@ -252,11 +258,8 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         # 提前停止
         if trial.should_prune():
             raise optuna.TrialPruned()
-    # 在函数结束前恢复原始配置（如果修改了）
-    if config and config.get('optimize_standardization', False):
-        config['standardization_method'] = original_method
     
-    return max(val_f1_values)
+    return max(val_f1_values) if val_f1_values else 0.0
 
 
 # 新增函数：针对Patientwise的专门优化

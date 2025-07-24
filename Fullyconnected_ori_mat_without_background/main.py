@@ -471,18 +471,13 @@ def main():
     
     # 根据背景处理设置调整类别数
     if not config.get('filter_background', False) and config.get('include_background_in_classes', True):
-        cur_num_class = config.get('num_class', 102)
-        if cur_num_class == 103:
-            print("⚠️ 使用原始数据集，背景作为分类类别时，类别数为103")
-            config['num_class'] = 103  # 102有效类别 + 1背景
-        elif cur_num_class == 102:
-            print("⚠️ 检测到可能使用新数据集（移除了43号标签），预设类别数为102")
-            config['num_class'] = 102  # 101有效类别 + 1背景
-        elif cur_num_class == 101:
-            print("⚠️ 检测到特殊数据集（移除了2个标签），预设类别数为101")
+        cur_num_class = config.get('num_class', 101)
+        if cur_num_class == 101:
+            print("✅ 使用101类数据集，背景作为第0类")
             config['num_class'] = 101  # 100有效类别 + 1背景
         else:
-            print(f"⚠️ 非常规类别设置：当前num_class={cur_num_class}，请核查类别分布")
+            print(f"⚠️ 非常规类别设置：当前num_class={cur_num_class}，使用配置值")
+
 
     
     # 设置实验名称
