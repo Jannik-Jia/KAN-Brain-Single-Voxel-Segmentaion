@@ -281,7 +281,7 @@ def run_patientwise_optimization(data_loaders, input_dim, num_classes, device,
     # 定义参数空间 - 可能需要针对patientwise调整
     param_space = {
         'learning_rate': (1e-6, 1e-4),  # 可能需要更小的学习率
-        'batch_size': [64, 128, 256],   # 批次大小可能影响患者分布
+        'batch_size': [128, 256, 512], 
         'weight_decay': (1e-6, 1e-3),
         'dropout_rate': (0.3, 0.7),      # 可能需要更高的dropout
         'activation': ['relu', 'gelu', 'swish'],
