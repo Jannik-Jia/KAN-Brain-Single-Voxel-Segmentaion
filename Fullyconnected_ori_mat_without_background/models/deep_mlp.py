@@ -18,7 +18,7 @@ class DeepMLP(nn.Module):
         super(DeepMLP, self).__init__()
         
         self.use_skip_connections = use_skip_connections
-        self.input_dim = input_dim  # 保存以供get_model_info使用
+        self.input_dim = input_dim
         self.hidden_dims = hidden_dims
         self.num_classes = num_classes
         self.dropout_rate = dropout_rate
@@ -28,7 +28,7 @@ class DeepMLP(nn.Module):
         if activation == 'relu':
             self.act_fn = nn.ReLU()
         elif activation == 'gelu':
-            self.act_fn = nn.GELU()
+            self.act_fn = nn.GELU()  
         elif activation == 'swish':
             self.act_fn = nn.SiLU()
         else:
@@ -50,19 +50,23 @@ class DeepMLP(nn.Module):
             self.layers.append(self.act_fn)
             self.layers.append(nn.Dropout(dropout_rate))
             
-            # 跳跃连接适配器 - 修复：正确计算源层和目标层的维度
+            # 跳跃连接适配器
             if use_skip_connections and i > 0:
-                # 从i-1层跳到i+1层
-                source_dim = hidden_dims[i-1] if i > 0 else hidden_dims[0]
+                # 从第 i-1 层的输出（维度是 hidden_dims[i-1]）
+                # 跳到第 i+1 层的输入（与第 i 层的输出维度相同，即 hidden_dims[i+1]）
+                source_dim = hidden_dims[i-1]
                 target_dim = hidden_dims[i+1]
                 
                 if source_dim != target_dim:
                     self.skip_adapters.append(nn.Linear(source_dim, target_dim))
                 else:
                     self.skip_adapters.append(nn.Identity())
+            else:
+                # 为了保持索引一致性，不满足条件时添加None
+                self.skip_adapters.append(None)
         
         # 最后的分类层
-        self.layers.append(nn.Linear(hidden_dims[-1], num_classes))
+        self.output_layer = nn.Linear(hidden_dims[-1], num_classes)
 
     def forward(self, x):
         """
@@ -73,35 +77,33 @@ class DeepMLP(nn.Module):
         x = self.layers[1](x)  # 激活
         x = self.layers[2](x)  # dropout
         
-        layer_outputs = [x]  # 保存中间层输出用于跳跃连接
+        layer_outputs = [x]  # 保存每层的输出，layer_outputs[i] 是第 i 层的输出
         
         # 处理中间隐藏层
         layer_idx = 3
-        skip_idx = 0
         
-        num_hidden_layers = (len(self.layers) - 4) // 3  # 减去输入层(3个)和输出层(1个)
+        num_hidden_layers = (len(self.layers) - 3) // 3  # 减去输入层(3个)
         
         for i in range(num_hidden_layers):
-            # 保存当前层输入
-            current_input = x
-            
             # 处理当前块
             x = self.layers[layer_idx](x)    # Linear
             x = self.layers[layer_idx+1](x)  # Activation
             x = self.layers[layer_idx+2](x)  # Dropout
             
-            # 添加跳跃连接（如果启用）
-            if self.use_skip_connections and i > 0 and skip_idx < len(self.skip_adapters):
-                # 使用适配器调整维度
-                skip_connection = self.skip_adapters[skip_idx](layer_outputs[-1])
+            # 添加跳跃连接
+            if (self.use_skip_connections and 
+                i > 0 and 
+                i < len(self.skip_adapters) and 
+                self.skip_adapters[i] is not None):
+                # 从第 i-1 层的输出跳到当前（第 i+1 层）
+                skip_connection = self.skip_adapters[i](layer_outputs[i-1])
                 x = x + skip_connection
-                skip_idx += 1
             
             layer_outputs.append(x)
             layer_idx += 3
         
         # 输出层
-        x = self.layers[-1](x)
+        x = self.output_layer(x)
         
         return x
     
