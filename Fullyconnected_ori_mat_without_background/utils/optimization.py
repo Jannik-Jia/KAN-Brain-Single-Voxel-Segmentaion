@@ -184,7 +184,7 @@ def objective(trial, data_loaders, input_dim, num_classes, device, param_space=N
         threshold = trial.suggest_float('plateau_threshold', 1e-4, 1e-2, log=True)
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='max', factor=factor, patience=patience, 
-            threshold=threshold, verbose=False
+            threshold=threshold
         )
     
     # 创建损失函数

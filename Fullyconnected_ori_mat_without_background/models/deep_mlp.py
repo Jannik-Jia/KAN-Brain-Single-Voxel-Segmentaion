@@ -24,8 +24,16 @@ class DeepMLP(nn.Module):
         self.dropout_rate = dropout_rate
         self.activation_name = activation
         
-        # ... 激活函数选择代码 ...
-        
+        # 选择激活函数
+        if activation == 'relu':
+            self.act_fn = nn.ReLU()
+        elif activation == 'gelu':
+            self.act_fn = nn.GELU()
+        elif activation == 'swish':
+            self.act_fn = nn.SiLU()
+        else:
+            self.act_fn = nn.ReLU()
+            
         # 构建网络层
         self.layers = nn.ModuleList()
         self.skip_adapters = nn.ModuleList()
