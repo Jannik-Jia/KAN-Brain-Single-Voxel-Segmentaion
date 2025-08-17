@@ -1,0 +1,98 @@
+def get_spectra_at_slice(mdata, region, z):
+"""
+Retrieve the spectra data for an entire slice at index z.
+
+Parameters:
+- mdata: 2D NumPy array with shape (num_voxels, num_spectra)
+- region: 3D boolean NumPy array defining the valid voxel positions (mask)
+- z: Integer representing the slice index
+
+Returns:
+- slice_spectra: 3D NumPy array with shape (x_dim, y_dim, num_spectra)
+"""
+
+x_dim, y_dim, z_dim = region.shape
+num_spectra = mdata.shape[1]
+
+if not (0 <= z < z_dim):
+raise IndexError(f"Slice index z={z} is out of bounds.")
+
+# Extract the region mask for the slice
+region_slice = region[:, :, z]
+
+# Number of valid voxels in the slice
+num_voxels_in_slice = np.sum(region_slice)
+
+# Initialize the slice_spectra array
+slice_spectra = np.zeros((x_dim, y_dim, num_spectra), dtype=mdata.dtype)
+
+if num_voxels_in_slice == 0:
+return slice_spectra
+
+# Flatten the region mask for the entire volume
+region_flat = region.flatten(order='F')
+print('flat region shape:',region_flat.shape)
+
+# Get the indices of all valid voxels in the region
+voxel_indices_in_mdata = np.where(region_flat)[0]
+
+# Flatten the region mask for the slice
+region_slice_flat = region_slice.flatten(order='F')
+
+# Get the linear indices of all voxels in the slice
+x_indices, y_indices = np.meshgrid(np.arange(x_dim), np.arange(y_dim), indexing='ij')
+x_indices_flat = x_indices.flatten(order='F')
+y_indices_flat = y_indices.flatten(order='F')
+z_indices_flat = np.full_like(x_indices_flat, z)
+
+voxel_linear_indices_slice = np.ravel_multi_index((x_indices_flat, y_indices_flat, z_indices_flat), region.shape, order='F')
+
+# Select only the valid voxel linear indices in the slice
+valid_voxel_linear_indices_slice = voxel_linear_indices_slice[region_slice_flat]
+
+# Map the valid voxel linear indices to positions in mdata
+# Since voxel_indices_in_mdata is sorted, we can use searchsorted
+positions_in_mdata = np.searchsorted(voxel_indices_in_mdata, valid_voxel_linear_indices_slice)
+
+# Retrieve the spectra
+spectra = mdata[positions_in_mdata, :] # shape: (num_valid_voxels_in_slice, num_spectra)
+
+# Place the spectra into slice_spectra
+valid_x = x_indices_flat[region_slice_flat]
+valid_y = y_indices_flat[region_slice_flat]
+slice_spectra[valid_x, valid_y, :] = spectra
+
+return slice_spectra
+
+def revert_reshape(array, region):
+"""
+Reshape 1D array with voxel data to 3D big_img based on region mask.
+
+Parameters:
+- array: 1D numpy array with shape (num_voxels,)
+- region: 3D numpy array defining the valid voxel positions (mask)
+
+Returns:
+- big_img: 3D numpy array of reshaped voxel data
+"""
+if array.ndim == 1:
+array = array[:, np.newaxis]
+
+num_features = array.shape[1]
+big_img = np.zeros((*region.shape, num_features), dtype=array.dtype)
+big_img = big_img.reshape(-1,array.shape[1],order='F')
+big_img[region.flatten(order='F')] = array
+big_img = big_img.reshape((*region.shape, num_features),order='F')
+
+big_img = big_img.squeeze()
+""" for ii in range(num_features):
+img = np.zeros(region.shape, dtype=array.dtype)
+img_index = img.ravel(order='F') # Use Fortran order
+template_index = region.ravel(order='F') # Use Fortran order
+img_index[template_index.astype(bool)] = array[:, ii]
+img = img_index.reshape(region.shape, order='F') # Use Fortran order
+big_img[:, :, :, ii] = img """
+
+return big_img
+
+
