@@ -343,10 +343,10 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='批量转换MRI数据到3D格式（验证版）')
     parser.add_argument('--data-dir', type=str, 
-                       default='/home/jannik/Documents/mri_mat_onehot/1D',
+                       default='/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D',
                        help='输入数据目录')
     parser.add_argument('--output-dir', type=str,
-                       default='/home/jannik/Documents/mri_mat_onehot/3D_validated',
+                       default='/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated',
                        help='输出目录')
     parser.add_argument('--start', type=int, default=1,
                        help='开始的prob_idx')
@@ -388,8 +388,8 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         print("使用默认设置运行批量转换...")
         converter = ValidatedBatchConverter(
-            data_dir=Path("/home/jannik/Documents/mri_mat_onehot/1D"),
-            output_dir=Path("/home/jannik/Documents/mri_mat_onehot/3D_validated")
+            data_dir=Path("/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D"),
+            output_dir=Path("/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated")
         )
         
         response = input("\n选择模式:\n1. 测试（只处理第一个被试）\n2. 处理所有38个被试\n3. 处理前5个被试\n请输入 (1/2/3): ")
