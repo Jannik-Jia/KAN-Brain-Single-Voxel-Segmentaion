@@ -116,16 +116,29 @@ class Brain3DPatchDataset(Dataset):
         """加载单个被试的3D数据"""
         with h5py.File(mat_file, 'r') as f:
             # 加载必要数据
-            data = f['data'][()]  # (384, 336, 256, 351)
-            region_labels = f['region_labels'][()]  # (384, 336, 256)
-            region_mask = f['region_mask'][()]  # (384, 336, 256)
+            data = f['data'][()]
+            region_labels = f['region_labels'][()]
+            region_mask = f['region_mask'][()]
             
-            # 转置以适应Python的行优先顺序
-            data = data.T  # -> (351, 256, 336, 384)
-            data = np.transpose(data, (3, 2, 1, 0))  # -> (384, 336, 256, 351)
+            print(f"原始数据形状: data={data.shape}, labels={region_labels.shape}, mask={region_mask.shape}")
             
-            region_labels = region_labels.T
-            region_mask = region_mask.T
+            # 根据实际的数据格式进行正确的转置
+            if data.shape[0] == 351:
+                # 如果第一个维度是351，说明是 (351, 384, 336, 256) 格式
+                data = np.transpose(data, (1, 2, 3, 0))  # -> (384, 336, 256, 351)
+            elif data.shape[-1] == 351:
+                # 如果最后一个维度是351，已经是正确格式
+                pass
+            else:
+                raise ValueError(f"无法识别数据格式，shape: {data.shape}")
+            
+            # labels和mask的处理
+            if region_labels.shape != (384, 336, 256):
+                region_labels = region_labels.T
+            if region_mask.shape != (384, 336, 256):
+                region_mask = region_mask.T
+                
+            print(f"转置后数据形状: data={data.shape}, labels={region_labels.shape}, mask={region_mask.shape}")
             
         return {
             'data': data.astype(np.float32),

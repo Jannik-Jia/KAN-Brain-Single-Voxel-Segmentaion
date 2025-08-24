@@ -3,7 +3,7 @@
 # 分别训练3×3和7×7模型，每个被试作为测试集运行一次
 
 # 设置参数
-DATA_DIR="/path/to/your/3d/mat/files"  # 请修改为实际的3D MAT文件目录
+DATA_DIR="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/" 
 OUTPUT_DIR="./results_leave_one_out"
 EPOCHS=50
 BATCH_SIZE=256

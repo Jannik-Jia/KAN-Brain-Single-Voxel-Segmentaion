@@ -28,18 +28,28 @@ def test_load_mat_file(mat_file: Path):
             data = f['data'][()]
             print(f"\n原始 'data' 形状: {data.shape}")
             
-            # 转置以适应Python
-            data = data.T
-            if len(data.shape) == 4:
-                # 假设原始是 (351, 256, 336, 384)
-                data = np.transpose(data, (3, 2, 1, 0))  # -> (384, 336, 256, 351)
+            # 根据实际的数据格式进行正确的转置
+            if data.shape[0] == 351:
+                # 如果第一个维度是351，说明是 (351, 384, 336, 256) 格式
+                data = np.transpose(data, (1, 2, 3, 0))  # -> (384, 336, 256, 351)
+            elif data.shape[-1] == 351:
+                # 如果最后一个维度是351，已经是正确格式
+                pass
+            else:
+                print(f"警告：无法识别数据格式，shape: {data.shape}")
+                
             print(f"转置后 'data' 形状: {data.shape}")
             print(f"  数据范围: [{data.min():.2f}, {data.max():.2f}]")
             print(f"  数据类型: {data.dtype}")
+            print(f"  特征维度: {data.shape[-1]}")
         
         if 'region_labels' in f:
             labels = f['region_labels'][()]
-            labels = labels.T
+            
+            # labels的处理
+            if labels.shape != (384, 336, 256):
+                labels = labels.T
+                
             print(f"\n'region_labels' 形状: {labels.shape}")
             unique_labels = np.unique(labels)
             print(f"  唯一标签数: {len(unique_labels)}")
@@ -54,7 +64,11 @@ def test_load_mat_file(mat_file: Path):
         
         if 'region_mask' in f:
             mask = f['region_mask'][()]
-            mask = mask.T
+            
+            # mask的处理
+            if mask.shape != (384, 336, 256):
+                mask = mask.T
+                
             print(f"\n'region_mask' 形状: {mask.shape}")
             valid_voxels = np.sum(mask > 0)
             total_voxels = mask.size
@@ -67,11 +81,29 @@ def test_patch_extraction(mat_file: Path, patch_size: int = 3):
     
     with h5py.File(mat_file, 'r') as f:
         # 加载数据
-        data = f['data'][()].T
-        data = np.transpose(data, (3, 2, 1, 0))  # (384, 336, 256, 351)
+        data = f['data'][()]
+        labels = f['region_labels'][()]
+        mask = f['region_mask'][()]
         
-        labels = f['region_labels'][()].T
-        mask = f['region_mask'][()].T
+        print(f"原始数据形状: data={data.shape}, labels={labels.shape}, mask={mask.shape}")
+        
+        # 根据实际的数据格式进行正确的转置
+        if data.shape[0] == 351:
+            # 如果第一个维度是351，说明是 (351, 384, 336, 256) 格式
+            data = np.transpose(data, (1, 2, 3, 0))  # -> (384, 336, 256, 351)
+        elif data.shape[-1] == 351:
+            # 如果最后一个维度是351，已经是正确格式
+            pass
+        else:
+            print(f"警告：无法识别数据格式，shape: {data.shape}")
+        
+        # labels和mask的处理
+        if labels.shape != (384, 336, 256):
+            labels = labels.T
+        if mask.shape != (384, 336, 256):
+            mask = mask.T
+            
+        print(f"转置后数据形状: data={data.shape}, labels={labels.shape}, mask={mask.shape}")
         
         # 找到一个有效体素
         valid_positions = np.where((mask > 0) & (labels > 0))
