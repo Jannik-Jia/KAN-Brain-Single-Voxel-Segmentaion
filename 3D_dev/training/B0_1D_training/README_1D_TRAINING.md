@@ -1,0 +1,220 @@
+# 使用1D训练集进行训练并映射回3D系统
+
+## 概述
+
+这个系统使用1D训练集（38个probanden的1D MAT文件，去除_3d后缀）进行训练，复现了Alex的网络架构，但适配了我们的351维输入（原始是341维）。训练采用Leave-one-out策略，预测后将softmax概率映射回3D体积，便于后续分析。
+
+## 系统特点
+
+- **使用1D训练集**：直接使用multidim_data和seg_one_hot数据
+- **Leave-one-out训练**：37个probanden训练，1个测试
+- **完全复现Alex的架构**：4层4096神经元的全连接网络
+- **相同的超参数**：学习率1e-5，批次128，25个epochs
+- **L2正则化**：weight_decay=0.00001（仅对权重）
+- **评估指标**：每个epoch记录train/test的loss和macro F1
+- **3D映射**：使用测试probanden的3D mask将预测映射回(384,336,256,102)
+- **完整的可视化**：包括置信度图、不确定性图、类别性能分析
+
+## 文件说明
+
+### 核心脚本
+
+1. **`train_1d_with_3d_dataset.py`** - 主训练脚本
+   - 加载1D训练集（multidim_data, seg_one_hot）
+   - 使用Alex的网络架构进行1D训练
+   - Leave-one-out训练策略
+   - 使用3D mask将预测映射回3D体积
+
+2. **`visualize_1d_3d_predictions.py`** - 可视化脚本
+   - 加载预测的3D概率体积
+   - 生成多种可视化（预测图、置信度图、熵图等）
+   - 分析每个类别的性能
+   - 计算整体准确率
+
+3. **`run_1d_training.sh`** - 单次训练脚本
+   - 运行单个被试作为测试集的训练
+   - 自动生成可视化
+
+4. **`run_1d_leave_one_out.sh`** - 完整Leave-one-out脚本
+   - 对所有38个被试分别作为测试集进行训练
+   - 生成汇总报告
+
+## 网络架构
+
+```python
+RegModel(
+  input_dim=351,      # 我们的特征维度
+  num_classes=102     # 脑区域类别数
+)
+├── fc1: Linear(351 → 4096)
+├── fc2: Linear(4096 → 4096)
+├── fc3: Linear(4096 → 4096)
+├── fc4: Linear(4096 → 4096)
+├── fc5: Linear(4096 → 102)
+└── dropout: Dropout(0.5)
+```
+
+## 数据流程
+
+```
+1D训练集 (38个probanden MAT文件)
+    ↓
+Leave-one-out: 37个训练 + 1个测试
+    ↓
+训练集: multidim_data (n_voxels, 351) + seg_one_hot → labels
+    ↓
+StandardScaler标准化
+    ↓
+Alex的1D网络训练: (batch, 351) → (batch, 102)
+    ↓
+测试集预测: Softmax概率 (n_test_voxels, 102)
+    ↓
+3D mask映射: 使用测试probanden的3D mask
+    ↓
+3D概率体积: (384×336×256×102)
+```
+
+## 使用方法
+
+### 1. 快速开始
+
+```bash
+# 修改数据路径
+vim run_1d_training.sh
+# 设置 DATA_DIR_1D="/path/to/1d/data"  # 1D训练集目录
+# 设置 DATA_DIR_3D="/path/to/3d/data"  # 3D数据集目录（用于mask）
+
+# 运行单次训练（使用被试38作为测试集）
+bash run_1d_training.sh
+
+# 或运行完整Leave-one-out（38次训练）
+bash run_1d_leave_one_out.sh
+```
+
+### 2. 自定义训练
+
+```bash
+python train_1d_with_3d_dataset.py \
+    --data_dir_1d /path/to/1d/data \
+    --data_dir_3d /path/to/3d/data \
+    --output_dir ./results \
+    --test_subject 38 \
+    --batch_size 128 \
+    --epochs 25 \
+    --samples_per_subject 50000 \
+    --save_predictions
+```
+
+### 3. 可视化结果
+
+```bash
+python visualize_1d_3d_predictions.py \
+    --pred_file results/predictions_3d_test38.mat \
+    --gt_file /path/to/test/subject_3d_validated.mat \
+    --slice_idx 128 \
+    --output_dir ./visualizations
+```
+
+## 参数说明
+
+### 训练参数（与Alex一致）
+- `batch_size`: 128
+- `epochs`: 25
+- `learning_rate`: 0.00001
+- `dropout`: 0.5
+- `weight_decay`: 0.00001（L2正则化）
+- `optimizer`: Adam
+
+### 数据参数
+- `input_dim`: 351（我们的特征维度）
+- `num_classes`: 102（脑区域数）
+- `samples_per_subject`: 每个被试采样的体素数（可选）
+
+## 输出文件
+
+### 模型文件
+```
+results_1d_with_3d/
+├── dense_4x4096_model_test38.pth    # 模型权重和scaler
+├── history_test38.json               # 训练历史（train/test loss和F1）
+└── predictions_3d_test38.mat        # 3D概率体积
+```
+
+### MAT文件格式
+```matlab
+predictions_3d_test38.mat:
+  - softmax_probabilities: (384, 336, 256, 102) float32
+  - test_subject: 38
+  - test_file_1d: 1D文件路径
+  - test_file_3d: 3D文件路径
+```
+
+### 可视化输出
+```
+visualizations/
+├── slice_128_visualization.png  # 切片可视化（6个子图）
+└── class_performance.png        # 类别性能分析（4个子图）
+```
+
+## 性能指标
+
+### 训练期间记录
+- **每个epoch**：train loss, train macro F1, test loss, test macro F1
+- **最佳模型**：基于测试F1选择最佳模型
+- **最终报告**：最佳测试F1和最终指标
+
+### 3D可视化分析
+- **整体准确率**：所有有效体素的分类准确率
+- **类别准确率**：每个脑区域的单独准确率
+- **置信度分析**：平均置信度和不确定性
+- **错误分析**：哪些类别容易混淆
+
+## 与2D/3D Patch方法的对比
+
+| 方法 | 输入 | 参数量 | 特点 |
+|------|------|--------|------|
+| **1D (Alex)** | (351,) | ~68M | 纯特征，无空间信息 |
+| **2D Patch** | (351,3,3) | ~58K | 利用2D邻域 |
+| **3D Patch** | (351,3,3,3) | ~60K | 利用3D邻域 |
+
+## 优势和局限
+
+### 优势
+- **简单直接**：每个体素独立处理
+- **并行性好**：可以批量处理大量体素
+- **基线明确**：纯特征分类的性能基准
+
+### 局限
+- **无空间信息**：不利用邻域关系
+- **参数量大**：4层4096的网络参数多
+- **可能过拟合**：特别是在小数据集上
+
+## 下一步建议
+
+1. **性能对比**：与2D/3D patch方法比较
+2. **特征分析**：哪些特征对分类最重要
+3. **错误分析**：系统性地分析错误模式
+4. **集成学习**：结合1D、2D、3D的预测
+
+## 注意事项
+
+1. **内存需求**：加载所有体素可能需要大量内存
+2. **计算时间**：1D网络参数多，训练较慢
+3. **数据标准化**：使用StandardScaler，测试时需要相同的scaler
+
+## 故障排除
+
+### 内存不足
+```python
+# 减少每个被试的采样数
+--samples_per_subject 10000
+```
+
+### 训练不收敛
+```python
+# 调整学习率
+--lr 1e-4  # 或 1e-6
+```
+
+### 类别不平衡
+考虑使用加权损失函数或平衡采样策略。
