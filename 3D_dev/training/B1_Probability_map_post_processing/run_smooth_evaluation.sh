@@ -101,13 +101,31 @@ echo "预测文件: ${PRED_FILE}"
 echo "真实标签文件: ${GT_FILE}"
 echo ""
 
-# 运行平滑评估（使用快速算法）
+# 门控平滑选项（可选，注释掉表示不使用）
+USE_CLASS_GATING=false        # 启用同类门控平滑
+USE_UNCERTAINTY_GATING=false  # 启用不确定性门控平滑
+
+# 构建平滑评估命令
+SMOOTH_CMD="python smooth_postprocess_eval.py \
+    --pred_file \"${PRED_FILE}\" \
+    --gt_file \"${GT_FILE}\" \
+    --output_dir \"${OUTPUT_DIR}\" \
+    --fast_smooth"
+
+# 添加门控选项
+if [ "$USE_CLASS_GATING" = true ]; then
+    SMOOTH_CMD="$SMOOTH_CMD --use_class_gating"
+    echo "启用同类门控平滑"
+fi
+
+if [ "$USE_UNCERTAINTY_GATING" = true ]; then
+    SMOOTH_CMD="$SMOOTH_CMD --use_uncertainty_gating"
+    echo "启用不确定性门控平滑 (entropy)"
+fi
+
+# 运行平滑评估
 echo ">>> 执行平滑后处理和评估"
-python smooth_postprocess_eval.py \
-    --pred_file "${PRED_FILE}" \
-    --gt_file "${GT_FILE}" \
-    --output_dir "${OUTPUT_DIR}" \
-    --fast_smooth
+eval $SMOOTH_CMD
 
 echo ""
 echo "平滑评估完成！"
@@ -131,22 +149,23 @@ for method, metrics in results.items():
     auprc = metrics.get('macro_auprc', 0)
     print(f'{method:<12}\\t{acc:.4f}\\t\\t{f1:.4f}\\t\\t{kappa:.4f}\\t\\t{auprc:.4f}')
 
-# 计算改进
-if 'original' in results and 'smooth_k3' in results:
-    print('\\n===== 改进效果 =====')
+# 计算改进效果（对所有平滑方法vs原始）
+if 'original' in results:
+    print('\\n===== 改进效果 (vs 原始) =====')
     orig = results['original']
-    k3 = results['smooth_k3']
-    k7 = results['smooth_k7']
     
-    print('3x3 平滑 vs 原始:')
-    print(f'  ΔAccuracy: {k3[\"accuracy\"] - orig[\"accuracy\"]:+.4f}')
-    print(f'  ΔMacro F1: {k3[\"macro_f1\"] - orig[\"macro_f1\"]:+.4f}')
-    print(f'  ΔAUPRC: {k3.get(\"macro_auprc\", 0) - orig.get(\"macro_auprc\", 0):+.4f}')
-    
-    print('\\n7x7 平滑 vs 原始:')
-    print(f'  ΔAccuracy: {k7[\"accuracy\"] - orig[\"accuracy\"]:+.4f}')
-    print(f'  ΔMacro F1: {k7[\"macro_f1\"] - orig[\"macro_f1\"]:+.4f}')
-    print(f'  ΔAUPRC: {k7.get(\"macro_auprc\", 0) - orig.get(\"macro_auprc\", 0):+.4f}')
+    for method, metrics in results.items():
+        if method == 'original':
+            continue
+            
+        print(f'\\n{method} vs 原始:')
+        acc_delta = metrics['accuracy'] - orig['accuracy']
+        f1_delta = metrics['macro_f1'] - orig['macro_f1'] 
+        auprc_delta = metrics.get('macro_auprc', 0) - orig.get('macro_auprc', 0)
+        
+        print(f'  ΔAccuracy: {acc_delta:+.4f}')
+        print(f'  ΔMacro F1: {f1_delta:+.4f}')
+        print(f'  ΔAUPRC: {auprc_delta:+.4f}')
 "
 else
     echo "未找到评估结果文件"

@@ -9,6 +9,7 @@
 - **轻量后处理**：仅对softmax概率进行平滑，不改动前端分类器
 - **有效像素加权**：使用完整脑组织掩膜进行平滑，在有标签区域评估
 - **多核大小对比**：3×3和7×7平滑核的效果对比
+- **门控平滑方法**：同类门控和不确定性门控平滑，保护边界、优化低置信度区域
 - **全面评估指标**：准确率、宏F1、κ系数、AUPRC等
 - **不均衡检测优化**：优先使用AUPRC评估不均衡问题下的检测改善
 - **可视化对比**：混淆矩阵和指标对比图表
@@ -22,6 +23,7 @@
 
 1. **`smooth_postprocess_eval.py`** - 主处理和评估脚本
    - 实现2D平滑算法（支持快速和标准版本）
+   - 支持门控平滑：同类门控平滑和不确定性门控平滑
    - 计算多类别AUPRC、宏F1、准确率、κ系数
    - 生成混淆矩阵对比和评估报告
    - 保存平滑后的预测结果
@@ -36,6 +38,8 @@
 ### 2D平滑算法
 
 对softmax概率体积 `softmax_vol[D,H,W,102]` 进行逐切片2D平滑：
+
+#### 标准平滑
 
 1. **有效像素加权**：
    ```python
@@ -58,6 +62,44 @@
    denominator = convolve(mask, kernel) 
    result = numerator / (denominator + epsilon)
    ```
+
+4. **轴向支持**：
+   ```python
+   # 两个版本现在都支持多轴向平滑
+   smooth_2d_with_mask(..., slice_axis=0)      # sagittal 沿矢状面
+   smooth_2d_with_mask(..., slice_axis=1)      # coronal 沿冠状面  
+   smooth_2d_with_mask(..., slice_axis=2)      # axial 沿横断面（默认）
+   ```
+
+#### 门控平滑算法
+
+**同类门控平滑**（保护类别边界）：
+```python
+# 对每个类别c，只在预测相同类别的邻域内平滑
+pred_labels = argmax(softmax_vol, axis=-1)
+for 类别 c in range(102):
+    mask_c = (pred_labels == c) & (mask > 0)
+    # 仅使用同类邻域进行加权平均
+    smoothed_c = convolve(prob_c * mask_c, kernel) / (convolve(mask_c, kernel) + eps)
+```
+
+**不确定性门控平滑**（针对低置信度区域）：
+```python
+# 计算不确定性度量
+entropy = -sum(p * log(p + eps))  # 熵-based
+# 或 margin = max_prob - second_max_prob  # 置信边界-based
+
+# 计算sigmoid门控权重
+uncertainty_weight = sigmoid(tau * (uncertainty - threshold))
+
+# 向量化融合（一次广播完成所有通道）
+w = uncertainty_weight
+result = np.where(
+    valid_mask[..., None],  # 广播到所有通道
+    (1 - w)[..., None] * original + w[..., None] * smoothed,
+    original  # 无效区域保持原值
+)
+```
 
 ### 评估指标
 
@@ -85,20 +127,58 @@ vim run_smooth_evaluation.sh
 # 设置 RESULTS_DIR="../predictions"  # HDF5预测文件目录
 # 设置 DATA_DIR_3D="/path/to/3d/validated/data"
 
-# 运行平滑评估（自动从预测文件属性匹配GT文件）
+# 运行标准平滑评估（自动从预测文件属性匹配GT文件）
 bash run_smooth_evaluation.sh
+
+# 启用门控平滑：修改脚本中的门控选项
+# 编辑 run_smooth_evaluation.sh：
+#   USE_CLASS_GATING=true        # 启用同类门控平滑
+#   USE_UNCERTAINTY_GATING=true  # 启用不确定性门控平滑
 ```
 
 **重要更新**：现在脚本会自动从预测文件的HDF5属性中读取`test_file_3d`路径，确保与训练时使用完全相同的标签文件，避免文件错配风险。
 
 ### 2. 自定义评估
 
+#### 标准平滑
 ```bash
 python smooth_postprocess_eval.py \
     --pred_file "../predictions/predictions_3d_test38.mat" \
     --gt_file /path/to/3d/data/subject38_3d_validated.mat \
     --output_dir ./smooth_eval_results \
     --fast_smooth
+```
+
+#### 门控平滑评估
+```bash
+# 同类门控平滑（保护类别边界）
+python smooth_postprocess_eval.py \
+    --pred_file "../predictions/predictions_3d_test38.mat" \
+    --gt_file auto \
+    --output_dir ./smooth_eval_results \
+    --fast_smooth \
+    --use_class_gating
+
+# 不确定性门控平滑（基于熵）
+python smooth_postprocess_eval.py \
+    --pred_file "../predictions/predictions_3d_test38.mat" \
+    --gt_file auto \
+    --output_dir ./smooth_eval_results \
+    --fast_smooth \
+    --use_uncertainty_gating \
+    --uncertainty_type entropy \
+    --uncertainty_tau 0.5
+
+# 结合两种门控方法
+python smooth_postprocess_eval.py \
+    --pred_file "../predictions/predictions_3d_test38.mat" \
+    --gt_file auto \
+    --output_dir ./smooth_eval_results \
+    --fast_smooth \
+    --use_class_gating \
+    --use_uncertainty_gating \
+    --uncertainty_type margin \
+    --uncertainty_kappa 0.2
 ```
 
 ### 3. 批量处理多个被试
@@ -121,11 +201,20 @@ done
 ## 参数说明
 
 ### 平滑参数
-- **kernel_size**: 平滑核大小（3或7）
+- **kernel_sizes**: 平滑核大小列表（默认: [3, 7]）
 - **fast_smooth**: 使用快速算法（推荐）
+- **slice_axis**: 切片轴向 (0=sagittal, 1=coronal, 2=axial)
+
+### 门控平滑参数
+- **use_class_gating**: 启用同类门控平滑（保护类别边界）
+- **use_uncertainty_gating**: 启用不确定性门控平滑
+- **uncertainty_type**: 不确定性度量类型 ('entropy' 或 'margin')
+- **uncertainty_tau**: 不确定性阈值参数τ (0-1，默认0.5)
+- **uncertainty_kappa**: 不确定性融合强度κ (0-1，默认0.1)
 
 ### 评估参数
 - **max_classes**: 混淆矩阵显示的最大类别数（默认20）
+- **compare_all_axes**: 比较所有轴向的平滑效果
 
 ## 输出文件
 
