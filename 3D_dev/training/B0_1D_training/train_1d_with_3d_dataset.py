@@ -104,10 +104,10 @@ class Brain1D_Dataset(Dataset):
         if self.scaler is None and is_train:
             print("拟合StandardScaler...")
             self.scaler = StandardScaler()
-            self.all_data = self.scaler.fit_transform(self.all_data)
+            self.all_data = self.scaler.fit_transform(self.all_data).astype(np.float32)
         elif self.scaler is not None:
             print("应用StandardScaler...")
-            self.all_data = self.scaler.transform(self.all_data)
+            self.all_data = self.scaler.transform(self.all_data).astype(np.float32)
     
     def _load_subject(self, mat_file: Path):
         """加载单个被试的1D数据"""
@@ -179,17 +179,18 @@ class TestDataset(Dataset):
             region_mask = f['region_mask'][()]
             region_labels = f['region_labels'][()]
             
-            # 处理转置
-            if region_mask.shape != (384, 336, 256):
-                region_mask = region_mask.T
-            if region_labels.shape != (384, 336, 256):
-                region_labels = region_labels.T
+            # 严格形状验证：不允许隐式轴转换，必须显式匹配预期形状
+            assert region_mask.shape == (384, 336, 256), \
+                f"region_mask 形状不符合预期 (384, 336, 256)，实际为 {region_mask.shape}，文件: {mat_file_3d}"
+            
+            assert region_labels.shape == (384, 336, 256), \
+                f"region_labels 形状不符合预期 (384, 336, 256)，实际为 {region_labels.shape}，文件: {mat_file_3d}"
                 
             self.region_mask = region_mask
             self.region_labels = region_labels
         
         # 应用标准化
-        self.features = scaler.transform(self.features)
+        self.features = scaler.transform(self.features).astype(np.float32)
         
         print(f"测试数据: {len(self.features)} 个体素")
     
@@ -371,21 +372,130 @@ def predict_and_map_to_3d(model, test_dataset, device='cuda', batch_size=512):
     print(f"  有效体素数: {n_voxels}")
     print(f"  概率范围: [{predictions_3d[region].min():.4f}, {predictions_3d[region].max():.4f}]")
     
-    # 验证softmax概率的正确性
-    print("验证softmax概率...")
-    prob_sums = np.sum(predictions_3d[region], axis=1)  # 每个体素的概率和
-    valid_probs = np.sum((prob_sums > 0.99) & (prob_sums < 1.01))  # 概率和接近1的体素数
-    print(f"  概率和在[0.99, 1.01]范围内的体素数: {valid_probs}/{n_voxels} ({100*valid_probs/n_voxels:.2f}%)")
+    # ===== 关键验证1：映射前后逐体素值一致性自检（修正前）=====
+    print("验证映射往返一致性（修正前）...")
+    recovered_before_fix = predictions_3d[region].copy()  # 从3D体积中取回有效体素的概率
     
-    # 验证预测类别的分布
+    # 检查形状是否匹配
+    if recovered_before_fix.shape != all_predictions.shape:
+        raise ValueError(f"往返形状不匹配: 原始{all_predictions.shape} vs 恢复{recovered_before_fix.shape}")
+    
+    # 逐体素精确对比（使用严格的 atol=0）- 验证映射逻辑正确性
+    is_consistent_before = np.allclose(recovered_before_fix, all_predictions, atol=0)
+    
+    if is_consistent_before:
+        print(f"  ✅ roundtrip_before_fix: 映射逻辑完全正确，{n_voxels}个体素完全匹配")
+    else:
+        # 计算不一致的详细信息
+        diff = np.abs(recovered_before_fix - all_predictions)
+        max_diff = np.max(diff)
+        n_diff_voxels = np.sum((diff > 0).any(axis=1))  # 按体素聚合：任一通道有差异的体素数
+        print(f"  ❌ roundtrip_before_fix: 映射逻辑错误！")
+        print(f"     最大差异: {max_diff}")
+        print(f"     不一致体素数: {n_diff_voxels}/{n_voxels}")
+        
+        # 显示前几个不一致的位置
+        diff_indices = np.where((diff > 0).any(axis=1))[0][:5]
+        for idx in diff_indices:
+            print(f"     体素{idx}: 原始{all_predictions[idx][:3]}... vs 恢复{recovered_before_fix[idx][:3]}...")
+        
+        raise AssertionError("预测概率映射往返不一致！映射逻辑存在错误")
+    
+    # ===== 严格的概率约束验证与修正 =====
+    print("验证和修正softmax概率约束...")
+    
+    # 1. 检查有效区域的概率和
+    region_probs = predictions_3d[region]  # (n_voxels, 102)
+    prob_sums = np.sum(region_probs, axis=1)
+    
+    # 严格验证概率和是否为1
+    perfect_probs = np.sum(np.abs(prob_sums - 1.0) < 1e-6)  # 严格接近1的体素数
+    imperfect_probs = n_voxels - perfect_probs
+    
+    if imperfect_probs > 0:
+        max_deviation = np.max(np.abs(prob_sums - 1.0))
+        print(f"  ⚠️ 发现{imperfect_probs}/{n_voxels}个体素概率和偏离1，最大偏差: {max_deviation:.8f}")
+        
+        # 重新归一化修正概率
+        print("  🔧 重新归一化修正概率...")
+        region_probs_corrected = region_probs / prob_sums.reshape(-1, 1)  # 按行归一化
+        predictions_3d[region] = region_probs_corrected
+        
+        # 验证修正后的概率和
+        corrected_sums = np.sum(predictions_3d[region], axis=1)
+        perfect_after = np.sum(np.abs(corrected_sums - 1.0) < 1e-10)
+        print(f"  ✅ 修正完成，{perfect_after}/{n_voxels}个体素概率和严格为1")
+    else:
+        print(f"  ✅ 所有{n_voxels}个体素概率和严格为1")
+    
+    # 2. 检查概率值范围 [0, 1]
+    region_probs = predictions_3d[region]
+    min_prob = np.min(region_probs)
+    max_prob = np.max(region_probs)
+    
+    if min_prob < 0 or max_prob > 1:
+        print(f"  ⚠️ 发现概率值超出[0,1]范围: [{min_prob:.8f}, {max_prob:.8f}]")
+        
+        # 阈值裁剪
+        print("  🔧 进行阈值裁剪...")
+        region_probs_clipped = np.clip(region_probs, 0.0, 1.0)
+        
+        # 重新归一化（裁剪后可能破坏概率和=1的约束）
+        clip_sums = np.sum(region_probs_clipped, axis=1)
+        region_probs_renorm = region_probs_clipped / clip_sums.reshape(-1, 1)
+        predictions_3d[region] = region_probs_renorm
+        
+        # 验证最终结果
+        final_min = np.min(predictions_3d[region])
+        final_max = np.max(predictions_3d[region])
+        final_sums = np.sum(predictions_3d[region], axis=1)
+        perfect_final = np.sum(np.abs(final_sums - 1.0) < 1e-10)
+        
+        print(f"  ✅ 裁剪完成，概率范围: [{final_min:.8f}, {final_max:.8f}]")
+        print(f"  ✅ 重新归一化完成，{perfect_final}/{n_voxels}个体素概率和严格为1")
+    else:
+        print(f"  ✅ 所有概率值在[0,1]范围内: [{min_prob:.8f}, {max_prob:.8f}]")
+    
+    # 3. 严格验证背景区域（必须全为0）
+    background_sum = np.sum(predictions_3d[~region])
+    if background_sum > 0:
+        print(f"  ❌ 背景区域概率和非零: {background_sum:.10f}")
+        raise ValueError("背景区域必须全为0！映射逻辑存在错误")
+    else:
+        print(f"  ✅ 背景区域概率和严格为0")
+    
+    # 4. 预测类别分布统计
     predicted_labels = np.argmax(predictions_3d[region], axis=1)
     unique_labels, counts = np.unique(predicted_labels, return_counts=True)
-    print(f"  预测了 {len(unique_labels)} 个不同类别")
-    print(f"  最频繁的类别: {unique_labels[np.argmax(counts)]} (出现{np.max(counts)}次)")
+    print(f"  📊 预测了 {len(unique_labels)} 个不同类别")
+    print(f"  📊 最频繁的类别: {unique_labels[np.argmax(counts)]} (出现{np.max(counts)}次)")
     
-    # 验证背景区域（应该全为0）
-    background_sum = np.sum(predictions_3d[~region])
-    print(f"  背景区域概率和: {background_sum:.6f} (应该为0)")
+    print("概率约束验证与修正完成！")
+    
+    # ===== 关键验证2：修正后的往返一致性检查（验证修正没破坏掩膜对应关系）=====
+    print("验证映射往返一致性（修正后）...")
+    recovered_after_fix = predictions_3d[region]  # 修正后从3D体积中取回有效体素的概率
+    
+    # 检查形状是否匹配
+    if recovered_after_fix.shape != all_predictions.shape:
+        raise ValueError(f"修正后往返形状不匹配: 原始{all_predictions.shape} vs 恢复{recovered_after_fix.shape}")
+    
+    # 验证修正没有破坏shape与掩膜对应关系（允许数值变化，但结构必须一致）
+    shape_consistent = (recovered_after_fix.shape == all_predictions.shape)
+    mask_consistent = np.sum(predictions_3d[~region]) == 0  # 背景依然为0
+    
+    if shape_consistent and mask_consistent:
+        # 计算修正引起的数值变化
+        if not np.allclose(recovered_after_fix, all_predictions, atol=0):
+            diff_after = np.abs(recovered_after_fix - all_predictions)
+            max_diff_after = np.max(diff_after)
+            changed_voxels = np.sum((diff_after > 1e-10).any(axis=1))  # 按体素聚合：任一通道变化的体素数
+            print(f"  ✅ roundtrip_after_fix: 结构完整，修正影响了{changed_voxels}/{n_voxels}个体素")
+            print(f"     最大修正差异: {max_diff_after:.8f}")
+        else:
+            print(f"  ✅ roundtrip_after_fix: 结构完整，无需修正")
+    else:
+        raise AssertionError("修正破坏了掩膜对应关系！修正逻辑存在错误")
     
     return predictions_3d
 
@@ -444,23 +554,60 @@ def main():
     data_dir_1d = Path(args.data_dir_1d)
     data_dir_3d = Path(args.data_dir_3d)
     
-    # 查找1D文件（去除_3d后缀）
-    mat_files_1d = sorted(data_dir_1d.glob('*.mat'))
-    mat_files_3d = sorted(data_dir_3d.glob('*_3d_validated.mat'))
+    # 查找文件
+    mat_files_1d = list(data_dir_1d.glob('*.mat'))
+    mat_files_3d = list(data_dir_3d.glob('*_3d_validated.mat'))
     
     logger.info(f'找到1D文件: {len(mat_files_1d)}个')
     logger.info(f'找到3D文件: {len(mat_files_3d)}个')
     
-    # 分割训练和测试集（Leave-one-out）
-    test_idx = args.test_subject - 1
+    # 被试名提取函数
+    def subject_key_1d(p):
+        """提取1D文件的被试名 e.g. "ODP_01_qhlazec" """
+        return Path(p).stem
     
-    train_files_1d = mat_files_1d[:test_idx] + mat_files_1d[test_idx+1:]
-    test_file_1d = mat_files_1d[test_idx]
-    test_file_3d = mat_files_3d[test_idx]
+    def subject_key_3d(p):
+        """提取3D文件的被试名 e.g. "ODP_01_qhlazec_3d_validated" -> "ODP_01_qhlazec" """
+        return Path(p).stem.replace('_3d_validated', '')
+    
+    # 按被试名构建索引
+    idx_1d = {subject_key_1d(p): p for p in mat_files_1d}
+    idx_3d = {subject_key_3d(p): p for p in mat_files_3d}
+    
+    # 验证被试集合一致性
+    subjects_1d = set(idx_1d.keys())
+    subjects_3d = set(idx_3d.keys())
+    
+    logger.info(f'1D被试: {len(subjects_1d)}个')
+    logger.info(f'3D被试: {len(subjects_3d)}个')
+    
+    assert subjects_1d == subjects_3d, f"一维和三维被试集合不一致！差异: {subjects_1d ^ subjects_3d}"
+    
+    # 按被试名排序，确保一致性
+    subject_names = sorted(idx_1d.keys())
+    
+    # 选择测试被试（按被试名匹配）
+    test_idx = args.test_subject - 1
+    if test_idx >= len(subject_names):
+        raise ValueError(f"测试被试编号{args.test_subject}超出范围[1, {len(subject_names)}]")
+    
+    test_subject_name = subject_names[test_idx]
+    test_file_1d = idx_1d[test_subject_name]
+    test_file_3d = idx_3d[test_subject_name]
+    
+    # 训练集：除测试被试外的所有被试
+    train_subject_names = [name for name in subject_names if name != test_subject_name]
+    train_files_1d = [idx_1d[name] for name in train_subject_names]
     
     logger.info(f'训练集: {len(train_files_1d)} 个被试')
+    logger.info(f'测试被试名: {test_subject_name}')
     logger.info(f'测试集1D: {test_file_1d.name}')
     logger.info(f'测试集3D: {test_file_3d.name}')
+    
+    # 验证文件匹配正确性
+    logger.info(f'验证: 1D被试名 = {subject_key_1d(test_file_1d)}')
+    logger.info(f'验证: 3D被试名 = {subject_key_3d(test_file_3d)}')
+    assert subject_key_1d(test_file_1d) == subject_key_3d(test_file_3d), "测试文件被试名不匹配！"
     
     # 创建训练数据集
     logger.info('加载训练数据...')
@@ -477,6 +624,34 @@ def main():
     # 创建测试数据集（需要1D和3D文件）
     logger.info('加载测试数据...')
     test_dataset = TestDataset(test_file_1d, test_file_3d, scaler)
+    
+    # ===== 关键验证：1D与3D标签一致性自检 =====
+    logger.info('验证1D与3D标签一致性...')
+    mask = test_dataset.region_mask.astype(bool)
+    labels_3d = test_dataset.region_labels[mask]  # 从3D掩膜位置提取标签
+    labels_1d = test_dataset.labels               # 1D数据集的标签
+    
+    if len(labels_1d) != len(labels_3d):
+        logger.error(f"标签数量不匹配: 1D={len(labels_1d)}, 3D={len(labels_3d)}")
+        raise ValueError("1D和3D标签数量不一致")
+    
+    labels_match = np.array_equal(labels_1d, labels_3d)
+    if labels_match:
+        logger.info(f'  ✅ 标签一致性验证通过：{len(labels_1d)}个体素标签完全匹配')
+    else:
+        # 计算不匹配的详细信息
+        n_mismatch = np.sum(labels_1d != labels_3d)
+        mismatch_rate = n_mismatch / len(labels_1d) * 100
+        
+        logger.error(f'  ❌ 标签一致性验证失败！')
+        logger.error(f'     不匹配体素数: {n_mismatch}/{len(labels_1d)} ({mismatch_rate:.2f}%)')
+        
+        # 显示前几个不匹配的位置
+        mismatch_indices = np.where(labels_1d != labels_3d)[0][:10]
+        for idx in mismatch_indices:
+            logger.error(f'     体素{idx}: 1D标签={labels_1d[idx]}, 3D标签={labels_3d[idx]}')
+        
+        raise AssertionError("测试集标签在一维与三维不一致！可能是文件错配")
     
     logger.info(f'训练样本数: {len(train_dataset)}')
     logger.info(f'测试样本数: {len(test_dataset)}')
@@ -512,10 +687,40 @@ def main():
         logger.info(f'加载预训练模型: {args.load_model}')
         checkpoint = torch.load(args.load_model, map_location='cpu')
         model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)  # 确保模型在正确的设备上
         scaler = checkpoint['scaler']
         
         # 重新创建测试数据集（使用加载的scaler）
         test_dataset = TestDataset(test_file_1d, test_file_3d, scaler)
+        
+        # ===== 关键验证：1D与3D标签一致性自检（预测模式）=====
+        logger.info('验证1D与3D标签一致性（预测模式）...')
+        mask = test_dataset.region_mask.astype(bool)
+        labels_3d = test_dataset.region_labels[mask]  # 从3D掩膜位置提取标签
+        labels_1d = test_dataset.labels               # 1D数据集的标签
+        
+        if len(labels_1d) != len(labels_3d):
+            logger.error(f"标签数量不匹配: 1D={len(labels_1d)}, 3D={len(labels_3d)}")
+            raise ValueError("1D和3D标签数量不一致")
+        
+        labels_match = np.array_equal(labels_1d, labels_3d)
+        if labels_match:
+            logger.info(f'  ✅ 标签一致性验证通过：{len(labels_1d)}个体素标签完全匹配')
+        else:
+            # 计算不匹配的详细信息
+            n_mismatch = np.sum(labels_1d != labels_3d)
+            mismatch_rate = n_mismatch / len(labels_1d) * 100
+            
+            logger.error(f'  ❌ 标签一致性验证失败！')
+            logger.error(f'     不匹配体素数: {n_mismatch}/{len(labels_1d)} ({mismatch_rate:.2f}%)')
+            
+            # 显示前几个不匹配的位置
+            mismatch_indices = np.where(labels_1d != labels_3d)[0][:10]
+            for idx in mismatch_indices:
+                logger.error(f'     体素{idx}: 1D标签={labels_1d[idx]}, 3D标签={labels_3d[idx]}')
+            
+            raise AssertionError("测试集标签在一维与三维不一致！可能是文件错配")
+        
         logger.info(f'使用加载的scaler，测试样本数: {len(test_dataset)}')
         
         history = None  # 预测模式不需要训练历史
