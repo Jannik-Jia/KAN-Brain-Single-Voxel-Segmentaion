@@ -1,5 +1,15 @@
 #!/bin/bash
 # 运行体素级概率图平滑后处理和评估脚本
+#
+# 快速使用说明：
+# 1. 标准平滑：直接运行 bash run_smooth_evaluation.sh
+# 2. 门控平滑：修改下面的选项为true，然后运行
+# 3. 轴向对比：设置COMPARE_ALL_AXES=true
+#
+# 门控平滑选项说明：
+# - USE_CLASS_GATING: 同类门控（保护边界）
+# - USE_UNCERTAINTY_GATING: 不确定性门控（优化低置信度区域）
+# - UNCERTAINTY_TYPE: entropy（熵-based）或 margin（置信边界-based）
 
 # 设置参数
 RESULTS_DIR="../predictions"    # 预测结果目录（HDF5格式文件）
@@ -101,9 +111,17 @@ echo "预测文件: ${PRED_FILE}"
 echo "真实标签文件: ${GT_FILE}"
 echo ""
 
-# 门控平滑选项（可选，注释掉表示不使用）
-USE_CLASS_GATING=false        # 启用同类门控平滑
-USE_UNCERTAINTY_GATING=false  # 启用不确定性门控平滑
+# 门控平滑选项（可选，改为true启用）
+USE_CLASS_GATING=true        # 启用同类门控平滑
+USE_UNCERTAINTY_GATING=true  # 启用不确定性门控平滑
+
+# 不确定性门控参数（仅当USE_UNCERTAINTY_GATING=true时生效）
+UNCERTAINTY_TYPE="entropy"    # 不确定性类型: entropy 或 margin
+UNCERTAINTY_TAU=0.5          # 阈值参数τ (0-1)
+UNCERTAINTY_KAPPA=0.1        # 融合强度κ (0-1)
+
+# 轴向对比评估选项
+COMPARE_ALL_AXES=false       # 是否比较所有轴向效果
 
 # 构建平滑评估命令
 SMOOTH_CMD="python smooth_postprocess_eval.py \
@@ -112,6 +130,12 @@ SMOOTH_CMD="python smooth_postprocess_eval.py \
     --output_dir \"${OUTPUT_DIR}\" \
     --fast_smooth"
 
+# 轴向对比选项
+if [ "$COMPARE_ALL_AXES" = true ]; then
+    SMOOTH_CMD="$SMOOTH_CMD --compare_all_axes"
+    echo "启用轴向对比评估"
+fi
+
 # 添加门控选项
 if [ "$USE_CLASS_GATING" = true ]; then
     SMOOTH_CMD="$SMOOTH_CMD --use_class_gating"
@@ -119,8 +143,9 @@ if [ "$USE_CLASS_GATING" = true ]; then
 fi
 
 if [ "$USE_UNCERTAINTY_GATING" = true ]; then
-    SMOOTH_CMD="$SMOOTH_CMD --use_uncertainty_gating"
-    echo "启用不确定性门控平滑 (entropy)"
+    SMOOTH_CMD="$SMOOTH_CMD --use_uncertainty_gating --uncertainty_type $UNCERTAINTY_TYPE"
+    SMOOTH_CMD="$SMOOTH_CMD --uncertainty_tau $UNCERTAINTY_TAU --uncertainty_kappa $UNCERTAINTY_KAPPA"
+    echo "启用不确定性门控平滑 ($UNCERTAINTY_TYPE, tau=$UNCERTAINTY_TAU, kappa=$UNCERTAINTY_KAPPA)"
 fi
 
 # 运行平滑评估
