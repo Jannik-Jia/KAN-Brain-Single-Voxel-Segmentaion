@@ -82,7 +82,7 @@
 ```bash
 # 修改数据路径（如需要）
 vim run_smooth_evaluation.sh
-# 设置 RESULTS_DIR="../B0_1D_training/results_1d_with_3d"
+# 设置 RESULTS_DIR="../predictions"  # HDF5预测文件目录
 # 设置 DATA_DIR_3D="/path/to/3d/validated/data"
 
 # 运行平滑评估（自动从预测文件属性匹配GT文件）
@@ -95,7 +95,7 @@ bash run_smooth_evaluation.sh
 
 ```bash
 python smooth_postprocess_eval.py \
-    --pred_file "../B0_1D_training/results_1d_with_3d/predictions_3d_test38.mat" \
+    --pred_file "../predictions/predictions_3d_test38.mat" \
     --gt_file /path/to/3d/data/subject38_3d_validated.mat \
     --output_dir ./smooth_eval_results \
     --fast_smooth
@@ -106,17 +106,17 @@ python smooth_postprocess_eval.py \
 ```bash
 # 处理所有Leave-one-out结果
 for i in {1..38}; do
-    if [ -f "../B0_1D_training/results_1d_leave_one_out/predictions_3d_test${i}.mat" ]; then
-        GT_FILE=$(ls /path/to/3d/data/*.mat | sort | sed -n "${i}p")
-        
+    if [ -f "../predictions/predictions_3d_test${i}.mat" ]; then
         python smooth_postprocess_eval.py \
-            --pred_file "../B0_1D_training/results_1d_leave_one_out/predictions_3d_test${i}.mat" \
-            --gt_file ${GT_FILE} \
+            --pred_file "../predictions/predictions_3d_test${i}.mat" \
+            --gt_file auto \
             --output_dir ./smooth_eval_results/test${i} \
             --fast_smooth
     fi
 done
 ```
+
+**注意**: 现在GT文件会自动从预测文件的HDF5属性中读取，无需手动指定。
 
 ## 参数说明
 

@@ -2,7 +2,7 @@
 # 运行体素级概率图平滑后处理和评估脚本
 
 # 设置参数
-RESULTS_DIR="../B0_1D_training/results_1d_with_3d"    # 1D训练结果目录
+RESULTS_DIR="../predictions"    # 预测结果目录（HDF5格式文件）
 DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D数据目录（真实标签）
 OUTPUT_DIR="./smooth_eval_results"              # 平滑评估结果目录
 
@@ -19,21 +19,12 @@ echo ""
 # 创建输出目录
 mkdir -p ${OUTPUT_DIR}
 
-# 检查预测文件是否存在（检查多个可能的位置）
+# 检查预测文件是否存在
 PRED_FILE="${RESULTS_DIR}/predictions_3d_test${TEST_SUBJECT}.mat"
 if [ ! -f "${PRED_FILE}" ]; then
-    # 尝试其他可能的位置
-    ALT_PRED_FILE="../predictions/predictions_3d_test${TEST_SUBJECT}.mat"
-    if [ -f "${ALT_PRED_FILE}" ]; then
-        PRED_FILE="${ALT_PRED_FILE}"
-        echo "找到预测文件: ${PRED_FILE}"
-    else
-        echo "错误: 预测文件不存在于以下位置:"
-        echo "  ${RESULTS_DIR}/predictions_3d_test${TEST_SUBJECT}.mat"
-        echo "  ../predictions/predictions_3d_test${TEST_SUBJECT}.mat"
-        echo "请先运行1D训练生成预测结果，或检查--output_dir设置"
-        exit 1
-    fi
+    echo "错误: 预测文件不存在: ${PRED_FILE}"
+    echo "请先运行1D训练生成预测结果"
+    exit 1
 fi
 
 # 获取对应的真实标签文件（从预测文件HDF5属性中读取，确保一致性）
@@ -49,17 +40,17 @@ pred_file, data_dir_3d = sys.argv[1], sys.argv[2]
 
 try:
     with h5py.File(pred_file, 'r') as f:
-        print(f"读取预测文件属性...", file=sys.stderr)
+        print(f"读取HDF5预测文件属性...", file=sys.stderr)
         
         # 显示所有属性用于调试
         attrs = dict(f.attrs)
-        print(f"预测文件包含属性: {list(attrs.keys())}", file=sys.stderr)
+        print(f"HDF5属性: {list(attrs.keys())}", file=sys.stderr)
         
         # 优先使用训练时保存的完整路径
         test_file_3d = f.attrs.get('test_file_3d')
         if test_file_3d is not None:
             tf3d_str = test_file_3d.decode() if isinstance(test_file_3d, bytes) else str(test_file_3d)
-            print(f"找到test_file_3d属性: {tf3d_str}", file=sys.stderr)
+            print(f"找到test_file_3d: {tf3d_str}", file=sys.stderr)
             if os.path.exists(tf3d_str):
                 print(f"3D文件存在，使用: {tf3d_str}", file=sys.stderr)
                 print(tf3d_str)
@@ -90,7 +81,7 @@ try:
         print('匹配失败', file=sys.stderr)
         print('')
 except Exception as e:
-    print(f'Python错误: {e}', file=sys.stderr)
+    print(f'HDF5读取错误: {e}', file=sys.stderr)
     print('')
 PY
 )
