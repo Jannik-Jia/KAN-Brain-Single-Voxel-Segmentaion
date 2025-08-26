@@ -3,7 +3,7 @@
 # 复现Alex的架构，但使用351维输入
 
 # 设置参数
-DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/validated/"  # 1D数据集（去除_3d后缀）
+DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"  # 1D数据集（去除_3d后缀）
 DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D数据集（用于mask）
 OUTPUT_DIR="./results_1d_with_3d"
 

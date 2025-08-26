@@ -343,33 +343,49 @@ def predict_and_map_to_3d(model, test_dataset, device='cuda', batch_size=512):
     
     print(f"预测完成，共{len(all_predictions)}个体素")
     
-    # 映射回3D体积
+    # 映射回3D体积 - 使用与dataset_create相同的直接布尔索引方法
     print("映射回3D体积...")
-    predictions_3d = np.zeros((384, 336, 256, 102), dtype=np.float32)
     
-    # 获取有效体素的3D位置
+    # 获取region掩码（布尔类型）
     region_mask = test_dataset.region_mask
-    region_labels = test_dataset.region_labels
-    
-    # 找到有效体素（mask > 0 且 labels > 0）
-    valid_mask = (region_mask > 0) & (region_labels > 0)
-    valid_positions = np.where(valid_mask)
+    region = region_mask.astype(bool)  # 转换为布尔掩码，与dataset_create保持一致
+    n_voxels = np.sum(region)
     
     # 检查体素数量是否匹配
-    if len(valid_positions[0]) != len(all_predictions):
-        print(f"警告：体素数量不匹配！3D mask: {len(valid_positions[0])}, 预测: {len(all_predictions)}")
-        # 取最小值
-        min_len = min(len(valid_positions[0]), len(all_predictions))
-        valid_positions = (valid_positions[0][:min_len], 
-                          valid_positions[1][:min_len], 
-                          valid_positions[2][:min_len])
-        all_predictions = all_predictions[:min_len]
+    if n_voxels != len(all_predictions):
+        print(f"警告：体素数量不匹配！")
+        print(f"  3D region中的体素数: {n_voxels}")
+        print(f"  预测的体素数: {len(all_predictions)}")
+        print(f"  差异: {abs(n_voxels - len(all_predictions))}")
+        raise ValueError("体素数量必须完全匹配，请检查数据集创建和加载逻辑")
     
-    # 将预测概率映射回3D位置
-    for i, (x, y, z) in enumerate(zip(valid_positions[0], valid_positions[1], valid_positions[2])):
-        predictions_3d[x, y, z, :] = all_predictions[i]
+    # 创建4D概率体积：(384, 336, 256, 102)
+    predictions_3d = np.zeros((384, 336, 256, 102), dtype=np.float32)
     
+    # 使用直接布尔索引映射 - 与dataset_create的方法完全一致
+    # 参考：data_4d[region] = features (batch_convert_validated_with_logging.py第186行)
+    predictions_3d[region, :] = all_predictions  # 直接布尔索引赋值
+    
+    # 验证映射结果的正确性
     print(f"映射完成，3D体积形状: {predictions_3d.shape}")
+    print(f"  有效体素数: {n_voxels}")
+    print(f"  概率范围: [{predictions_3d[region].min():.4f}, {predictions_3d[region].max():.4f}]")
+    
+    # 验证softmax概率的正确性
+    print("验证softmax概率...")
+    prob_sums = np.sum(predictions_3d[region], axis=1)  # 每个体素的概率和
+    valid_probs = np.sum((prob_sums > 0.99) & (prob_sums < 1.01))  # 概率和接近1的体素数
+    print(f"  概率和在[0.99, 1.01]范围内的体素数: {valid_probs}/{n_voxels} ({100*valid_probs/n_voxels:.2f}%)")
+    
+    # 验证预测类别的分布
+    predicted_labels = np.argmax(predictions_3d[region], axis=1)
+    unique_labels, counts = np.unique(predicted_labels, return_counts=True)
+    print(f"  预测了 {len(unique_labels)} 个不同类别")
+    print(f"  最频繁的类别: {unique_labels[np.argmax(counts)]} (出现{np.max(counts)}次)")
+    
+    # 验证背景区域（应该全为0）
+    background_sum = np.sum(predictions_3d[~region])
+    print(f"  背景区域概率和: {background_sum:.6f} (应该为0)")
     
     return predictions_3d
 
@@ -393,6 +409,10 @@ def main():
                        help='每个被试采样的体素数（None表示全部）')
     parser.add_argument('--save_predictions', action='store_true',
                        help='保存3D预测概率')
+    parser.add_argument('--load_model', type=str, default=None,
+                       help='加载预训练模型路径')
+    parser.add_argument('--predict_only', action='store_true',
+                       help='仅进行预测，不训练模型')
     
     args = parser.parse_args()
     
@@ -484,55 +504,91 @@ def main():
     
     logger.info(f'模型参数量: {sum(p.numel() for p in model.parameters()):,}')
     
-    # 创建训练器
-    trainer = Trainer(model, device=device, learning_rate=0.00001)
+    # 检查是否为预测模式
+    if args.predict_only or args.load_model:
+        if not args.load_model:
+            raise ValueError("预测模式需要指定模型路径 --load_model")
+        
+        logger.info(f'加载预训练模型: {args.load_model}')
+        checkpoint = torch.load(args.load_model, map_location='cpu')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        scaler = checkpoint['scaler']
+        
+        # 重新创建测试数据集（使用加载的scaler）
+        test_dataset = TestDataset(test_file_1d, test_file_3d, scaler)
+        logger.info(f'使用加载的scaler，测试样本数: {len(test_dataset)}')
+        
+        history = None  # 预测模式不需要训练历史
+        
+    else:
+        # 训练模式
+        # 创建训练器
+        trainer = Trainer(model, device=device, learning_rate=0.00001)
+        
+        # 训练模型
+        logger.info('开始训练...')
+        history = trainer.train(train_loader, test_loader, epochs=args.epochs)
     
-    # 训练模型
-    logger.info('开始训练...')
-    history = trainer.train(train_loader, test_loader, epochs=args.epochs)
-    
-    # 保存模型
-    model_path = output_dir / f'dense_4x4096_model_test{args.test_subject}.pth'
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'scaler': scaler,
-        'history': history,
-        'args': vars(args)
-    }, model_path)
-    logger.info(f'模型保存至: {model_path}')
-    
-    # 保存训练历史
-    history_path = output_dir / f'history_test{args.test_subject}.json'
-    with open(history_path, 'w') as f:
-        json.dump(history, f, indent=2)
+    # 保存模型（仅训练模式）
+    if not args.predict_only:
+        model_path = output_dir / f'dense_4x4096_model_test{args.test_subject}.pth'
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'scaler': scaler,
+            'history': history,
+            'args': vars(args)
+        }, model_path)
+        logger.info(f'模型保存至: {model_path}')
+        
+        # 保存训练历史
+        history_path = output_dir / f'history_test{args.test_subject}.json'
+        with open(history_path, 'w') as f:
+            json.dump(history, f, indent=2)
     
     # 如果需要，保存3D预测概率
     if args.save_predictions:
         logger.info('生成3D预测概率体积...')
         predictions_3d = predict_and_map_to_3d(model, test_dataset, device, args.batch_size)
         
-        # 保存预测
+        # 保存预测 - 使用HDF5格式处理大文件（13GB超过MAT v5的2GB限制）
         pred_path = output_dir / f'predictions_3d_test{args.test_subject}.mat'
-        scipy.io.savemat(
-            str(pred_path),
-            {
-                'softmax_probabilities': predictions_3d,  # (384, 336, 256, 102)
-                'test_subject': args.test_subject,
-                'test_file_1d': str(test_file_1d),
-                'test_file_3d': str(test_file_3d)
-            }
-        )
-        logger.info(f'预测保存至: {pred_path}')
+        
+        logger.info(f'保存预测到: {pred_path}')
         logger.info(f'  形状: {predictions_3d.shape}')
         logger.info(f'  概率范围: [{predictions_3d.min():.4f}, {predictions_3d.max():.4f}]')
+        logger.info(f'  预计文件大小: ~{predictions_3d.nbytes / (1024**3):.1f}GB')
+        
+        # 使用h5py保存（MATLAB v7.3格式）
+        import h5py
+        with h5py.File(str(pred_path), 'w') as f:
+            # 保存概率数据，使用压缩减小文件大小
+            f.create_dataset('softmax_probabilities', 
+                           data=predictions_3d.astype(np.float32),
+                           compression='gzip', 
+                           compression_opts=4)  # 中等压缩级别
+            
+            # 保存元数据
+            f.attrs['test_subject'] = args.test_subject
+            f.attrs['test_file_1d'] = str(test_file_1d)
+            f.attrs['test_file_3d'] = str(test_file_3d)
+            f.attrs['shape'] = predictions_3d.shape
+            f.attrs['prob_range'] = [float(predictions_3d.min()), float(predictions_3d.max())]
+        
+        logger.info(f'预测已保存（HDF5/MAT v7.3格式，带压缩）')
     
     # 最终报告
-    logger.info('\n===== 训练完成 =====')
-    logger.info(f'最佳测试F1: {max(history["test_f1"]):.4f}')
-    logger.info(f'最终训练Loss: {history["train_loss"][-1]:.4f}')
-    logger.info(f'最终训练F1: {history["train_f1"][-1]:.4f}')
-    logger.info(f'最终测试Loss: {history["test_loss"][-1]:.4f}')
-    logger.info(f'最终测试F1: {history["test_f1"][-1]:.4f}')
+    if args.predict_only:
+        logger.info('\n===== 预测完成 =====')
+        logger.info(f'测试被试: {args.test_subject}')
+        if args.save_predictions:
+            logger.info('3D softmax概率已保存')
+    else:
+        logger.info('\n===== 训练完成 =====')
+        logger.info(f'最佳测试F1: {max(history["test_f1"]):.4f}')
+        logger.info(f'最终训练Loss: {history["train_loss"][-1]:.4f}')
+        logger.info(f'最终训练F1: {history["train_f1"][-1]:.4f}')
+        logger.info(f'最终测试Loss: {history["test_loss"][-1]:.4f}')
+        logger.info(f'最终测试F1: {history["test_f1"][-1]:.4f}')
 
 if __name__ == '__main__':
     main()

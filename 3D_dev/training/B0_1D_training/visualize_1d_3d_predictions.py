@@ -14,9 +14,23 @@ from matplotlib.colors import ListedColormap
 import seaborn as sns
 
 def load_predictions(pred_file: Path):
-    """加载3D预测概率"""
-    data = scipy.io.loadmat(pred_file)
-    return data['softmax_probabilities']  # (384, 336, 256, 102)
+    """加载3D预测概率（支持HDF5/MAT v7.3格式）"""
+    try:
+        # 首先尝试用h5py读取（新格式）
+        with h5py.File(pred_file, 'r') as f:
+            prob_volume = f['softmax_probabilities'][()]
+            print(f"成功加载HDF5格式预测文件")
+            print(f"  测试被试: {f.attrs.get('test_subject', 'unknown')}")
+            print(f"  形状: {prob_volume.shape}")
+            return prob_volume  # (384, 336, 256, 102)
+    except:
+        # 如果失败，尝试用scipy读取（旧格式）
+        try:
+            data = scipy.io.loadmat(pred_file)
+            print(f"成功加载MAT v5格式预测文件")
+            return data['softmax_probabilities']
+        except:
+            raise ValueError(f"无法加载预测文件: {pred_file}")
 
 def load_ground_truth(mat_file: Path):
     """加载真实标签"""

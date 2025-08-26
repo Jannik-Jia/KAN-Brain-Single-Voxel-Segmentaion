@@ -76,7 +76,7 @@ Alex的1D网络训练: (batch, 351) → (batch, 102)
 
 ## 使用方法
 
-### 1. 快速开始
+### 1. 快速开始（训练新模型）
 
 ```bash
 # 修改数据路径
@@ -91,7 +91,55 @@ bash run_1d_training.sh
 bash run_1d_leave_one_out.sh
 ```
 
-### 2. 自定义训练
+### 2. 使用已有模型直接预测（推荐）
+
+如果你已有训练好的模型，可以直接进行预测并生成3D softmax概率：
+
+```bash
+# 直接预测单个被试
+python train_1d_with_3d_dataset.py \
+    --data_dir_1d /path/to/1d/data \
+    --data_dir_3d /path/to/3d/data \
+    --output_dir ./predictions \
+    --test_subject 38 \
+    --load_model /path/to/dense_4x4096_model_test38.pth \
+    --predict_only \
+    --save_predictions
+
+# 批量预测所有被试（保存为shell脚本）
+cat > run_batch_predictions.sh << 'EOF'
+#!/bin/bash
+
+# 配置路径
+DATA_DIR_1D="/path/to/1d/data"
+DATA_DIR_3D="/path/to/3d/data" 
+OUTPUT_DIR="./predictions"
+MODEL_DIR="/path/to/models"
+
+# 创建输出目录
+mkdir -p ${OUTPUT_DIR}
+
+# 批量预测
+for i in {1..38}; do
+    echo "预测被试 ${i}..."
+    python train_1d_with_3d_dataset.py \
+        --data_dir_1d ${DATA_DIR_1D} \
+        --data_dir_3d ${DATA_DIR_3D} \
+        --output_dir ${OUTPUT_DIR} \
+        --test_subject ${i} \
+        --load_model ${MODEL_DIR}/dense_4x4096_model_test${i}.pth \
+        --predict_only \
+        --save_predictions
+done
+
+echo "批量预测完成！"
+EOF
+
+chmod +x run_batch_predictions.sh
+bash run_batch_predictions.sh
+```
+
+### 3. 自定义训练
 
 ```bash
 python train_1d_with_3d_dataset.py \
@@ -105,7 +153,7 @@ python train_1d_with_3d_dataset.py \
     --save_predictions
 ```
 
-### 3. 可视化结果
+### 4. 可视化结果
 
 ```bash
 python visualize_1d_3d_predictions.py \
@@ -117,27 +165,44 @@ python visualize_1d_3d_predictions.py \
 
 ## 参数说明
 
+### 核心参数
+- `--data_dir_1d`: 1D训练集目录路径
+- `--data_dir_3d`: 3D数据集目录路径（提供mask信息）
+- `--output_dir`: 输出目录（默认：./results_1d）
+- `--test_subject`: 测试被试编号1-38（默认：38）
+
 ### 训练参数（与Alex一致）
-- `batch_size`: 128
-- `epochs`: 25
+- `--batch_size`: 批次大小（默认：128）
+- `--epochs`: 训练轮数（默认：25）
+- `--samples_per_subject`: 每个被试采样体素数（默认：None，使用全部）
+- `--save_predictions`: 是否保存3D预测概率（推荐开启）
+
+### 预测模式参数
+- `--load_model`: 预训练模型路径（.pth文件）
+- `--predict_only`: 仅预测模式，跳过训练
+
+### 网络参数（固定）
+- `input_dim`: 351（我们的特征维度）
+- `num_classes`: 102（脑区域数）
 - `learning_rate`: 0.00001
 - `dropout`: 0.5
 - `weight_decay`: 0.00001（L2正则化）
 - `optimizer`: Adam
 
-### 数据参数
-- `input_dim`: 351（我们的特征维度）
-- `num_classes`: 102（脑区域数）
-- `samples_per_subject`: 每个被试采样的体素数（可选）
-
 ## 输出文件
 
-### 模型文件
+### 训练模式输出
 ```
 results_1d_with_3d/
 ├── dense_4x4096_model_test38.pth    # 模型权重和scaler
 ├── history_test38.json               # 训练历史（train/test loss和F1）
-└── predictions_3d_test38.mat        # 3D概率体积
+└── predictions_3d_test38.mat        # 3D概率体积（如果开启--save_predictions）
+```
+
+### 预测模式输出
+```
+predictions/
+└── predictions_3d_test38.mat        # 3D概率体积（必须开启--save_predictions）
 ```
 
 ### MAT文件格式
