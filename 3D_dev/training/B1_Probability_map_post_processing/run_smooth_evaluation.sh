@@ -19,43 +19,81 @@ echo ""
 # 创建输出目录
 mkdir -p ${OUTPUT_DIR}
 
-# 检查预测文件是否存在
+# 检查预测文件是否存在（检查多个可能的位置）
 PRED_FILE="${RESULTS_DIR}/predictions_3d_test${TEST_SUBJECT}.mat"
 if [ ! -f "${PRED_FILE}" ]; then
-    echo "错误: 预测文件不存在: ${PRED_FILE}"
-    echo "请先运行1D训练生成预测结果"
-    exit 1
+    # 尝试其他可能的位置
+    ALT_PRED_FILE="../predictions/predictions_3d_test${TEST_SUBJECT}.mat"
+    if [ -f "${ALT_PRED_FILE}" ]; then
+        PRED_FILE="${ALT_PRED_FILE}"
+        echo "找到预测文件: ${PRED_FILE}"
+    else
+        echo "错误: 预测文件不存在于以下位置:"
+        echo "  ${RESULTS_DIR}/predictions_3d_test${TEST_SUBJECT}.mat"
+        echo "  ../predictions/predictions_3d_test${TEST_SUBJECT}.mat"
+        echo "请先运行1D训练生成预测结果，或检查--output_dir设置"
+        exit 1
+    fi
 fi
 
 # 获取对应的真实标签文件（从预测文件HDF5属性中读取，确保一致性）
-GT_FILE=$(python - <<'PY'
+echo ">>> 从预测文件读取GT文件路径..."
+GT_FILE=$(python3 - "${PRED_FILE}" "${DATA_DIR_3D}" <<'PY'
 import h5py, sys, os, glob
+
+if len(sys.argv) < 3:
+    print('', file=sys.stderr)
+    exit()
+
 pred_file, data_dir_3d = sys.argv[1], sys.argv[2]
+
 try:
     with h5py.File(pred_file, 'r') as f:
+        print(f"读取预测文件属性...", file=sys.stderr)
+        
+        # 显示所有属性用于调试
+        attrs = dict(f.attrs)
+        print(f"预测文件包含属性: {list(attrs.keys())}", file=sys.stderr)
+        
         # 优先使用训练时保存的完整路径
         test_file_3d = f.attrs.get('test_file_3d')
         if test_file_3d is not None:
             tf3d_str = test_file_3d.decode() if isinstance(test_file_3d, bytes) else str(test_file_3d)
+            print(f"找到test_file_3d属性: {tf3d_str}", file=sys.stderr)
             if os.path.exists(tf3d_str):
+                print(f"3D文件存在，使用: {tf3d_str}", file=sys.stderr)
                 print(tf3d_str)
                 exit()
+            else:
+                print(f"3D文件不存在: {tf3d_str}", file=sys.stderr)
         
         # 回退：从test_subject属性匹配文件名
-        test_subject = int(f.attrs.get('test_subject', 0))
+        test_subject = f.attrs.get('test_subject', 0)
+        if isinstance(test_subject, bytes):
+            test_subject = test_subject.decode()
+        test_subject = int(test_subject)
+        
+        print(f"使用test_subject属性: {test_subject}", file=sys.stderr)
+        
         if test_subject > 0:
             # 查找所有3D验证文件
-            files = sorted(glob.glob(os.path.join(data_dir_3d, '*_3d_validated.mat')))
+            pattern = os.path.join(data_dir_3d, '*_3d_validated.mat')
+            files = sorted(glob.glob(pattern))
+            print(f"在 {data_dir_3d} 找到 {len(files)} 个3D文件", file=sys.stderr)
+            
             if 1 <= test_subject <= len(files):
-                print(files[test_subject-1])
+                selected_file = files[test_subject-1]
+                print(f"选择第{test_subject}个文件: {selected_file}", file=sys.stderr)
+                print(selected_file)
                 exit()
         
-        # 最后回退：打印空字符串表示失败
+        print('匹配失败', file=sys.stderr)
         print('')
 except Exception as e:
+    print(f'Python错误: {e}', file=sys.stderr)
     print('')
 PY
-"${PRED_FILE}" "${DATA_DIR_3D}")
+)
 
 if [ -z "$GT_FILE" ] || [ ! -f "$GT_FILE" ]; then
     echo "错误: 未能从预测文件属性定位真实标签文件"
