@@ -12,6 +12,9 @@
 - **全面评估指标**：准确率、宏F1、κ系数、AUPRC等
 - **不均衡检测优化**：优先使用AUPRC评估不均衡问题下的检测改善
 - **可视化对比**：混淆矩阵和指标对比图表
+- **HDF5格式支持**：兼容B0训练模块输出的HDF5格式预测文件
+- **智能文件匹配**：从预测文件属性自动匹配正确的标签文件
+- **大体积支持**：使用HDF5保存平滑结果，支持>2GB的概率体积
 
 ## 文件说明
 
@@ -82,9 +85,11 @@ vim run_smooth_evaluation.sh
 # 设置 RESULTS_DIR="../B0_1D_training/results_1d_with_3d"
 # 设置 DATA_DIR_3D="/path/to/3d/validated/data"
 
-# 运行平滑评估
+# 运行平滑评估（自动从预测文件属性匹配GT文件）
 bash run_smooth_evaluation.sh
 ```
+
+**重要更新**：现在脚本会自动从预测文件的HDF5属性中读取`test_file_3d`路径，确保与训练时使用完全相同的标签文件，避免文件错配风险。
 
 ### 2. 自定义评估
 
@@ -129,9 +134,11 @@ done
 smooth_eval_results/
 ├── evaluation_results.json           # 详细评估指标
 ├── confusion_matrices_comparison.png  # 混淆矩阵对比图
-├── predictions_smooth_k3_test*.mat    # 3×3平滑预测结果
-└── predictions_smooth_k7_test*.mat    # 7×7平滑预测结果
+├── predictions_smooth_k3_test*.mat    # 3×3平滑预测结果（HDF5格式）
+└── predictions_smooth_k7_test*.mat    # 7×7平滑预测结果（HDF5格式）
 ```
+
+**注意**：平滑后的预测结果现在使用HDF5格式保存，支持大体积文件（>2GB），并包含完整的元数据信息。
 
 ### JSON结果格式
 ```json
@@ -160,13 +167,21 @@ smooth_eval_results/
 }
 ```
 
-### MAT文件格式
+### HDF5文件格式
 ```matlab
-predictions_smooth_k3_test38.mat:
-  - softmax_probabilities: (384, 336, 256, 102) 平滑后概率
-  - predicted_labels: (384, 336, 256) 预测标签
+predictions_smooth_k3_test38.mat (HDF5/MAT v7.3格式):
+
+数据集:
+  - softmax_probabilities: (384, 336, 256, 102) float32, gzip压缩
+  - predicted_labels: (384, 336, 256) uint8, gzip压缩
+
+属性:
   - test_subject: 测试被试编号
-  - smooth_kernel_size: 平滑核大小
+  - test_file_1d: 原始1D训练文件路径
+  - test_file_3d: 对应3D标签文件路径
+  - smooth_kernel_size: 平滑核大小 (3 或 7)
+  - shape: 数据形状
+  - prob_range: 概率值范围 [min, max]
 ```
 
 ## 预期效果
@@ -215,17 +230,34 @@ predictions_smooth_k3_test38.mat:
 --fast_smooth
 ```
 
-### 数据格式错误
+### 文件格式或路径错误
 ```bash
-# 确保输入文件格式正确
-# 预测文件：softmax_probabilities (384,336,256,102)
-# 标签文件：region_labels, region_mask (384,336,256)
+# 1. 确保预测文件为HDF5格式（由B0_1D_training生成）
+# 2. 检查预测文件是否包含必要属性：test_file_3d 或 test_subject
+# 3. 验证3D数据目录路径是否正确
+# 4. 确保标签文件形状为 (384,336,256)
 ```
 
-### AUPRC计算失败
+### 标签对齐问题
 ```python
-# 某些类别可能没有正样本，会自动跳过
-# 检查类别分布是否合理
+# 现在使用0-101标签与102通道对齐，不再有-1偏移
+# y_true: 0-101 (背景=0, 脑区=1-101)
+# y_scores: 102通道 (通道0=背景, 通道1-101=脑区)
+```
+
+### 大文件保存失败
+```bash
+# 现在使用HDF5格式，支持>2GB文件
+# 如果仍有问题，检查磁盘空间（~13GB per file）
+```
+
+### GT文件匹配失败
+```bash
+# 检查错误信息：
+# "未能从预测文件属性定位真实标签文件"
+# 1. 预测文件是否为正确的HDF5格式
+# 2. 预测文件是否包含test_file_3d或test_subject属性  
+# 3. 3D数据目录路径是否正确
 ```
 
 ## 技术细节
@@ -267,3 +299,13 @@ micro_auprc = auprc(all_true_labels, all_predictions)
 2. **形态学后处理**：结合开闭运算进一步优化
 3. **集成平滑**：结合多种平滑方法的优势
 4. **学习式后处理**：训练小型CNN进行端到端后处理优化
+
+## 重要更新记录
+
+### v1.1 - HDF5格式支持与文件匹配改进
+- **HDF5读取**：支持B0_1D_training输出的HDF5格式预测文件
+- **智能文件匹配**：从预测文件HDF5属性自动匹配正确的GT文件，避免错配
+- **标签对齐修正**：去除-1偏移，实现0-101标签与102通道完美对齐
+- **大文件支持**：使用HDF5格式保存平滑结果，支持>2GB概率体积
+- **严格形状验证**：替换危险的转置操作为严格的形状断言
+- **元数据保存**：保存完整的文件路径和处理参数用于追溯

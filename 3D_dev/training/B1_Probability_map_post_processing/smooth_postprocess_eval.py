@@ -24,20 +24,24 @@ warnings.filterwarnings('ignore')
 
 def load_predictions_and_gt(pred_file: Path, gt_file: Path):
     """加载预测概率和真实标签"""
-    # 加载预测
-    pred_data = scipy.io.loadmat(pred_file)
-    softmax_vol = pred_data['softmax_probabilities']  # (384, 336, 256, 102)
+    # 加载预测（只使用HDF5格式，训练脚本统一输出HDF5）
+    with h5py.File(pred_file, 'r') as f:
+        softmax_vol = f['softmax_probabilities'][()]  # (384, 336, 256, 102)
+        test_subject = f.attrs.get('test_subject', 'unknown')
+        print(f"成功加载HDF5格式预测文件，测试被试: {test_subject}")
+        print(f"  预测概率体积形状: {softmax_vol.shape}")
     
     # 加载真实标签
     with h5py.File(gt_file, 'r') as f:
         region_labels = f['region_labels'][()]
         region_mask = f['region_mask'][()]
         
-        # 处理转置
-        if region_labels.shape != (384, 336, 256):
-            region_labels = region_labels.T
-        if region_mask.shape != (384, 336, 256):
-            region_mask = region_mask.T
+        # 严格形状验证：不允许隐式轴转换，必须显式匹配预期形状
+        assert region_labels.shape == (384, 336, 256), \
+            f"region_labels 形状不符合预期 (384, 336, 256)，实际为 {region_labels.shape}，文件: {gt_file}"
+        
+        assert region_mask.shape == (384, 336, 256), \
+            f"region_mask 形状不符合预期 (384, 336, 256)，实际为 {region_mask.shape}，文件: {gt_file}"
     
     return softmax_vol, region_labels, region_mask
 
@@ -345,13 +349,13 @@ def main():
     
     # 提取有效像素用于评估
     valid_indices = np.where(valid_mask)
-    y_true = (gt_labels[valid_indices] - 1).astype(int)  # 转换为0-101
+    y_true = gt_labels[valid_indices].astype(int)  # 保持0-101，与102通道对齐
     
     # 原始预测
     print("\n处理原始预测...")
     pred_original = get_predictions_from_softmax(softmax_vol)
-    y_pred_original = pred_original[valid_indices]
-    y_scores_original = softmax_vol[valid_indices]
+    y_pred_original = pred_original[valid_indices]  # 0-101预测标签
+    y_scores_original = softmax_vol[valid_indices]   # 102通道概率，含背景通道0
     
     # 3x3平滑（使用完整脑组织掩膜）
     print("\n执行3x3平滑...")
@@ -418,31 +422,59 @@ def main():
     # 保存平滑后的预测结果
     print("保存平滑后预测结果...")
     
-    # 提取原始文件的测试被试信息
-    pred_data = scipy.io.loadmat(args.pred_file)
-    test_subject = pred_data.get('test_subject', 0)
+    # 从HDF5文件提取测试被试信息
+    with h5py.File(args.pred_file, 'r') as f:
+        test_subject = f.attrs.get('test_subject', 0)
+        test_file_1d = f.attrs.get('test_file_1d', '')
+        test_file_3d = f.attrs.get('test_file_3d', '')
     
-    # 保存3x3平滑结果
-    scipy.io.savemat(
-        output_dir / f'predictions_smooth_k3_test{test_subject}.mat',
-        {
-            'softmax_probabilities': softmax_k3,
-            'predicted_labels': pred_k3,
-            'test_subject': test_subject,
-            'smooth_kernel_size': 3
-        }
-    )
+    # 保存3x3平滑结果（HDF5格式，支持大体积）
+    k3_path = output_dir / f'predictions_smooth_k3_test{test_subject}.mat'
+    print(f"保存3x3平滑结果: {k3_path}")
+    print(f"  体积大小: ~{softmax_k3.nbytes / (1024**3):.1f}GB")
     
-    # 保存7x7平滑结果
-    scipy.io.savemat(
-        output_dir / f'predictions_smooth_k7_test{test_subject}.mat',
-        {
-            'softmax_probabilities': softmax_k7,
-            'predicted_labels': pred_k7,
-            'test_subject': test_subject,
-            'smooth_kernel_size': 7
-        }
-    )
+    with h5py.File(str(k3_path), 'w') as f:
+        # 保存概率数据，使用压缩减小文件大小
+        f.create_dataset('softmax_probabilities', 
+                       data=softmax_k3.astype(np.float32),
+                       compression='gzip', 
+                       compression_opts=4)
+        f.create_dataset('predicted_labels',
+                       data=pred_k3.astype(np.uint8),
+                       compression='gzip',
+                       compression_opts=4)
+        
+        # 保存元数据
+        f.attrs['test_subject'] = int(test_subject)
+        f.attrs['test_file_1d'] = str(test_file_1d)
+        f.attrs['test_file_3d'] = str(test_file_3d)
+        f.attrs['smooth_kernel_size'] = 3
+        f.attrs['shape'] = softmax_k3.shape
+        f.attrs['prob_range'] = [float(softmax_k3.min()), float(softmax_k3.max())]
+    
+    # 保存7x7平滑结果（HDF5格式，支持大体积）
+    k7_path = output_dir / f'predictions_smooth_k7_test{test_subject}.mat'
+    print(f"保存7x7平滑结果: {k7_path}")
+    print(f"  体积大小: ~{softmax_k7.nbytes / (1024**3):.1f}GB")
+    
+    with h5py.File(str(k7_path), 'w') as f:
+        # 保存概率数据，使用压缩减小文件大小
+        f.create_dataset('softmax_probabilities', 
+                       data=softmax_k7.astype(np.float32),
+                       compression='gzip', 
+                       compression_opts=4)
+        f.create_dataset('predicted_labels',
+                       data=pred_k7.astype(np.uint8),
+                       compression='gzip',
+                       compression_opts=4)
+        
+        # 保存元数据
+        f.attrs['test_subject'] = int(test_subject)
+        f.attrs['test_file_1d'] = str(test_file_1d)
+        f.attrs['test_file_3d'] = str(test_file_3d)
+        f.attrs['smooth_kernel_size'] = 7
+        f.attrs['shape'] = softmax_k7.shape
+        f.attrs['prob_range'] = [float(softmax_k7.min()), float(softmax_k7.max())]
     
     print(f"\n所有结果已保存至: {output_dir}")
     print("包含文件:")

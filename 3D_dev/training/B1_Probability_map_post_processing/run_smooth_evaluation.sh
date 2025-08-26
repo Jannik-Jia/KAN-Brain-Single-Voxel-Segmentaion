@@ -27,11 +27,44 @@ if [ ! -f "${PRED_FILE}" ]; then
     exit 1
 fi
 
-# 获取对应的真实标签文件（按字母顺序第38个）
-GT_FILE=$(ls ${DATA_DIR_3D}/*.mat | sort | sed -n "${TEST_SUBJECT}p")
-if [ ! -f "${GT_FILE}" ]; then
-    echo "错误: 真实标签文件不存在: ${GT_FILE}"
-    echo "请检查3D数据目录路径"
+# 获取对应的真实标签文件（从预测文件HDF5属性中读取，确保一致性）
+GT_FILE=$(python - <<'PY'
+import h5py, sys, os, glob
+pred_file, data_dir_3d = sys.argv[1], sys.argv[2]
+try:
+    with h5py.File(pred_file, 'r') as f:
+        # 优先使用训练时保存的完整路径
+        test_file_3d = f.attrs.get('test_file_3d')
+        if test_file_3d is not None:
+            tf3d_str = test_file_3d.decode() if isinstance(test_file_3d, bytes) else str(test_file_3d)
+            if os.path.exists(tf3d_str):
+                print(tf3d_str)
+                exit()
+        
+        # 回退：从test_subject属性匹配文件名
+        test_subject = int(f.attrs.get('test_subject', 0))
+        if test_subject > 0:
+            # 查找所有3D验证文件
+            files = sorted(glob.glob(os.path.join(data_dir_3d, '*_3d_validated.mat')))
+            if 1 <= test_subject <= len(files):
+                print(files[test_subject-1])
+                exit()
+        
+        # 最后回退：打印空字符串表示失败
+        print('')
+except Exception as e:
+    print('')
+PY
+"${PRED_FILE}" "${DATA_DIR_3D}")
+
+if [ -z "$GT_FILE" ] || [ ! -f "$GT_FILE" ]; then
+    echo "错误: 未能从预测文件属性定位真实标签文件"
+    echo "预测文件: ${PRED_FILE}"
+    echo "3D数据目录: ${DATA_DIR_3D}"
+    echo "请检查："
+    echo "  1. 预测文件是否为正确的HDF5格式"
+    echo "  2. 预测文件是否包含test_file_3d或test_subject属性"
+    echo "  3. 3D数据目录路径是否正确"
     exit 1
 fi
 
