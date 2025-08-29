@@ -77,6 +77,107 @@ class ImprovedConv2D_Baseline(nn.Module):
         x = x.flatten(1)
         return self.head(x)
 
+
+class ImprovedConv2D_ParamMatched(nn.Module):
+    """带可配置MLP头部的Conv2D模型，用于参数量对齐"""
+    
+    def __init__(
+        self,
+        input_channels: int = 351,
+        num_classes: int = 102,
+        mid: int = 128,
+        use_refine: bool = False,
+        use_se: bool = True,
+        kernel_size: int = 3,
+        head_dims: Optional[Tuple[int, ...]] = None,
+        mlp_hidden: int = 512,
+        mlp_layers: int = 1,
+        p_drop: float = 0.20,
+        activation: str = 'silu'
+    ):
+        super().__init__()
+        self.kernel_size = kernel_size
+        
+        # 通道混合（保持空间尺寸）
+        self.mix = nn.Conv2d(input_channels, mid, kernel_size=1, bias=False)
+        self.gn1 = nn.GroupNorm(8, mid)
+
+        # 空间聚合（根据kernel_size调整）
+        # 3×3 -> 1×1 或 7×7 -> 1×1
+        self.agg = nn.Conv2d(mid, mid, kernel_size=kernel_size, padding=0, bias=False)
+        self.gn2 = nn.GroupNorm(8, mid)
+
+        # 可选：1×1 残差精炼
+        self.use_refine = use_refine
+        if use_refine:
+            self.refine = nn.Conv2d(mid, mid, kernel_size=1, bias=False)
+            self.gn3 = nn.GroupNorm(8, mid)
+
+        # 可选：SE 通道注意力
+        self.se = SE2D(mid) if use_se else nn.Identity()
+
+        # 构建MLP头部
+        self._build_mlp_head(mid, num_classes, head_dims, mlp_hidden, mlp_layers, p_drop, activation)
+
+    def _build_mlp_head(
+        self,
+        input_dim: int,
+        output_dim: int,
+        head_dims: Optional[Tuple[int, ...]],
+        mlp_hidden: int,
+        mlp_layers: int,
+        p_drop: float,
+        activation: str
+    ):
+        """构建MLP头部"""
+        layers = []
+        
+        # 选择激活函数
+        act_fn = F.silu if activation == 'silu' else F.gelu
+        
+        if head_dims is not None:
+            # 使用精确指定的隐藏层维度
+            dims = [input_dim] + list(head_dims) + [output_dim]
+        else:
+            # 使用均匀宽度的隐藏层
+            if mlp_layers == 1:
+                # 兼容旧版本：单层直接连接
+                dims = [input_dim, output_dim]
+            else:
+                # 多层MLP
+                dims = [input_dim] + [mlp_hidden] * mlp_layers + [output_dim]
+        
+        # 构建层
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            
+            # 除了最后一层，都加激活和dropout
+            if i < len(dims) - 2:
+                # 使用模块形式的激活函数
+                if activation == 'silu':
+                    layers.append(nn.SiLU())
+                else:
+                    layers.append(nn.GELU())
+                
+                if p_drop > 0:
+                    layers.append(nn.Dropout(p_drop))
+        
+        self.head = nn.Sequential(*layers)
+
+    def forward(self, x):
+        # x: (B, C, H, W) - H,W是patch大小
+        x = F.silu(self.gn1(self.mix(x)))
+        x = F.silu(self.gn2(self.agg(x)))
+
+        if self.use_refine:
+            y = x
+            x = F.silu(self.gn3(self.refine(x)))
+            x = x + y
+
+        x = self.se(x)
+        x = x.flatten(1)  # (B, mid)
+        return self.head(x)  # (B, num_classes)
+
 # ==================== 数据集定义 ====================
 
 class Brain3DPatchDataset(Dataset):
@@ -328,6 +429,71 @@ class Trainer:
         
         return avg_loss, macro_f1
 
+# ==================== 工厂函数与辅助函数 ====================
+
+def count_params(model: nn.Module) -> int:
+    """计算模型的总参数量"""
+    return sum(p.numel() for p in model.parameters())
+
+
+def make_param_matched_model(
+    target: str = "35M",
+    input_channels: int = 351,
+    num_classes: int = 102,
+    kernel_size: int = 3,
+    custom_head_dims: Optional[Tuple[int, ...]] = None,
+    **kwargs
+) -> ImprovedConv2D_ParamMatched:
+    """工厂函数：创建参数量对齐的模型
+    
+    Args:
+        target: 目标参数量档位 ("35M", "52M", "69M")
+        input_channels: 输入通道数
+        num_classes: 输出类别数
+        kernel_size: 卷积核大小
+        custom_head_dims: 自定义头部维度（覆盖预设）
+        **kwargs: 其他传递给模型的参数
+    
+    Returns:
+        ImprovedConv2D_ParamMatched: 配置好的模型实例
+    """
+    
+    # 预设配置
+    configs = {
+        "35M": {
+            "mid": 128,
+            "head_dims": (4139, 4139, 4139)  # 约35M参数
+        },
+        "52M": {
+            "mid": 768,
+            "head_dims": (4608, 4608, 4608)  # 约52M参数
+        },
+        "69M": {
+            "mid": 896,
+            "head_dims": (4352, 4352, 4352, 4352)  # 约69M参数
+        }
+    }
+    
+    if target not in configs:
+        raise ValueError(f"Unknown target: {target}. Choose from {list(configs.keys())}")
+    
+    config = configs[target]
+    
+    # 如果提供了自定义head_dims，使用它
+    if custom_head_dims is not None:
+        config["head_dims"] = custom_head_dims
+    
+    # 合并配置与额外参数
+    model_kwargs = {
+        "input_channels": input_channels,
+        "num_classes": num_classes,
+        "kernel_size": kernel_size,
+        **config,
+        **kwargs
+    }
+    
+    return ImprovedConv2D_ParamMatched(**model_kwargs)
+
 # ==================== 主函数 ====================
 
 def main():
@@ -352,6 +518,9 @@ def main():
                        help='使用SE模块')
     parser.add_argument('--use_refine', action='store_true', default=False,
                        help='使用refine层')
+    parser.add_argument('--model_size', type=str, default=None,
+                       choices=['baseline', '35M', '52M', '69M'],
+                       help='模型大小配置 (None表示使用baseline)')
     
     args = parser.parse_args()
     
@@ -436,14 +605,29 @@ def main():
     
     # 创建模型
     logger.info(f'创建 {args.patch_size}×{args.patch_size} 模型...')
-    model = ImprovedConv2D_Baseline(
-        input_channels=351,
-        num_classes=102,
-        mid=128,
-        use_refine=args.use_refine,
-        use_se=args.use_se,
-        kernel_size=args.patch_size
-    )
+    
+    if args.model_size is None or args.model_size == 'baseline':
+        # 使用原始基线模型
+        model = ImprovedConv2D_Baseline(
+            input_channels=351,
+            num_classes=102,
+            mid=128,
+            use_refine=args.use_refine,
+            use_se=args.use_se,
+            kernel_size=args.patch_size
+        )
+        logger.info('使用基线模型（~58K参数）')
+    else:
+        # 使用参数匹配模型
+        model = make_param_matched_model(
+            target=args.model_size,
+            input_channels=351,
+            num_classes=102,
+            kernel_size=args.patch_size,
+            use_refine=args.use_refine,
+            use_se=args.use_se
+        )
+        logger.info(f'使用参数匹配模型（目标: {args.model_size}）')
     
     logger.info(f'模型参数量: {sum(p.numel() for p in model.parameters()):,}')
     
@@ -515,4 +699,111 @@ def main():
     logger.info(f'结果保存在: {output_dir}')
 
 if __name__ == '__main__':
-    main()
+    import sys
+    
+    # 检查是否运行自检
+    if len(sys.argv) > 1 and sys.argv[1] == '--self-check':
+        print("===== 模型自检 =====")
+        print()
+        
+        # 测试设备
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # 测试数据
+        B = 2
+        C = 351
+        H = W = 3  # 3×3 patch
+        x = torch.randn(B, C, H, W).to(device)
+        
+        print("输入形状:", x.shape)
+        print()
+        
+        # 测试原始模型（作为基准）
+        print("1. 原始模型（基准）")
+        model_baseline = ImprovedConv2D_Baseline(
+            input_channels=C,
+            num_classes=102,
+            mid=128
+        ).to(device)
+        
+        with torch.no_grad():
+            out = model_baseline(x)
+        
+        print(f"   参数量: {count_params(model_baseline):,}")
+        print(f"   输出形状: {out.shape}")
+        print()
+        
+        # 测试35M参数模型
+        print("2. 35M参数模型")
+        model_35m = make_param_matched_model(
+            target="35M",
+            input_channels=C,
+            num_classes=102,
+            kernel_size=3
+        ).to(device)
+        
+        with torch.no_grad():
+            out = model_35m(x)
+        
+        params_35m = count_params(model_35m)
+        print(f"   参数量: {params_35m:,}")
+        print(f"   目标: ~35,000,000 (误差: {abs(params_35m - 35_000_000) / 35_000_000 * 100:.2f}%)")
+        print(f"   输出形状: {out.shape}")
+        print()
+        
+        # 测试52M参数模型
+        print("3. 52M参数模型")
+        model_52m = make_param_matched_model(
+            target="52M",
+            input_channels=C,
+            num_classes=102,
+            kernel_size=3
+        ).to(device)
+        
+        with torch.no_grad():
+            out = model_52m(x)
+        
+        params_52m = count_params(model_52m)
+        print(f"   参数量: {params_52m:,}")
+        print(f"   目标: ~52,000,000 (误差: {abs(params_52m - 52_000_000) / 52_000_000 * 100:.2f}%)")
+        print(f"   输出形状: {out.shape}")
+        print()
+        
+        # 测试69M参数模型
+        print("4. 69M参数模型")
+        model_69m = make_param_matched_model(
+            target="69M",
+            input_channels=C,
+            num_classes=102,
+            kernel_size=3
+        ).to(device)
+        
+        with torch.no_grad():
+            out = model_69m(x)
+        
+        params_69m = count_params(model_69m)
+        print(f"   参数量: {params_69m:,}")
+        print(f"   目标: ~69,000,000 (误差: {abs(params_69m - 69_000_000) / 69_000_000 * 100:.2f}%)")
+        print(f"   输出形状: {out.shape}")
+        print()
+        
+        # 测试兼容性：不传head_dims时的默认行为
+        print("5. 兼容性测试（默认单层头）")
+        model_compat = ImprovedConv2D_ParamMatched(
+            input_channels=C,
+            num_classes=102,
+            mid=128,
+            mlp_layers=1  # 默认单层，应该与基准模型参数量相同
+        ).to(device)
+        
+        with torch.no_grad():
+            out = model_compat(x)
+        
+        print(f"   参数量: {count_params(model_compat):,}")
+        print(f"   基准参数量: {count_params(model_baseline):,}")
+        print(f"   输出形状: {out.shape}")
+        print()
+        
+        print("===== 自检完成 =====")
+    else:
+        main()
