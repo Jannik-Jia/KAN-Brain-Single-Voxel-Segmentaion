@@ -565,6 +565,10 @@ def train_model(config):
     test_features = test_data_info['features']
     test_labels = test_data_info['labels']
     
+    # 设置设备
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info(f"使用设备: {device}")
+    
     # 创建数据加载器
     train_dataset = TensorDataset(
         torch.FloatTensor(train_features),
