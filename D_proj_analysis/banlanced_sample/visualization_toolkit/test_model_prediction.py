@@ -153,22 +153,26 @@ def test_model_prediction_and_save():
     try:
         print("\n🏗️ 重建模型架构...")
         
-        # 从checkpoint的config中获取正确的维度信息
+        # 从模型权重中获取实际的维度信息（最准确）
+        first_layer_weight = model_state['fc1.weight']
+        last_layer_weight = model_state['fc5.weight']
+        n_features = first_layer_weight.shape[1]  # 输入维度
+        n_classes = last_layer_weight.shape[0]    # 输出维度
+        
+        print(f"  从模型权重获取实际维度:")
+        print(f"    输入特征维度: {n_features}")
+        print(f"    输出类别数: {n_classes}")
+        
+        # 显示config中的配置（仅作参考）
         if 'config' in checkpoint:
             config = checkpoint['config']
-            n_features = config.get('input_dim', test_data_info['features'].shape[1])
-            n_classes = config.get('num_classes', len(np.unique(test_data_info['labels'])))
-            print(f"  从config获取维度:")
-            print(f"    输入特征维度: {n_features}")
-            print(f"    输出类别数: {n_classes}")
-        else:
-            # 从模型状态推断维度
-            first_layer_weight = model_state['fc1.weight']
-            n_features = first_layer_weight.shape[1]
-            n_classes = model_state['fc5.weight'].shape[0]
-            print(f"  从模型状态推断维度:")
-            print(f"    输入特征维度: {n_features}")
-            print(f"    输出类别数: {n_classes}")
+            config_features = config.get('input_dim', 'N/A')
+            config_classes = config.get('num_classes', 'N/A')
+            print(f"  Config中的配置（仅参考）:")
+            print(f"    配置特征维度: {config_features}")
+            print(f"    配置类别数: {config_classes}")
+            if config_features != n_features:
+                print(f"    ⚠️ Config与实际权重不符，以权重为准")
         
         # 检查数据维度是否匹配
         actual_features = test_data_info['features'].shape[1]
