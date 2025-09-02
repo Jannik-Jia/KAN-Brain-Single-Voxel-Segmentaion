@@ -79,21 +79,24 @@ def test_model_prediction_and_save():
         print(f"✅ 模型加载成功")
         
         # 检查checkpoint内容
+        print("📊 Checkpoint keys:", list(checkpoint.keys()))
+        
         if isinstance(checkpoint, dict):
-            if 'model' in checkpoint:
-                model_state = checkpoint['model']
+            if 'model_state_dict' in checkpoint:
+                model_state = checkpoint['model_state_dict']
                 print("📊 Checkpoint信息:")
-                if 'epoch' in checkpoint:
-                    print(f"  Epoch: {checkpoint['epoch']}")
-                if 'best_f1' in checkpoint:
-                    print(f"  Best F1: {checkpoint['best_f1']:.6f}")
-                if 'include_background' in checkpoint:
-                    include_background = checkpoint['include_background']
+                if 'best_epoch' in checkpoint:
+                    print(f"  Best Epoch: {checkpoint['best_epoch']}")
+                if 'config' in checkpoint and 'include_background' in checkpoint['config']:
+                    include_background = checkpoint['config']['include_background']
                     print(f"  Include background: {include_background}")
                 else:
                     # 从文件名推断
                     include_background = 'bg_incl' in str(model_path)
                     print(f"  Include background (推断): {include_background}")
+            elif 'model' in checkpoint:
+                model_state = checkpoint['model']
+                include_background = 'bg_incl' in str(model_path)
             else:
                 model_state = checkpoint
                 include_background = 'bg_incl' in str(model_path)
