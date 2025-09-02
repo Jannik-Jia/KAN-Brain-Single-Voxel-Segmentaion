@@ -16,8 +16,16 @@ import logging
 # 添加项目路径
 sys.path.append(str(Path(__file__).parent.parent))
 
-# 导入训练代码中的函数
+# 设置logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 导入训练代码中的函数，并设置logger
 try:
+    import train_with_3d_prediction_save
+    # 设置训练代码中需要的logger
+    train_with_3d_prediction_save.logger = logger
+    
     from train_with_3d_prediction_save import (
         load_and_process_subject_with_mask,
         predictions_to_3d_volume,
@@ -27,9 +35,6 @@ try:
 except ImportError as e:
     print(f"❌ 无法导入训练代码: {e}")
     sys.exit(1)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 def test_model_prediction_and_save():
     """测试模型预测和保存过程"""
