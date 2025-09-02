@@ -83,6 +83,10 @@ if python "$SCRIPT_NAME" \
     mode1_duration=$((mode1_end - mode1_start))
     echo -e "${GREEN}✅ 模式1 (排除背景) 训练完成!${NC}"
     echo -e "${GREEN}耗时: $(($mode1_duration / 60))分$(($mode1_duration % 60))秒${NC}"
+    
+    echo ""
+    echo -e "${BLUE}✅ 模式1训练和Per-Class分析完成 (已集成在训练脚本中)${NC}"
+    
 else
     echo -e "${RED}❌ 模式1 (排除背景) 训练失败!${NC}"
     exit 1
@@ -125,6 +129,10 @@ if python "$SCRIPT_NAME" \
     mode2_duration=$((mode2_end - mode2_start))
     echo -e "${GREEN}✅ 模式2 (包含背景) 训练完成!${NC}"
     echo -e "${GREEN}耗时: $(($mode2_duration / 60))分$(($mode2_duration % 60))秒${NC}"
+    
+    echo ""
+    echo -e "${BLUE}✅ 模式2训练和Per-Class分析完成 (已集成在训练脚本中)${NC}"
+    
 else
     echo -e "${RED}❌ 模式2 (包含背景) 训练失败!${NC}"
     exit 1
@@ -190,7 +198,52 @@ echo -e "${GREEN}  • balanced_3d_*.pth      : 训练好的模型权重${NC}"
 echo -e "${GREEN}  • training_history_*.png : 训练曲线图${NC}"
 echo -e "${GREEN}  • *.log                  : 详细训练日志${NC}"
 
+# =============================================================================
+# 最终对比总结
+# =============================================================================
+
 echo ""
 echo -e "${BLUE}===============================================================================${NC}"
-echo -e "${BLUE}✨ 全部训练完成! 祝你分析愉快! ✨${NC}"
+echo -e "${BLUE}📊 两种模式Per-Class分析总结${NC}"
 echo -e "${BLUE}===============================================================================${NC}"
+
+echo -e "${GREEN}✅ 训练和分析完成！两种模式的详细per-class量化对比已生成${NC}"
+echo ""
+echo -e "${YELLOW}📁 Per-Class分析结果位置:${NC}"
+echo -e "${YELLOW}  • ./results/per_class_analysis_bg_excl_*/ - 排除背景模式详细分析${NC}"
+echo -e "${YELLOW}  • ./results/per_class_analysis_bg_incl_*/ - 包含背景模式详细分析${NC}"
+echo ""
+echo -e "${YELLOW}🎯 每个分析目录包含:${NC}"
+echo -e "${YELLOW}  • comprehensive_per_class_analysis.png - 完整的逐class F1/Dice/Precision/Recall对比${NC}"
+echo -e "${YELLOW}  • detailed_performance_ranking_analysis.png - 性能排名和分布分析${NC}"
+echo -e "${YELLOW}  • detailed_correlation_analysis.png - 各指标相关性分析${NC}"
+echo -e "${YELLOW}  • per_class_detailed_metrics.csv - 每个class的详细量化数据${NC}"
+echo -e "${YELLOW}  • per_class_summary_report.txt - 人类友好的分析报告${NC}"
+echo ""
+echo -e "${BLUE}💡 关键改进:${NC}"
+echo -e "${YELLOW}  ✅ Per-class分析直接集成在训练脚本中，无需重新加载模型${NC}"
+echo -e "${YELLOW}  ✅ 训练完成后立即进行分析，避免模型加载错误${NC}"
+echo -e "${YELLOW}  ✅ 每个训练模式完成后立即看到详细的F1/Precision/Recall等指标对比${NC}"
+
+echo ""
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "${BLUE}✨ 全部训练和分析完成! 祝你分析愉快! ✨${NC}"
+echo -e "${BLUE}===============================================================================${NC}"
+
+echo ""
+echo -e "${BLUE}📊 完整输出文件清单:${NC}"
+echo -e "${GREEN}训练结果:${NC}"
+echo -e "${GREEN}  • *_softmax_3d_*.nii.gz    : 3D softmax概率图${NC}"
+echo -e "${GREEN}  • balanced_3d_*.pth        : 训练好的模型权重${NC}"
+echo -e "${GREEN}  • training_history_*.png   : 训练曲线图${NC}"
+echo ""
+echo -e "${GREEN}Per-Class分析结果:${NC}"
+echo -e "${GREEN}  • per_class_analysis_*/    : 详细的per-class可视化分析${NC}"
+echo -e "${GREEN}  • per_class_comparison_*.txt : 对比分析报告${NC}"
+echo ""
+echo -e "${BLUE}💡 建议的分析流程:${NC}"
+echo -e "${YELLOW}1. 查看训练曲线图确认训练效果${NC}"
+echo -e "${YELLOW}2. 打开per_class分析目录查看详细可视化${NC}"
+echo -e "${YELLOW}3. 重点关注comprehensive_per_class_analysis.png${NC}"
+echo -e "${YELLOW}4. 对比两种训练模式的per-class性能差异${NC}"
+echo -e "${YELLOW}5. 根据分析结果优化模型或数据处理策略${NC}"

@@ -25,6 +25,23 @@ from tqdm import tqdm
 import logging
 import sys
 import argparse
+import pandas as pd
+from sklearn.metrics import (
+    precision_score, recall_score, confusion_matrix, 
+    classification_report, balanced_accuracy_score
+)
+
+# 检查是否能导入可视化工具包
+try:
+    from visualization_toolkit.per_class_analyzer import (
+        calculate_per_class_metrics_detailed,
+        create_comprehensive_visualizations,
+        save_detailed_results
+    )
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
+    print("⚠️  Warning: visualization_toolkit not found. Per-class analysis will be skipped.")
 
 # ... (前面的代码保持不变，这里省略) ...
 # Setup logging, set_seed, device, STANDARD_LABELS, create_label_mapping, RegModel 等函数
@@ -669,6 +686,131 @@ def train_model(config):
     
     logger.info(f"💾 模型已保存: {model_path}")
     logger.info(f"💾 训练图表已保存: {plot_path}")
+    
+    # 立即进行Per-Class性能分析 (在训练完成后，模型仍在内存中)
+    if VISUALIZATION_AVAILABLE:
+        logger.info("="*80)
+        logger.info("🎯 开始Per-Class性能量化分析...")
+        logger.info("="*80)
+        
+        try:
+            # 使用现有的测试数据进行分析，无需重新加载模型
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            model.eval()
+            
+            # 准备测试数据
+            X_test = test_data_info['features']  
+            y_test = test_data_info['labels']
+            
+            # 确保数据格式正确
+            if not isinstance(X_test, np.ndarray):
+                X_test = np.array(X_test)
+            if not isinstance(y_test, np.ndarray):
+                y_test = np.array(y_test)
+            
+            logger.info(f"📊 对 {X_test.shape[0]:,} 个测试样本进行预测...")
+            logger.info(f"  特征维度: {X_test.shape}")
+            logger.info(f"  标签唯一值数量: {len(np.unique(y_test))}")
+            
+            # 批量预测 - 优化内存使用
+            batch_size = min(8192, len(X_test))  # 动态调整batch size
+            all_predictions = []
+            
+            with torch.no_grad():
+                for i in tqdm(range(0, len(X_test), batch_size), desc="预测进度"):
+                    batch_X = torch.FloatTensor(X_test[i:i+batch_size]).to(device)
+                    batch_pred = model(batch_X)
+                    batch_pred_labels = torch.argmax(batch_pred, dim=1).cpu().numpy()
+                    all_predictions.extend(batch_pred_labels)
+                    
+                    # 清理GPU内存
+                    del batch_X, batch_pred
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+            
+            predictions_array = np.array(all_predictions)
+            
+            # 验证预测结果
+            logger.info(f"✅ 预测完成!")
+            logger.info(f"  预测标签范围: {predictions_array.min()} ~ {predictions_array.max()}")
+            logger.info(f"  预测中的唯一标签数: {len(np.unique(predictions_array))}")
+            logger.info(f"  真实标签范围: {y_test.min()} ~ {y_test.max()}")
+            logger.info(f"  真实标签中的唯一值数: {len(np.unique(y_test))}")
+            
+            logger.info(f"🧮 开始计算per-class指标...")
+            
+            # 计算per-class指标
+            per_class_analysis_dir = output_dir / f"per_class_analysis_bg_{bg_str}_{timestamp}"
+            per_class_analysis_dir.mkdir(exist_ok=True)
+            
+            # 使用现有的数据信息
+            volume_info = {
+                'subject_id': test_data_info.get('subject_id', 'unknown'),
+                'bg_mode': 'included' if config['include_background'] else 'excluded',
+                'timestamp': timestamp,
+                'total_voxels': X_test.shape[0],
+                'n_classes': len(np.unique(y_test))
+            }
+            
+            # 计算详细的per-class指标
+            # 注意：需要传递标签映射信息以正确显示FreeSurfer标签ID
+            forward_mapping, reverse_mapping = create_label_mapping()
+            
+            metrics_dict = calculate_per_class_metrics_detailed(
+                y_test, predictions_array, 
+                volume_info=volume_info,
+                reverse_mapping=reverse_mapping  # 传递反向映射以显示原始标签
+            )
+            
+            # 生成可视化
+            create_comprehensive_visualizations(metrics_dict, per_class_analysis_dir)
+            
+            # 保存详细结果
+            save_detailed_results(metrics_dict, per_class_analysis_dir)
+            
+            # 输出关键统计信息到日志
+            logger.info("="*60)
+            logger.info("📊 Per-Class分析完成！关键统计:")
+            logger.info("="*60)
+            
+            overall = metrics_dict['overall_metrics']
+            logger.info(f"总体素数量: {overall['total_samples']:,}")
+            logger.info(f"分析的类别数: {overall['total_classes_analyzed']}")
+            
+            # 显示前10个表现最好的类别
+            per_class_data = metrics_dict['per_class_metrics']
+            sorted_classes = sorted(per_class_data, key=lambda x: x['f1_score'], reverse=True)
+            
+            logger.info("\n🏆 F1 Score Top 10:")
+            for i, class_info in enumerate(sorted_classes[:10]):
+                logger.info(f"  {i+1:2d}. FreeSurfer Label {class_info['class_id']:3d}: F1={class_info['f1_score']:.4f}, "
+                          f"Precision={class_info['precision']:.4f}, Recall={class_info['recall']:.4f}")
+            
+            # 统计性能分布
+            excellent = len([x for x in per_class_data if x['f1_score'] >= 0.8])
+            good = len([x for x in per_class_data if 0.6 <= x['f1_score'] < 0.8])
+            fair = len([x for x in per_class_data if 0.3 <= x['f1_score'] < 0.6])
+            poor = len([x for x in per_class_data if 0.05 <= x['f1_score'] < 0.3])
+            failed = len([x for x in per_class_data if x['f1_score'] < 0.05])
+            
+            logger.info(f"\n📈 性能分布:")
+            logger.info(f"  优秀 (F1≥0.8): {excellent} 类别")
+            logger.info(f"  良好 (0.6≤F1<0.8): {good} 类别") 
+            logger.info(f"  一般 (0.3≤F1<0.6): {fair} 类别")
+            logger.info(f"  较差 (0.05≤F1<0.3): {poor} 类别")
+            logger.info(f"  失败 (F1<0.05): {failed} 类别")
+            
+            logger.info(f"\n💾 Per-class分析结果已保存到: {per_class_analysis_dir}")
+            logger.info(f"🎯 重点查看:")
+            logger.info(f"  • comprehensive_per_class_analysis.png - 完整的逐class性能对比")
+            logger.info(f"  • per_class_detailed_metrics.csv - 详细量化数据")
+            logger.info(f"  • per_class_summary_report.txt - 文字分析报告")
+            
+        except Exception as e:
+            logger.error(f"❌ Per-class分析失败: {str(e)}")
+            logger.error("训练结果已保存，但per-class分析未完成")
+    else:
+        logger.info("⚠️ 跳过per-class分析 (visualization_toolkit未找到)")
     
     return {
         'model': model,
