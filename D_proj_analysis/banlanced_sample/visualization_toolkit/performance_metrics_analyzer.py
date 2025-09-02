@@ -43,6 +43,23 @@ class PerformanceMetricsAnalyzer:
         # 预测结果 - 直接使用连续索引
         self.predictions = np.argmax(self.softmax, axis=-1)
         
+        # 🔍 调试信息：检查softmax和预测
+        print(f"  🔍 Softmax shape: {self.softmax.shape}")
+        print(f"  🔍 Softmax range: [{self.softmax.min():.2e}, {self.softmax.max():.6f}]")
+        print(f"  🔍 Softmax mean: {self.softmax.mean():.6f}")
+        
+        # 检查各类别的最大概率
+        for i in range(min(5, self.softmax.shape[-1])):
+            max_prob = self.softmax[..., i].max()
+            print(f"  🔍 Class {i} max prob: {max_prob:.6f}")
+        
+        # 检查预测分布
+        unique_preds, counts = np.unique(self.predictions, return_counts=True)
+        print(f"  🔍 Prediction classes found: {len(unique_preds)}")
+        for pred, count in zip(unique_preds[:5], counts[:5]):  # 显示前5个
+            pct = count / np.prod(self.predictions.shape) * 100
+            print(f"    Class {pred}: {count:,} ({pct:.2f}%)")
+        
         # 🔑 关键修复：将真实标签也映射到连续空间（和训练时一样）
         self.labels_continuous = self._apply_label_mapping(self.labels)
         
