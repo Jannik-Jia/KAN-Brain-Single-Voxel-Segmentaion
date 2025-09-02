@@ -195,29 +195,39 @@ class BrainSegmentationVisualizer:
         # 3. 置信度分布箱线图
         ax = axes[1, 0]
         box_data = []
+        valid_class_names = []
         for c in top_classes[:5]:  # 只显示前5个类别
             class_probs = self.softmax[..., c['class_id']]
             mask = self.predictions == c['class_id']
             if np.any(mask):
                 box_data.append(class_probs[mask])
+                valid_class_names.append(c['class_name'])
         
-        bp = ax.boxplot(box_data, labels=[c['class_name'] for c in top_classes[:5]])
-        ax.set_ylabel('Probability')
-        ax.set_title('Confidence Distribution (Top 5 Classes)')
-        ax.set_xticklabels([c['class_name'] for c in top_classes[:5]], rotation=45, ha='right')
+        if len(box_data) > 0:
+            bp = ax.boxplot(box_data)
+            ax.set_ylabel('Probability')
+            ax.set_title('Confidence Distribution (Top Classes)')
+            ax.set_xticklabels(valid_class_names, rotation=45, ha='right')
+        else:
+            ax.text(0.5, 0.5, 'No valid data for boxplot', ha='center', va='center', transform=ax.transAxes)
         
         # 4. 不确定性分布
         ax = axes[1, 1]
         uncertainty_by_class = []
+        valid_uncertainty_names = []
         for c in top_classes[:5]:
             mask = self.predictions == c['class_id']
             if np.any(mask):
                 uncertainty_by_class.append(self.uncertainty[mask])
+                valid_uncertainty_names.append(c['class_name'])
         
-        bp = ax.boxplot(uncertainty_by_class, labels=[c['class_name'] for c in top_classes[:5]])
-        ax.set_ylabel('Uncertainty (Entropy)')
-        ax.set_title('Uncertainty Distribution by Class')
-        ax.set_xticklabels([c['class_name'] for c in top_classes[:5]], rotation=45, ha='right')
+        if len(uncertainty_by_class) > 0:
+            bp = ax.boxplot(uncertainty_by_class)
+            ax.set_ylabel('Uncertainty (Entropy)')
+            ax.set_title('Uncertainty Distribution by Class')
+            ax.set_xticklabels(valid_uncertainty_names, rotation=45, ha='right')
+        else:
+            ax.text(0.5, 0.5, 'No valid data for boxplot', ha='center', va='center', transform=ax.transAxes)
         
         plt.suptitle('Class Confidence Analysis', fontsize=16, y=1.02)
         plt.tight_layout()
