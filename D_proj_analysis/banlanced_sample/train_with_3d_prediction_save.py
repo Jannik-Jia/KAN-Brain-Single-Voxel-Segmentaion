@@ -121,12 +121,12 @@ def load_and_process_subject_with_mask(subject_dir, include_background=True, exc
     original_shape_3d = labels_3d.shape
     logger.info(f"  {subject_dir.name}: 4D{data_4d.shape}, 3D{labels_3d.shape}")
     
-    # 展平数据（使用Fortran顺序）
+    # 展平数据（使用C顺序）
     n_voxels = np.prod(labels_3d.shape)
     n_modalities = data_4d.shape[3]
     
-    features = data_4d.reshape(n_voxels, n_modalities, order='F')
-    labels_flat = labels_3d.flatten(order='F')
+    features = data_4d.reshape(n_voxels, n_modalities)  # 使用默认C order
+    labels_flat = labels_3d.flatten()  # 使用默认C order
     
     # 验证数据对应
     assert features.shape[0] == labels_flat.shape[0], f"特征和标签数量不匹配"
@@ -151,7 +151,7 @@ def load_and_process_subject_with_mask(subject_dir, include_background=True, exc
     if not include_background:
         # 排除背景体素（标签=0）
         spatial_mask_flat = labels_flat != 0  # 1D掩码
-        spatial_mask_3d = spatial_mask_flat.reshape(original_shape_3d, order='F')  # 3D掩码
+        spatial_mask_3d = spatial_mask_flat.reshape(original_shape_3d)  # 3D掩码 - 使用默认C order
         
         # 保留的体素索引
         flat_indices = np.where(spatial_mask_flat)[0]  # 在原始展平数组中的索引
@@ -218,17 +218,17 @@ def predictions_to_3d_volume(predictions, spatial_info, include_background=True,
     
     if include_background:
         # 如果训练时包含了背景，直接映射回去
-        volume_flat = volume_3d.reshape(-1, n_classes, order='F')  # 展平到 (total_voxels, n_classes)
+        volume_flat = volume_3d.reshape(-1, n_classes)  # 展平到 (total_voxels, n_classes) - 使用默认C order
         volume_flat[flat_indices] = predictions  # 直接赋值
         
     else:
         # 如果训练时排除了背景，需要特殊处理
         # 1. 非背景区域：使用预测结果
-        volume_flat = volume_3d.reshape(-1, n_classes, order='F')
+        volume_flat = volume_3d.reshape(-1, n_classes)  # 使用默认C order
         volume_flat[flat_indices] = predictions
         
         # 2. 背景区域：设置为背景类概率=1，其他类概率=0
-        background_indices = np.where(~spatial_mask_3d.flatten(order='F'))[0]
+        background_indices = np.where(~spatial_mask_3d.flatten())[0]  # 同样使用默认C order
         volume_flat[background_indices, background_class] = 1.0  # 背景类概率=1
         # 其他类概率已经是0（初始化时）
     
