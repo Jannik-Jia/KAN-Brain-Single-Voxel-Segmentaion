@@ -153,12 +153,37 @@ def test_model_prediction_and_save():
     try:
         print("\n🏗️ 重建模型架构...")
         
-        # 获取特征维度和类别数
-        n_features = test_data_info['features'].shape[1]
-        n_classes = len(np.unique(test_data_info['labels']))
+        # 从checkpoint的config中获取正确的维度信息
+        if 'config' in checkpoint:
+            config = checkpoint['config']
+            n_features = config.get('input_dim', test_data_info['features'].shape[1])
+            n_classes = config.get('num_classes', len(np.unique(test_data_info['labels'])))
+            print(f"  从config获取维度:")
+            print(f"    输入特征维度: {n_features}")
+            print(f"    输出类别数: {n_classes}")
+        else:
+            # 从模型状态推断维度
+            first_layer_weight = model_state['fc1.weight']
+            n_features = first_layer_weight.shape[1]
+            n_classes = model_state['fc5.weight'].shape[0]
+            print(f"  从模型状态推断维度:")
+            print(f"    输入特征维度: {n_features}")
+            print(f"    输出类别数: {n_classes}")
         
-        print(f"  输入特征维度: {n_features}")
-        print(f"  输出类别数: {n_classes}")
+        # 检查数据维度是否匹配
+        actual_features = test_data_info['features'].shape[1]
+        if n_features != actual_features:
+            print(f"⚠️ 特征维度不匹配: 模型期望{n_features}，数据实际{actual_features}")
+            # 调整数据以匹配模型
+            if actual_features > n_features:
+                print(f"  截取前{n_features}个特征")
+                test_data_info['features'] = test_data_info['features'][:, :n_features]
+            else:
+                print(f"  用零填充到{n_features}个特征")
+                padding = np.zeros((test_data_info['features'].shape[0], n_features - actual_features))
+                test_data_info['features'] = np.concatenate([test_data_info['features'], padding], axis=1)
+        
+        print(f"  最终使用维度: 特征{test_data_info['features'].shape[1]}, 类别{n_classes}")
         
         # 使用训练代码中的RegModel架构
         from torch import nn
