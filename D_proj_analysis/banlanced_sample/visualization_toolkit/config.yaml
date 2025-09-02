@@ -1,0 +1,61 @@
+# Brain Segmentation Visualization Toolkit Configuration
+# ==================================================
+
+# Default paths (relative to project root)
+paths:
+  # Input data paths (will be auto-detected if not specified)
+  softmax_file: ""           # Path to softmax .nii.gz file
+  info_file: ""             # Path to corresponding .json info file  
+  label_file: ""            # Path to ground truth labels .nii.gz file
+  
+  # Output directory for visualization results
+  output_dir: "visualization_results"
+
+# Analysis settings
+analysis:
+  # Which analyses to run (set to false to skip)
+  run_basic_visualization: true
+  run_advanced_analysis: true
+  run_performance_analysis: true
+  
+  # Visualization parameters
+  top_n_classes: 20         # Number of top classes to show in confusion matrix
+  slice_selection: "auto"   # "auto" or specify indices like [100, 150, 120]
+  uncertainty_percentiles: [25, 75]  # Thresholds for uncertainty levels
+  
+  # Performance analysis settings
+  min_support_threshold: 100  # Minimum samples for detailed class analysis
+  
+# Visualization settings
+visualization:
+  # Figure settings
+  dpi: 150
+  figure_format: "png"      # "png", "pdf", "svg"
+  
+  # Interactive plots
+  generate_html_reports: true
+  
+  # Color schemes
+  uncertainty_colormap: "hot"
+  performance_colormap: "RdYlGn"
+  class_colormap: "tab20"
+
+# Advanced settings
+advanced:
+  # Sampling analysis
+  sampling_density_bins: 50
+  spatial_smoothing_sigma: 3
+  
+  # Class relationship analysis  
+  max_classes_for_clustering: 30
+  cooccurrence_sample_size: 1000
+  
+  # Memory optimization
+  max_voxels_for_3d_scatter: 1000
+  batch_processing: false
+
+# Logging
+logging:
+  level: "INFO"             # "DEBUG", "INFO", "WARNING", "ERROR"
+  save_logs: true
+  log_file: "visualization.log"
