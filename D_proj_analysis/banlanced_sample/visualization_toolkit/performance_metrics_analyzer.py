@@ -40,8 +40,15 @@ class PerformanceMetricsAnalyzer:
         self.class_names = self.info.get('class_names', list(range(self.n_classes)))
         self.include_background = self.info['include_background']
         
-        # 预测结果
+        # 预测结果 - 直接使用连续索引
         self.predictions = np.argmax(self.softmax, axis=-1)
+        
+        # 🔑 关键修复：将真实标签也映射到连续空间（和训练时一样）
+        self.labels_continuous = self._apply_label_mapping(self.labels)
+        
+        print(f"  Original labels range: {self.labels.min()}-{self.labels.max()}")
+        print(f"  Mapped labels range: {self.labels_continuous.min()}-{self.labels_continuous.max()}")
+        print(f"  Predictions range: {self.predictions.min()}-{self.predictions.max()}")
         
         # 验证形状
         if self.softmax.shape[:3] != self.labels.shape:
@@ -55,11 +62,41 @@ class PerformanceMetricsAnalyzer:
         # 识别有效区域
         self._identify_analysis_regions()
     
+    def _apply_label_mapping(self, labels):
+        """将原始标签映射到连续索引（和训练时保持一致）"""
+        print("🔄 Applying label mapping (same as training)...")
+        
+        # 创建映射字典 - 和训练代码中create_label_mapping()逻辑一致
+        forward_mapping = {original: continuous for continuous, original in enumerate(self.class_names)}
+        
+        # 应用映射
+        labels_flat = labels.flatten()
+        labels_mapped = np.zeros_like(labels_flat)
+        
+        unique_orig = np.unique(labels_flat)
+        print(f"  Original unique labels: {sorted(unique_orig)}")
+        
+        for orig_label in unique_orig:
+            if orig_label in forward_mapping:
+                mask = labels_flat == orig_label
+                labels_mapped[mask] = forward_mapping[orig_label]
+                count = np.sum(mask)
+                if orig_label != 0:  # 不显示背景映射信息
+                    print(f"    {orig_label:3d} → {forward_mapping[orig_label]:2d} ({count:,} 体素)")
+        
+        # 恢复形状
+        labels_continuous = labels_mapped.reshape(labels.shape)
+        
+        mapped_unique = np.unique(labels_continuous)
+        print(f"  Mapped unique labels: {sorted(mapped_unique)}")
+        
+        return labels_continuous
+    
     def _identify_analysis_regions(self):
         """识别分析区域"""
         
         # 获取所有体素的展平版本
-        self.labels_flat = self.labels.flatten()
+        self.labels_flat = self.labels_continuous.flatten()  # 🔑 使用映射后的连续标签
         self.predictions_flat = self.predictions.flatten()
         self.softmax_flat = self.softmax.reshape(-1, self.n_classes)
         

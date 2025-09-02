@@ -17,7 +17,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # 文件路径配置
-BG_INCL_SOFTMAX="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/D_proj_analysis/banlanced_sample/results/test_softmax_3d_FOR_016_20250204_reproducibility_bg_incl_20250827_154857.nii.gz"
+BG_INCL_SOFTMAX="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/D_proj_analysis/banlanced_sample/results/test_softmax_3d_FOR_016_20250204_reproducibility_bg_incl_20250829_151320.nii.gz"
 BG_INCL_INFO="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/D_proj_analysis/banlanced_sample/results/test_softmax_info_FOR_016_20250204_reproducibility_bg_incl_20250829_151320.json"
 
 BG_EXCL_SOFTMAX="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/D_proj_analysis/banlanced_sample/results/test_softmax_3d_FOR_016_20250204_reproducibility_bg_excl_20250827_154806.nii.gz"
@@ -71,39 +71,12 @@ echo -e "${GREEN}✅ All input files found${NC}"
 cd "$SCRIPT_DIR"
 
 # =============================================================================
-# 概率分布分析
+# 📈 性能指标分析 (基础对比)
 # =============================================================================
 
 echo ""
 echo -e "${PURPLE}===============================================================================${NC}"
-echo -e "${PURPLE}📊 PROBABILITY DISTRIBUTION ANALYSIS${NC}"
-echo -e "${PURPLE}===============================================================================${NC}"
-
-# 分析背景包含模式
-echo -e "${CYAN}🌟 Analyzing Background INCLUDED mode...${NC}"
-$PYTHON_CMD probability_distribution_analyzer.py \
-    -s "$BG_INCL_SOFTMAX" \
-    -i "$BG_INCL_INFO" \
-    -t 0.01 \
-    -o "$OUTPUT_DIR/prob_dist_bg_included" \
-    2>&1 | tee "$OUTPUT_DIR/prob_analysis_bg_incl.log"
-
-echo ""
-echo -e "${CYAN}🎯 Analyzing Background EXCLUDED mode...${NC}"
-$PYTHON_CMD probability_distribution_analyzer.py \
-    -s "$BG_EXCL_SOFTMAX" \
-    -i "$BG_EXCL_INFO" \
-    -t 0.01 \
-    -o "$OUTPUT_DIR/prob_dist_bg_excluded" \
-    2>&1 | tee "$OUTPUT_DIR/prob_analysis_bg_excl.log"
-
-# =============================================================================
-# 性能指标分析  
-# =============================================================================
-
-echo ""
-echo -e "${PURPLE}===============================================================================${NC}"
-echo -e "${PURPLE}📈 PERFORMANCE METRICS ANALYSIS${NC}"
+echo -e "${PURPLE}📈 STEP 1: PERFORMANCE METRICS ANALYSIS (Fixed Label Mapping)${NC}"
 echo -e "${PURPLE}===============================================================================${NC}"
 
 # 分析背景包含模式
@@ -123,6 +96,62 @@ $PYTHON_CMD performance_metrics_analyzer.py \
     -l "$LABELS_FILE" \
     -o "$OUTPUT_DIR/performance_bg_excluded" \
     2>&1 | tee "$OUTPUT_DIR/performance_bg_excl.log"
+
+# =============================================================================
+# 🔍 混合数据深度分析 (关键诊断)
+# =============================================================================
+
+echo ""
+echo -e "${PURPLE}===============================================================================${NC}"
+echo -e "${PURPLE}🔍 STEP 2: HYBRID DATA ANALYSIS (Root Cause Investigation)${NC}"
+echo -e "${PURPLE}===============================================================================${NC}"
+echo -e "${YELLOW}This analysis addresses the artificial background filling issue in exclusion mode${NC}"
+
+# 分析背景包含模式
+echo -e "${CYAN}🌟 Analyzing Background INCLUDED mode (Pure Predictions)...${NC}"
+$PYTHON_CMD hybrid_data_analyzer.py \
+    -s "$BG_INCL_SOFTMAX" \
+    -i "$BG_INCL_INFO" \
+    -l "$LABELS_FILE" \
+    -o "$OUTPUT_DIR/hybrid_analysis_bg_included" \
+    2>&1 | tee "$OUTPUT_DIR/hybrid_analysis_bg_incl.log"
+
+echo ""
+echo -e "${CYAN}🎯 Analyzing Background EXCLUDED mode (Hybrid Data Detection)...${NC}"
+$PYTHON_CMD hybrid_data_analyzer.py \
+    -s "$BG_EXCL_SOFTMAX" \
+    -i "$BG_EXCL_INFO" \
+    -l "$LABELS_FILE" \
+    -o "$OUTPUT_DIR/hybrid_analysis_bg_excluded" \
+    2>&1 | tee "$OUTPUT_DIR/hybrid_analysis_bg_excl.log"
+
+# =============================================================================
+# 📊 概率分布分析 (置信度洞察)
+# =============================================================================
+
+echo ""
+echo -e "${PURPLE}===============================================================================${NC}"
+echo -e "${PURPLE}📊 STEP 3: PROBABILITY DISTRIBUTION ANALYSIS (Confidence Patterns)${NC}"
+echo -e "${PURPLE}===============================================================================${NC}"
+echo -e "${YELLOW}Analyzes model confidence and uncertainty patterns${NC}"
+
+# 分析背景包含模式
+echo -e "${CYAN}🌟 Analyzing Background INCLUDED mode...${NC}"
+$PYTHON_CMD probability_distribution_analyzer.py \
+    -s "$BG_INCL_SOFTMAX" \
+    -i "$BG_INCL_INFO" \
+    -t 0.001 \
+    -o "$OUTPUT_DIR/prob_dist_bg_included" \
+    2>&1 | tee "$OUTPUT_DIR/prob_analysis_bg_incl.log"
+
+echo ""
+echo -e "${CYAN}🎯 Analyzing Background EXCLUDED mode...${NC}"
+$PYTHON_CMD probability_distribution_analyzer.py \
+    -s "$BG_EXCL_SOFTMAX" \
+    -i "$BG_EXCL_INFO" \
+    -t 0.001 \
+    -o "$OUTPUT_DIR/prob_dist_bg_excluded" \
+    2>&1 | tee "$OUTPUT_DIR/prob_analysis_bg_excl.log"
 
 # =============================================================================
 # 生成对比报告
@@ -239,12 +268,52 @@ cat > "$OUTPUT_DIR/comparison_report.html" << 'EOF'
         
         <div class="summary-box">
             <h3>📊 Analysis Overview</h3>
-            <p><strong>Purpose:</strong> Compare probability distributions and performance metrics between background inclusion and exclusion training modes.</p>
+            <p><strong>Purpose:</strong> Comprehensive comparison of background inclusion vs exclusion training modes with corrected analysis methodology.</p>
             <p><strong>Subject:</strong> FOR_016_20250204_reproducibility</p>
             <p><strong>Analysis Date:</strong> TIMESTAMP_PLACEHOLDER</p>
+            <p><strong>✅ Key Improvements:</strong> Fixed label mapping issues and hybrid data handling for accurate comparison.</p>
         </div>
         
-        <h2>📈 Probability Distribution Analysis</h2>
+        <div class="summary-box" style="background: #d4edda; border-color: #c3e6cb;">
+            <h3>🔧 Analysis Methodology (3-Step Process)</h3>
+            <p><strong>Step 1: Performance Metrics</strong> - Standard ML metrics with corrected label mapping</p>
+            <p><strong>Step 2: Hybrid Data Analysis</strong> - Specialized analysis for background exclusion artifacts</p>
+            <p><strong>Step 3: Probability Distribution</strong> - Model confidence and uncertainty patterns</p>
+            <p><em>This comprehensive approach ensures accurate and meaningful comparisons!</em></p>
+        </div>
+        
+        <h2>🔍 Hybrid Data Analysis (New - Addresses Root Cause)</h2>
+        <div class="comparison-grid">
+            <div class="mode-section mode-included">
+                <div class="mode-title included-title">🌟 Background INCLUDED (Pure Data)</div>
+                <div class="image-container">
+                    <img src="hybrid_analysis_bg_included_foreground.png" alt="Pure Prediction Analysis">
+                </div>
+                <p><strong>Data Type:</strong></p>
+                <ul>
+                    <li>✅ All voxels are real model predictions</li>
+                    <li>✅ Natural uncertainty patterns throughout</li>
+                    <li>✅ Unbiased probability distributions</li>
+                </ul>
+            </div>
+            
+            <div class="mode-section mode-excluded">
+                <div class="mode-title excluded-title">🎯 Background EXCLUDED (Hybrid Data)</div>
+                <div class="image-container">
+                    <img src="hybrid_analysis_bg_excluded_foreground.png" alt="Hybrid Data Analysis">
+                    <br><br>
+                    <img src="hybrid_analysis_bg_excluded_regions.png" alt="Real vs Artificial Regions">
+                </div>
+                <p><strong>Data Type:</strong></p>
+                <ul>
+                    <li>⚠️ Foreground: Real model predictions</li>
+                    <li>🤖 Background: Artificial perfect predictions</li>
+                    <li>📊 Requires separate analysis for each region</li>
+                </ul>
+            </div>
+        </div>
+        
+        <h2>📈 Traditional Probability Distribution Analysis</h2>
         <div class="comparison-grid">
             <div class="mode-section mode-included">
                 <div class="mode-title included-title">🌟 Background INCLUDED</div>
@@ -304,7 +373,15 @@ cat > "$OUTPUT_DIR/comparison_report.html" << 'EOF'
         
         <h2>📁 Generated Files</h2>
         <div class="file-list">
-            <h4>🎨 Visualizations:</h4>
+            <h4>🔍 Hybrid Data Analysis (New - Addresses Root Issue):</h4>
+            <ul>
+                <li><code>hybrid_analysis_bg_included_foreground.png</code> - Pure prediction analysis</li>
+                <li><code>hybrid_analysis_bg_excluded_foreground.png</code> - Real foreground region analysis</li>
+                <li><code>hybrid_analysis_bg_excluded_regions.png</code> - Real vs artificial region comparison</li>
+                <li><code>hybrid_analysis_bg_*_performance.csv</code> - Corrected performance metrics</li>
+            </ul>
+            
+            <h4>🎨 Traditional Visualizations:</h4>
             <ul>
                 <li><code>prob_dist_bg_included.png</code> - Probability distribution analysis (background included)</li>
                 <li><code>prob_dist_bg_excluded.png</code> - Probability distribution analysis (background excluded)</li>
@@ -322,8 +399,10 @@ cat > "$OUTPUT_DIR/comparison_report.html" << 'EOF'
             
             <h4>📝 Log Files:</h4>
             <ul>
-                <li><code>prob_analysis_bg_incl.log</code> - Probability analysis log (background included)</li>
-                <li><code>prob_analysis_bg_excl.log</code> - Probability analysis log (background excluded)</li>
+                <li><code>hybrid_analysis_bg_incl.log</code> - Hybrid data analysis log (background included)</li>
+                <li><code>hybrid_analysis_bg_excl.log</code> - Hybrid data analysis log (background excluded)</li>
+                <li><code>prob_analysis_bg_incl.log</code> - Traditional probability analysis log (background included)</li>
+                <li><code>prob_analysis_bg_excl.log</code> - Traditional probability analysis log (background excluded)</li>
                 <li><code>performance_bg_incl.log</code> - Performance analysis log (background included)</li>
                 <li><code>performance_bg_excl.log</code> - Performance analysis log (background excluded)</li>
             </ul>
@@ -331,36 +410,43 @@ cat > "$OUTPUT_DIR/comparison_report.html" << 'EOF'
         
         <h2>💡 Key Questions to Investigate</h2>
         <div class="summary-box">
-            <h4>🔍 Probability Distribution Comparison:</h4>
+            <h4>🔍 Hybrid Data Issue (Root Cause):</h4>
             <ul>
-                <li>Which mode shows more realistic probability distributions?</li>
-                <li>How does background handling affect class confidence patterns?</li>
-                <li>Are there significant differences in uncertainty patterns?</li>
+                <li><strong>Are you comparing apples to oranges?</strong> Pure predictions vs hybrid data</li>
+                <li>How much does artificial background filling bias overall statistics?</li>
+                <li>What's the true model performance on real prediction regions only?</li>
             </ul>
             
-            <h4>📊 Performance Metrics Comparison:</h4>
+            <h4>📊 Corrected Performance Analysis:</h4>
             <ul>
-                <li>Which anatomical structures benefit from background inclusion?</li>
-                <li>How does overall F1 score compare between modes?</li>
-                <li>Are there classes that perform better with background exclusion?</li>
+                <li>When comparing <em>same regions</em>, which training mode performs better?</li>
+                <li>Does background inclusion help foreground structure segmentation?</li>
+                <li>Which mode shows more realistic uncertainty quantification?</li>
             </ul>
             
-            <h4>🎯 Practical Implications:</h4>
+            <h4>🎯 Training Strategy Decision:</h4>
             <ul>
-                <li>Which training strategy is more suitable for your use case?</li>
-                <li>How do computational costs compare?</li>
-                <li>What are the trade-offs in model interpretability?</li>
+                <li>For deployment: Which provides more honest uncertainty estimates?</li>
+                <li>For evaluation: Which gives more realistic performance metrics?</li>
+                <li>For your use case: Background focus vs anatomical structure focus?</li>
             </ul>
         </div>
         
-        <h2>🚀 Next Steps</h2>
+        <h2>🚀 Analysis Workflow</h2>
         <div class="summary-box">
             <ol>
-                <li><strong>Review Visualizations:</strong> Compare the generated plots side by side</li>
-                <li><strong>Analyze CSV Reports:</strong> Dive into detailed numerical comparisons</li>
-                <li><strong>Check Log Files:</strong> Review detailed analysis outputs and statistics</li>
-                <li><strong>Make Decision:</strong> Choose the optimal training strategy based on your requirements</li>
+                <li><strong>Start with Step 1 Results:</strong> Check if F1 scores are now meaningful (not 0.000)</li>
+                <li><strong>Examine Step 2 Analysis:</strong> Understand the hybrid data impact in exclusion mode</li>
+                <li><strong>Study Step 3 Patterns:</strong> Compare confidence distributions between modes</li>
+                <li><strong>Make Informed Decision:</strong> Choose training strategy based on corrected analysis</li>
             </ol>
+        </div>
+        
+        <div class="summary-box" style="background: #e7f3ff; border-color: #b3d9ff;">
+            <h3>🎯 Expected Improvements</h3>
+            <p><strong>✅ Meaningful Performance Metrics:</strong> F1 scores should now be > 0.000</p>
+            <p><strong>✅ Accurate Comparison:</strong> Fair comparison between training modes</p>
+            <p><strong>✅ Root Cause Understanding:</strong> Clear insights into hybrid data effects</p>
         </div>
     </div>
 </body>

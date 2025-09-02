@@ -78,6 +78,10 @@ class ProbabilityDistributionAnalyzer:
                 class_stats.append(stats_dict)
         
         # 转换为DataFrame
+        if not class_stats:
+            print("⚠️ No classes found with high probability voxels above threshold")
+            return pd.DataFrame()
+        
         df = pd.DataFrame(class_stats)
         df = df.sort_values('n_high_prob_voxels', ascending=False)
         
@@ -91,6 +95,10 @@ class ProbabilityDistributionAnalyzer:
                                            save_path: Optional[str]):
         """可视化概率分布"""
         
+        if df.empty:
+            print("⚠️ Skipping visualization - no data available")
+            return
+            
         fig, axes = plt.subplots(3, 3, figsize=(20, 15))
         axes = axes.flatten()
         
@@ -236,6 +244,16 @@ class ProbabilityDistributionAnalyzer:
         print("📝 Generating detailed class report...")
         
         df = self.analyze_class_probability_distributions(prob_threshold)
+        
+        if df.empty:
+            print("\n" + "="*80)
+            print("⚠️ NO DATA FOR PROBABILITY ANALYSIS")
+            print("="*80)
+            print(f"Background Mode: {'Included' if self.include_background else 'Excluded'}")
+            print(f"Probability Threshold: {prob_threshold}")
+            print("Reason: No classes found with voxels above probability threshold")
+            print("💡 Try lowering the probability threshold (e.g., 0.001)")
+            return df
         
         if save_path:
             csv_path = save_path.replace('.png', '.csv') if save_path.endswith('.png') else save_path + '.csv'
