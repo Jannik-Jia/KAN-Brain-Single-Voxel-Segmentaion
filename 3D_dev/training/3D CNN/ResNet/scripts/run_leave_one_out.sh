@@ -16,8 +16,12 @@ set -e  # Exit on any error
 
 # ==================== CONFIGURATION ====================
 
-# Data directory - MODIFY THIS to point to your MAT files
-DATA_DIR="/path/to/your/mat/files"
+# Data directory settings - same as 3D CNN baseline
+DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D data (2D patches)
+DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"              # 1D data
+
+# ResNet uses 3D data (for 2D patch extraction)
+DATA_DIR=$DATA_DIR_3D
 
 # Output directory
 OUTPUT_BASE="./results_leave_one_out_resnet"
@@ -29,7 +33,7 @@ NUM_CLASSES=102         # Brain regions
 PATCH_SIZE=7            # 7×7 patches
 
 # Training parameters
-EPOCHS=100
+EPOCHS=100                 # Note: 3D CNN baseline uses 50, ResNet may need more
 BATCH_SIZE=256          # Adjust based on GPU memory
 LEARNING_RATE=0.0001
 WEIGHT_DECAY=0.0001
@@ -55,7 +59,7 @@ VERBOSE="--verbose"
 # ==================== VALIDATION ====================
 
 echo "=== MRI ResNet Leave-One-Out Cross-Validation ==="
-echo "Data directory: $DATA_DIR"
+echo "Data directory: $DATA_DIR (same as 3D CNN baseline)"
 echo "Output directory: $OUTPUT_BASE"
 echo "Configuration:"
 echo "  - Base width: $BASE_WIDTH (≈50M parameters)"
@@ -117,7 +121,8 @@ User: $(whoami)
 Working Directory: $(pwd)
 
 Data Configuration:
-- Data Directory: $DATA_DIR
+- Data Directory: $DATA_DIR (3D validated data for 2D patch extraction)
+- Alternative 1D Directory: $DATA_DIR_1D (not used by ResNet)
 - MAT Files Found: $MAT_COUNT
 - Patch Size: ${PATCH_SIZE}×${PATCH_SIZE}
 - Input Channels: $INPUT_CHANNELS
