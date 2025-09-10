@@ -10,7 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Optional, Tensor
+from typing import Optional
+from torch import Tensor
 
 
 class FocalLoss(nn.Module):

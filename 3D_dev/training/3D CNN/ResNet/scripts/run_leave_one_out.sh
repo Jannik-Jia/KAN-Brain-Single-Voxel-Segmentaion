@@ -1,16 +1,14 @@
 #!/bin/bash
-"""
-Leave-One-Out Cross-Validation for MRI ResNet
-
-Automatically runs training for all 38 subjects in Leave-One-Out fashion.
-Each subject is used once as the test set while the remaining 37 are used for training.
-
-Usage:
-    bash run_leave_one_out.sh
-
-Configuration:
-    Modify the variables below to adjust training parameters.
-"""
+# Leave-One-Out Cross-Validation for MRI ResNet
+#
+# Automatically runs training for all 38 subjects in Leave-One-Out fashion.
+# Each subject is used once as the test set while the remaining 37 are used for training.
+#
+# Usage:
+#     bash run_leave_one_out.sh
+#
+# Configuration:
+#     Modify the variables below to adjust training parameters.
 
 set -e  # Exit on any error
 
