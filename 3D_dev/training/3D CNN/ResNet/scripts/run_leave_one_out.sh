@@ -43,7 +43,7 @@ NUM_WORKERS=4              # Adjust based on CPU cores
 
 # Loss and optimization
 LOSS_TYPE="cb_focal"       # cb_focal, logit_adj, focal, weighted_ce, ce
-USE_MIXUP="--use_mixup"
+# USE_MIXUP="--use_mixup"  # 禁用Mixup - 对脑区分类任务不适用
 MIXUP_ALPHA=0.2
 USE_EMA="--use_ema"
 
@@ -180,7 +180,7 @@ ARGS="$ARGS --config ../configs/default_config.json"
 
 # Add optional arguments
 [ -n "$SAMPLES_PER_SUBJECT" ] && ARGS="$ARGS --samples_per_subject $SAMPLES_PER_SUBJECT"
-[ -n "$USE_MIXUP" ] && ARGS="$ARGS $USE_MIXUP"
+# [ -n "$USE_MIXUP" ] && ARGS="$ARGS $USE_MIXUP"  # Mixup已禁用
 [ -n "$USE_EMA" ] && ARGS="$ARGS $USE_EMA"
 [ -n "$VERBOSE" ] && ARGS="$ARGS $VERBOSE"
 

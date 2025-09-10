@@ -128,7 +128,7 @@ class MRIResNetTrainer:
         ], dtype=torch.float32).to(device)
         
         # Setup loss function
-        self.criterion = create_loss_function(
+        self.base_criterion = create_loss_function(
             loss_type=loss_type,
             class_counts=class_counts,
             reduction='mean',
@@ -138,9 +138,14 @@ class MRIResNetTrainer:
             tau=tau
         ).to(device)
         
-        # Wrap with mixup if enabled
+        # Keep reference to base criterion for non-mixup cases
+        self.criterion = self.base_criterion
+        
+        # Create mixup criterion if enabled
         if use_mixup:
-            self.criterion = MixupLoss(self.criterion)
+            self.mixup_criterion = MixupLoss(self.base_criterion)
+        else:
+            self.mixup_criterion = None
         
         # Setup optimizer
         self.optimizer = optim.AdamW(
