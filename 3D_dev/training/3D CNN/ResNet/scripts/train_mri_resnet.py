@@ -215,7 +215,8 @@ class MRIResNetTrainer:
                 # Mixed precision forward pass
                 with torch.cuda.amp.autocast():
                     outputs = self.model(mixed_images)
-                    loss = self.criterion(outputs, labels_a, labels_b, lam)
+                    # Use mixup_criterion for mixup loss
+                    loss = self.mixup_criterion(outputs, labels_a, labels_b, lam)
                 
                 # Backward pass
                 self.scaler.scale(loss).backward()
@@ -238,7 +239,8 @@ class MRIResNetTrainer:
                 
                 with torch.cuda.amp.autocast():
                     outputs = self.model(images)
-                    loss = self.criterion(outputs, labels)
+                    # Use base_criterion for standard loss
+                    loss = self.base_criterion(outputs, labels)
                 
                 self.scaler.scale(loss).backward()
                 
