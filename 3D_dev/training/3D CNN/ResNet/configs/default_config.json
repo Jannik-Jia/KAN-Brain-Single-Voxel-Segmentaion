@@ -1,0 +1,75 @@
+{
+  "model": {
+    "architecture": "mri_resnet50",
+    "input_channels": 351,
+    "num_classes": 102,
+    "base_width": 104,
+    "stem_channels": 512,
+    "zero_init_residual": false
+  },
+  
+  "data": {
+    "patch_size": 7,
+    "samples_per_subject": null,
+    "balance_classes": true,
+    "augmentation": true,
+    "cache_data": true,
+    "min_samples_per_class": 50,
+    "weighted_sampling": false
+  },
+  
+  "training": {
+    "epochs": 100,
+    "batch_size": 256,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.0001,
+    "patience": 15,
+    "num_workers": 4,
+    "device": "cuda",
+    "seed": 42
+  },
+  
+  "loss": {
+    "type": "cb_focal",
+    "gamma": 1.5,
+    "beta": 0.9999,
+    "label_smoothing": 0.0,
+    "tau": 1.0
+  },
+  
+  "optimization": {
+    "optimizer": "adamw",
+    "betas": [0.9, 0.999],
+    "scheduler": "cosine",
+    "T_max": 100,
+    "eta_min": 1e-6,
+    "gradient_clip": 1.0,
+    "mixed_precision": true
+  },
+  
+  "augmentation": {
+    "use_mixup": true,
+    "mixup_alpha": 0.2,
+    "use_ema": true,
+    "ema_decay": 0.999
+  },
+  
+  "logging": {
+    "verbose": true,
+    "save_checkpoint_every": 10,
+    "log_level": "INFO"
+  },
+  
+  "hardware": {
+    "cuda_visible_devices": null,
+    "pin_memory": true,
+    "non_blocking": true,
+    "benchmark": true
+  },
+  
+  "experimental": {
+    "use_sync_bn": false,
+    "use_distributed": false,
+    "amp_opt_level": "O1"
+  }
+}

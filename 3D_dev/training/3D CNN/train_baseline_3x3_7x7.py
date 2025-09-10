@@ -241,8 +241,29 @@ class Brain3DPatchDataset(Dataset):
                 
             print(f"转置后数据形状: data={data.shape}, labels={region_labels.shape}, mask={region_mask.shape}")
             
+            # 对每个patient的351个channel进行z-score标准化
+            # data shape: (384, 336, 256, 351)
+            data = data.astype(np.float32)
+            
+            # 计算每个channel的均值和标准差
+            for ch in range(data.shape[3]):  # 351个channels
+                channel_data = data[:, :, :, ch]
+                
+                # 计算当前channel的均值和标准差
+                mean_val = np.mean(channel_data)
+                std_val = np.std(channel_data)
+                
+                # 避免除以0
+                if std_val > 1e-8:
+                    data[:, :, :, ch] = (channel_data - mean_val) / std_val
+                else:
+                    # 如果标准差为0，则将该channel设为0
+                    data[:, :, :, ch] = 0
+            
+            print(f"已完成351维channel的z-score标准化")
+            
         return {
-            'data': data.astype(np.float32),
+            'data': data,
             'labels': region_labels.astype(np.int64),
             'mask': region_mask.astype(bool)
         }
