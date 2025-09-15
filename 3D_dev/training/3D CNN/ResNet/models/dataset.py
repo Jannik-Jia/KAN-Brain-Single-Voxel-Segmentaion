@@ -138,14 +138,14 @@ class MRIBrain2DPatchDataset(Dataset):
         
         self.logger.info(f"Labels/masks loaded: {total_memory_mb:.1f} MB")
         
-        # Generate ALL valid coordinates for training
-        self._generate_all_valid_coords()
+        # Epoch management (initialize before generating coords)
+        self.current_epoch = 0
         
         # Thread safety for file access
         self.file_locks = defaultdict(threading.Lock)
         
-        # Epoch management
-        self.current_epoch = 0
+        # Generate ALL valid coordinates for training
+        self._generate_all_valid_coords()
     
     def _generate_all_valid_coords(self):
         """Generate all valid coordinates for memory-efficient training"""
