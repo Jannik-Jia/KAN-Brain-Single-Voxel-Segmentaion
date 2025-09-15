@@ -349,6 +349,10 @@ class MRIResNetTrainer:
         for epoch in range(epochs):
             epoch_start = time.time()
             
+            # Set epoch for memory-efficient mode (reshuffles data)
+            if hasattr(self.train_loader.dataset, 'set_epoch'):
+                self.train_loader.dataset.set_epoch(epoch)
+                
             # Training
             train_loss, train_f1 = self.train_epoch()
             
@@ -689,6 +693,8 @@ def main():
                        help='Enable data augmentation')
     parser.add_argument('--weighted_sampling', action='store_true',
                        help='Enable weighted random sampling')
+    parser.add_argument('--memory_efficient', action='store_true',
+                       help='Enable memory-efficient mode (loads all 71M patches)')
     
     # Loss and optimization
     parser.add_argument('--loss_type', type=str, default='cb_focal',
@@ -748,7 +754,7 @@ def main():
     logger.info(f"Training subjects: {len(train_files)}")
     logger.info(f"Test subject: {args.test_subject}")
     
-    # Create data loaders - match 3D CNN baseline behavior
+    # Create data loaders - with optional memory-efficient mode
     train_loader, test_loader = create_data_loaders(
         train_files=train_files,
         test_files=test_files,
@@ -758,8 +764,17 @@ def main():
         samples_per_subject=args.samples_per_subject,
         balance_classes=getattr(args, 'balance_classes', False),
         augmentation=getattr(args, 'augmentation', False),
-        weighted_sampling=getattr(args, 'weighted_sampling', False)
+        weighted_sampling=getattr(args, 'weighted_sampling', False),
+        memory_efficient=getattr(args, 'memory_efficient', False)
     )
+    
+    # Log memory mode
+    if getattr(args, 'memory_efficient', False):
+        logger.info("Using MEMORY-EFFICIENT mode: ~1.2GB memory, 71M patches per epoch")
+        logger.info(f"Training dataset size: {len(train_loader.dataset):,} patches")
+    else:
+        logger.info("Using ORIGINAL mode: cached data, limited patches per subject")
+        logger.info(f"Training dataset size: {len(train_loader.dataset):,} patches")
     
     logger.info(f"Training samples: {len(train_loader.dataset)}")
     logger.info(f"Test samples: {len(test_loader.dataset)}")

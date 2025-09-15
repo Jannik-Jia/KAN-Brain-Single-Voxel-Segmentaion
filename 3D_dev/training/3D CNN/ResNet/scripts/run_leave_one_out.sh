@@ -31,15 +31,16 @@ NUM_CLASSES=102         # Brain regions
 PATCH_SIZE=7            # 7×7 patches
 
 # Training parameters
-EPOCHS=100                 # Note: 3D CNN baseline uses 50, ResNet may need more
-BATCH_SIZE=2048          # Adjust based on GPU memory
-LEARNING_RATE=0.0008
+EPOCHS=20                  # 减少epoch数：因为现在每个epoch包含71M patches vs 原来370K
+BATCH_SIZE=2048           # 保持不变，已经优化过
+LEARNING_RATE=0.0008      # 保持不变，已经根据batch size调整过
 WEIGHT_DECAY=0.0002
-PATIENCE=15
+PATIENCE=8                # 减少patience：完整数据训练收敛更快
 
-# Data parameters
-SAMPLES_PER_SUBJECT=10000  # Match 3D CNN baseline default
-NUM_WORKERS=8              # Adjust based on CPU cores
+# Data parameters - 内存高效模式
+SAMPLES_PER_SUBJECT=10000  # 在内存高效模式下此参数被忽略，实际使用全部71M patches
+NUM_WORKERS=0              # 重要：内存高效模式必须设为0 (h5py不支持多进程)
+MEMORY_EFFICIENT="--memory_efficient"  # 启用内存高效模式
 
 # Loss and optimization
 LOSS_TYPE="cb_focal"       # cb_focal, logit_adj, focal, weighted_ce, ce
@@ -56,15 +57,17 @@ VERBOSE="--verbose"
 
 # ==================== VALIDATION ====================
 
-echo "=== MRI ResNet Leave-One-Out Cross-Validation ==="
-echo "Data directory: $DATA_DIR (same as 3D CNN baseline)"
+echo "=== MRI ResNet Leave-One-Out Cross-Validation (Memory-Efficient) ==="
+echo "Data directory: $DATA_DIR"
 echo "Output directory: $OUTPUT_BASE"
 echo "Configuration:"
 echo "  - Base width: $BASE_WIDTH (≈50M parameters)"
 echo "  - Patch size: ${PATCH_SIZE}×${PATCH_SIZE}"
 echo "  - Batch size: $BATCH_SIZE"
 echo "  - Loss type: $LOSS_TYPE"
-echo "  - Epochs: $EPOCHS"
+echo "  - Epochs: $EPOCHS (reduced due to 71M patches per epoch)"
+echo "  - Memory mode: EFFICIENT (1.2GB vs 450GB)"
+echo "  - Workers: $NUM_WORKERS (0 for h5py compatibility)"
 echo "  - Device: $DEVICE"
 
 # Check if data directory exists
@@ -182,6 +185,7 @@ ARGS="$ARGS --config ../configs/default_config.json"
 [ -n "$SAMPLES_PER_SUBJECT" ] && ARGS="$ARGS --samples_per_subject $SAMPLES_PER_SUBJECT"
 # [ -n "$USE_MIXUP" ] && ARGS="$ARGS $USE_MIXUP"  # Mixup已禁用
 [ -n "$USE_EMA" ] && ARGS="$ARGS $USE_EMA"
+[ -n "$MEMORY_EFFICIENT" ] && ARGS="$ARGS $MEMORY_EFFICIENT"  # 内存高效模式
 [ -n "$VERBOSE" ] && ARGS="$ARGS $VERBOSE"
 
 # Start training loop
