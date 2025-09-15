@@ -84,6 +84,11 @@ class MRIBrain2DPatchDataset(Dataset):
             # Only compute for original mode or test mode
             self.class_counts = self._analyze_class_distribution()
             self.class_weights = self._compute_class_weights()
+        else:
+            # For memory-efficient mode, provide default class info
+            # This will be computed on-demand if needed
+            self.class_counts = {}
+            self.class_weights = torch.ones(102)
         
         self.logger.info(f"Dataset initialized with {len(self)} samples")
         if balance_classes:
@@ -551,12 +556,19 @@ class MRIBrain2DPatchDataset(Dataset):
     
     def get_class_weights(self) -> torch.Tensor:
         """Get class weights for weighted loss"""
-        return self.class_weights
+        if hasattr(self, 'class_weights'):
+            return self.class_weights
+        else:
+            # Fallback for memory-efficient mode
+            return torch.ones(102)
     
     def create_weighted_sampler(self) -> WeightedRandomSampler:
         """Create weighted sampler for balanced training"""
         if not self.is_train:
             raise ValueError("Weighted sampler only available for training data")
+        
+        if self.memory_efficient:
+            raise NotImplementedError("Weighted sampling not supported in memory-efficient mode")
         
         # Compute sample weights
         sample_weights = []
