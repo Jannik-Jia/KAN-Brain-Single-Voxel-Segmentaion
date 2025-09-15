@@ -32,14 +32,14 @@ PATCH_SIZE=7            # 7×7 patches
 
 # Training parameters
 EPOCHS=100                 # Note: 3D CNN baseline uses 50, ResNet may need more
-BATCH_SIZE=256          # Adjust based on GPU memory
-LEARNING_RATE=0.0001
-WEIGHT_DECAY=0.0001
+BATCH_SIZE=2048          # Adjust based on GPU memory
+LEARNING_RATE=0.0008
+WEIGHT_DECAY=0.0002
 PATIENCE=15
 
 # Data parameters
 SAMPLES_PER_SUBJECT=10000  # Match 3D CNN baseline default
-NUM_WORKERS=4              # Adjust based on CPU cores
+NUM_WORKERS=8              # Adjust based on CPU cores
 
 # Loss and optimization
 LOSS_TYPE="cb_focal"       # cb_focal, logit_adj, focal, weighted_ce, ce
