@@ -102,27 +102,80 @@ class ZScoreDatasetConverter:
             self.logger.warning(f"High memory usage: {current_memory:.1f} MB")
 
     def load_original_data(self, mat_path: Path) -> Dict[str, np.ndarray]:
-        """Load original MAT file data"""
+        """Load original MAT file data - supports both 1D and 3D formats"""
         self.logger.debug(f"Loading original data: {mat_path}")
         start_time = time.time()
 
         try:
             data = {}
             with h5py.File(mat_path, "r") as f:
-                self.logger.debug(f"File keys: {list(f.keys())}")
+                available_keys = list(f.keys())
+                self.logger.debug(f"File keys: {available_keys}")
 
-                for k in f.keys():
-                    if not k.startswith("#"):
-                        v = f[k][()]
+                # Determine data format based on available keys
+                has_multidim_data = 'multidim_data' in available_keys  # 1D format
+                has_3d_data = 'data' in available_keys                # 3D format
 
-                        # Apply same transformations as current dataset
-                        if k == 'multidim_data' and v.shape[0] == 351:
-                            v = v.T  # Transpose feature matrix
-                        elif k == 'region_seg':
-                            v = v.flatten()  # Flatten
+                if has_3d_data and not has_multidim_data:
+                    # This is 3D validated format - convert back to "1D-like" format for processing
+                    self.logger.info("Detected 3D validated format - converting to processable format")
 
-                        data[k] = v
-                        self.logger.debug(f"Loaded {k}: {v.shape}")
+                    # Load 3D data
+                    data_4d = f['data'][()]        # (384, 336, 256, 351) or transposed
+                    region_mask = f['region_mask'][()]  # (384, 336, 256)
+                    region_labels = f['region_labels'][()]  # (384, 336, 256)
+
+                    # Handle transposition if needed
+                    if data_4d.shape[0] == 351:
+                        data_4d = data_4d.transpose(1, 2, 3, 0)  # → (384, 336, 256, 351)
+                        self.logger.debug(f"Transposed data from {f['data'].shape} to {data_4d.shape}")
+
+                    # Extract valid brain tissue voxels
+                    region_bool = region_mask.astype(bool)
+                    n_voxels = np.sum(region_bool)
+
+                    # Convert to 1D-like format for z-score processing
+                    data['region'] = region_mask.astype(np.uint8)
+                    data['multidim_data'] = data_4d[region_bool]  # (n_voxels, 351)
+
+                    # Create seg_one_hot from region_labels (convert 1-102 to one-hot)
+                    label_values = region_labels[region_bool]  # (n_voxels,)
+                    seg_one_hot = np.zeros((102, n_voxels), dtype=np.uint8)
+
+                    # Handle label conversion: 1-102 → one-hot encoding
+                    valid_labels = (label_values >= 1) & (label_values <= 102)
+                    valid_indices = label_values[valid_labels] - 1  # Convert to 0-101
+                    valid_voxel_indices = np.where(valid_labels)[0]
+                    seg_one_hot[valid_indices, valid_voxel_indices] = 1
+
+                    data['seg_one_hot'] = seg_one_hot
+
+                    # Copy other data
+                    data['big_seg'] = f.get('big_seg', region_mask)  # Use region_mask if big_seg not available
+
+                    # Create region_seg from region_labels
+                    data['region_seg'] = label_values
+
+                    self.logger.info(f"Converted 3D format: {n_voxels} brain voxels, shape {data_4d.shape}")
+
+                elif has_multidim_data:
+                    # Original 1D format
+                    self.logger.info("Detected original 1D format")
+
+                    for k in f.keys():
+                        if not k.startswith("#"):
+                            v = f[k][()]
+
+                            # Apply same transformations as current dataset
+                            if k == 'multidim_data' and v.shape[0] == 351:
+                                v = v.T  # Transpose feature matrix
+                            elif k == 'region_seg':
+                                v = v.flatten()  # Flatten
+
+                            data[k] = v
+                            self.logger.debug(f"Loaded {k}: {v.shape}")
+                else:
+                    raise ValueError(f"Unrecognized data format. Available keys: {available_keys}")
 
             load_time = time.time() - start_time
             self.logger.info(f"Data loaded successfully: {mat_path.name} (time: {load_time:.2f}s)")
@@ -219,11 +272,16 @@ class ZScoreDatasetConverter:
             # 3. One-Hot labels conversion: (102, n_voxels) → (384, 336, 256)
             seg_one_hot = data['seg_one_hot']
             self.logger.debug(f"One-hot labels shape: {seg_one_hot.shape}")
-            labels_1d = np.argmax(seg_one_hot, axis=0).astype(np.uint8)
+
+            # 🔧 CRITICAL FIX: Convert from 0-101 to 1-102 to match original dataset format
+            # argmax gives 0-101, but original dataset uses 1-102
+            labels_1d = np.argmax(seg_one_hot, axis=0).astype(np.uint8) + 1  # +1 to get 1-102
 
             labels_3d = np.zeros(region.shape, dtype=np.uint8)
             labels_3d[region] = labels_1d
             output_data['region_labels'] = labels_3d
+
+            self.logger.debug(f"Label range after conversion: {np.min(labels_1d)}-{np.max(labels_1d)} (should be 1-102)")
 
             # 4. Original labels reconstruction: (n_voxels,) → (384, 336, 256)
             region_seg = data['region_seg']
@@ -256,12 +314,12 @@ class ZScoreDatasetConverter:
         Save data in patch-friendly HDF5 format
 
         Optimizations for 7×7×1 (2D) patch extraction:
-        1. Chunking strategy: (32, 32, 1, 351) - optimized for 2D patch access
-        2. Z-dimension chunking = 1: perfect for single-slice 2D patch reading
-        3. XY chunking = 32×32: minimal overhead for 7×7 patch reading (~20 patches per chunk)
+        1. Data chunking: (32, 32, 1, 351) - optimal for 2D patch access
+        2. Labels/masks chunking: (64, 64, 16) - prevents frequent decompression
+        3. Z-dimension chunking = 1: perfect for single-slice 2D patch reading
         4. Channel chunking = 351: keeps all features together for each patch
-        5. LZF compression for data: fast decompression, optimized for frequent patch access
-        6. GZIP compression for masks/labels: higher compression for infrequent access
+        5. LZF compression: fast decompression for all data types
+        6. No fletcher32: eliminates checksum overhead for 10-20% speed boost
         """
         self.logger.debug(f"Saving patch-friendly format: {output_path}")
         start_time = time.time()
@@ -292,29 +350,44 @@ class ZScoreDatasetConverter:
                             data=save_value,
                             chunks=chunk_shape,
                             compression='lzf',   # Fast decompression for frequent patch access
-                            shuffle=False,       # LZF doesn't benefit from shuffle
-                            fletcher32=True      # Error detection
+                            shuffle=False        # LZF doesn't benefit from shuffle
+                            # fletcher32=False (default) - skip checksum for training speed
                         )
 
                         self.logger.debug(f"Saved {key} with patch-friendly chunking: {original_shape} → chunks={chunk_shape}")
 
                     else:
-                        # For other data (masks, labels), use moderate compression
+                        # === LABELS/MASKS OPTIMIZATION FOR PATCH ACCESS ===
                         if value.dtype == bool:
                             save_value = value.astype(np.uint8)
                         else:
                             save_value = value
 
-                        # Use Fortran ordering for MATLAB compatibility if needed
+                        # Use contiguous array for better I/O
                         save_value = np.ascontiguousarray(save_value)
 
-                        f.create_dataset(
-                            key,
-                            data=save_value,
-                            compression='gzip',
-                            compression_opts=6,  # Higher compression for smaller data
-                            fletcher32=True
-                        )
+                        # 🚀 CRITICAL: Explicit chunking for labels/masks patch access
+                        if key in ['region_labels', 'region_mask'] and save_value.ndim == 3:
+                            # Small chunks for efficient patch-wise label/mask reading
+                            label_chunk_shape = (64, 64, 16)  # Optimized for random patch access
+
+                            f.create_dataset(
+                                key,
+                                data=save_value,
+                                chunks=label_chunk_shape,
+                                compression='lzf',      # Fast decompression for frequent reads
+                                # fletcher32=False (default) - skip checksum for speed
+                            )
+                            self.logger.debug(f"Saved {key} with patch-optimized chunking: {original_shape} → chunks={label_chunk_shape}")
+                        else:
+                            # Other data (like big_seg, region_seg_3d) with default chunking
+                            f.create_dataset(
+                                key,
+                                data=save_value,
+                                compression='lzf',      # Also use LZF for consistency
+                                # fletcher32=False (default) - skip checksum for speed
+                            )
+                            self.logger.debug(f"Saved {key} with LZF compression: {original_shape}")
 
                         self.logger.debug(f"Saved {key}: {original_shape}")
 
@@ -382,6 +455,20 @@ class ZScoreDatasetConverter:
                     original_data['big_seg'],
                     f['big_seg'][()]
                 )
+
+                # 🔧 NEW: Validate label range (should be 1-102)
+                converted_labels = f['region_labels'][()]
+                label_voxels = converted_labels[region]
+                min_label = np.min(label_voxels)
+                max_label = np.max(label_voxels)
+
+                # Check if labels are in expected range 1-102
+                labels_in_range = (min_label >= 1) and (max_label <= 102)
+                results['label_range_1_102'] = labels_in_range
+
+                self.logger.debug(f"Label range validation: {min_label}-{max_label} (expected: 1-102)")
+                if not labels_in_range:
+                    self.logger.warning(f"Label range issue: found {min_label}-{max_label}, expected 1-102")
 
             all_valid = all(results.values())
             if all_valid:

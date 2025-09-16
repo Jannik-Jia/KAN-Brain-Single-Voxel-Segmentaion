@@ -24,7 +24,7 @@ def convert_datasets():
 
     # 专注于3D数据集的z-score标准化（用于7×7×1 patch训练）
     data_paths = {
-        "3D": "/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"
+        "3D": "/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"
     }
 
     print("📂 Z-Score标准化目标:")
