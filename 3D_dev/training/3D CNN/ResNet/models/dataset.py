@@ -515,17 +515,20 @@ class MRIBrain2DPatchDataset(Dataset):
                 # Load and transpose data if needed (same logic as original)
                 data_ref = f['data']
                 
-                # Check if data needs transpose
+                # Handle data format exactly like original load_subject_data method
                 if data_ref.shape[0] == 351:
-                    # Data is (351, 384, 336, 256), need to transpose for slicing
-                    # Extract slice first, then transpose
+                    # Original is (351, 384, 336, 256)
+                    # Extract corresponding slice: channels × patch_x × patch_y for fixed z
                     data_slice = data_ref[:, x_min:x_max, y_min:y_max, z]  # (351, patch_x, patch_y)
                     patch_data = data_slice[()]  # Load to memory
-                    patch_data = patch_data.transpose(1, 2, 0)  # (patch_x, patch_y, 351)
-                else:
-                    # Data is already (384, 336, 256, 351)
+                    # Transpose to match expected format: (patch_x, patch_y, 351)
+                    patch_data = patch_data.transpose(1, 2, 0)
+                elif data_ref.shape[-1] == 351:
+                    # Data is already (384, 336, 256, 351) - correct format
                     data_slice = data_ref[x_min:x_max, y_min:y_max, z, :]  # (patch_x, patch_y, 351)
                     patch_data = data_slice[()]  # Load to memory
+                else:
+                    raise ValueError(f"无法识别数据格式，shape: {data_ref.shape}")
                 
                 # Apply same z-score normalization per channel as original
                 patch_data = patch_data.astype(np.float32)
