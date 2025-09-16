@@ -14,11 +14,13 @@ set -e  # Exit on any error
 
 # ==================== CONFIGURATION ====================
 
-# Data directory settings - same as 3D CNN baseline
-DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D data (2D patches)
-DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"              # 1D data
+# Data directory settings - updated to use z-score normalized data
+DATA_DIR_3D_ORIGINAL="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # Original 3D data
+DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated_zscore_normalized/"  # Z-score normalized 3D data
+DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"              # Original 1D data
+DATA_DIR_1D_ZSCORE="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D_zscore_normalized/"  # Z-score normalized 1D data
 
-# ResNet uses 3D data (for 2D patch extraction)
+# ResNet uses z-score normalized 3D data (for 2D patch extraction)
 DATA_DIR=$DATA_DIR_3D
 
 # Output directory

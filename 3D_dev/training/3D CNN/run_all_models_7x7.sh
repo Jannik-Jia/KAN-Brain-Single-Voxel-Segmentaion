@@ -3,11 +3,12 @@
 # 批量运行不同参数量的模型进行对比实验 - 7×7 patch版本
 # 按照从大到小的顺序训练，避免显存碎片问题
 
-# 数据目录设置
-DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D数据（实际是2D patch）
-DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"  # 1D数据
+# 数据目录设置 - 使用z-score标准化数据
+DATA_DIR_3D_ORIGINAL="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 原始3D数据
+DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated_zscore_normalized/"  # Z-score标准化3D数据
+DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"  # 原始1D数据
 
-# 使用3D_validated数据（2D patch）
+# 使用z-score标准化的3D数据（2D patch）
 DATA_DIR=$DATA_DIR_3D
 
 OUTPUT_DIR="./results_comparison_7x7"

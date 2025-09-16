@@ -3,8 +3,8 @@
 # 对所有38个被试分别作为测试集进行训练
 
 # 设置参数
-DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"  # 1D数据集
-DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D数据集
+DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"  # 1D数据集（保持原始，无需z-score）
+DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"  # 3D数据集（用于mask，1D训练不需要z-score版本）
 OUTPUT_DIR="./results_1d_leave_one_out"
 
 # Alex的超参数
