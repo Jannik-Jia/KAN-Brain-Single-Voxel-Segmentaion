@@ -283,6 +283,10 @@ class MRIBrain2DPatchDataset(Dataset):
         # Regenerate batches with new shuffled coordinates
         self._generate_file_grouped_batches()
 
+        # Reset batch index for new epoch
+        with self.prefetch_lock:
+            self.current_batch_idx = 0
+
         self.logger.info(f"Epoch {self.current_epoch}: {len(self.file_batches)} batches shuffled")
 
         # Restart prefetch thread for new epoch
@@ -556,11 +560,12 @@ class MRIBrain2DPatchDataset(Dataset):
                 target_batch_info = batch_info
                 local_idx = idx - current_idx
 
-                # Update current batch index for prefetch
+                # Update current batch index for prefetch (only if significantly advanced)
                 with self.prefetch_lock:
-                    if batch_idx != self.current_batch_idx:
+                    if batch_idx > self.current_batch_idx:
+                        old_batch = self.current_batch_idx
                         self.current_batch_idx = batch_idx
-                        self.logger.debug(f"Switched to batch {batch_idx}")
+                        self.logger.debug(f"Advanced from batch {old_batch} to {batch_idx}")
 
                 break
             current_idx += batch_size
@@ -725,6 +730,32 @@ class MRIBrain2DPatchDataset(Dataset):
 
         return patch_data  # (patch_size, patch_size, 351)
 
+    def _load_file_data_direct(self, subject_id: int) -> Optional[np.ndarray]:
+        """Load file data directly from disk (used by prefetch worker to avoid recursion)"""
+        try:
+            mat_file = self.subject_file_map[subject_id]
+
+            # Load data from file (thread-safe with per-file locks)
+            with self.file_locks[subject_id]:
+                with h5py.File(mat_file, 'r') as f:
+                    data_ref = f['data']
+
+                    # Handle data format exactly like _get_cached_file_data method
+                    if data_ref.shape[0] == 351:
+                        # Original is (351, 384, 336, 256) -> transpose to (384, 336, 256, 351)
+                        data_4d = data_ref[()].transpose(1, 2, 3, 0)
+                    elif data_ref.shape[-1] == 351:
+                        # Data is already (384, 336, 256, 351) - correct format
+                        data_4d = data_ref[()]
+                    else:
+                        raise ValueError(f"无法识别数据格式，shape: {data_ref.shape}")
+
+                    return data_4d.astype(np.float32)
+
+        except Exception as e:
+            self.logger.error(f"Error loading data for subject {subject_id}: {e}")
+            return None
+
     def _start_prefetch_thread(self):
         """Start the prefetch thread"""
         if self.prefetch_thread is not None:
@@ -819,9 +850,10 @@ class MRIBrain2DPatchDataset(Dataset):
                 subject_id = patch_info['subject_id']
 
                 if subject_id not in prefetched_files:
-                    # Load file data into cache
-                    file_data = self._get_cached_file_data(subject_id)
-                    prefetched_files[subject_id] = file_data
+                    # Load file data directly from disk (avoid recursion)
+                    file_data = self._load_file_data_direct(subject_id)
+                    if file_data is not None:
+                        prefetched_files[subject_id] = file_data
 
             return {
                 'batch_idx': batch_idx,
