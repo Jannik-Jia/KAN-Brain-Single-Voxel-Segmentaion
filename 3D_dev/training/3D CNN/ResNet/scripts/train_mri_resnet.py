@@ -575,18 +575,22 @@ def apply_config_to_args(args, config: dict):
 
 
 def find_mat_files(data_dir: Path) -> List[Path]:
-    """Find all MAT files in directory - matches 3D CNN logic exactly"""
-    # Try the exact same pattern matching as 3D CNN baseline
-    mat_files = sorted(data_dir.glob('subject*_3d_validated.mat'))
-    
-    if len(mat_files) == 0:
+    """Find all data files in directory - supports both .mat and .h5 formats"""
+    # Try zscore normalized .h5 files first (from zscore_dataset_converter.py)
+    data_files = sorted(data_dir.glob('*.h5'))
+
+    if len(data_files) == 0:
+        # Fallback to original .mat files
+        data_files = sorted(data_dir.glob('subject*_3d_validated.mat'))
+
+    if len(data_files) == 0:
         # Try other naming patterns if the first one fails
-        mat_files = sorted(data_dir.glob('*.mat'))
-    
-    if not mat_files:
-        raise FileNotFoundError(f"No MAT files found in {data_dir}")
-    
-    return mat_files
+        data_files = sorted(data_dir.glob('*.mat'))
+
+    if not data_files:
+        raise FileNotFoundError(f"No data files (.h5 or .mat) found in {data_dir}")
+
+    return data_files
 
 
 def create_leave_one_out_split(
@@ -747,7 +751,8 @@ def main():
     # Find MAT files
     data_dir = Path(args.data_dir)
     mat_files = find_mat_files(data_dir)
-    logger.info(f"Found {len(mat_files)} MAT files")
+    file_format = "H5 (zscore normalized)" if mat_files[0].suffix == ".h5" else "MAT (original)"
+    logger.info(f"Found {len(mat_files)} {file_format} files")
     
     # Create Leave-One-Out split
     train_files, test_files = create_leave_one_out_split(mat_files, args.test_subject)

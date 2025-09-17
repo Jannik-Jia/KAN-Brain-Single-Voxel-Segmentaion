@@ -79,15 +79,22 @@ if [ ! -d "$DATA_DIR" ]; then
     exit 1
 fi
 
-# Check if MAT files exist
+# Check if data files exist (support both .h5 and .mat formats)
+H5_COUNT=$(find "$DATA_DIR" -name "*.h5" | wc -l)
 MAT_COUNT=$(find "$DATA_DIR" -name "*.mat" | wc -l)
-if [ "$MAT_COUNT" -eq 0 ]; then
-    echo "ERROR: No MAT files found in $DATA_DIR"
-    echo "Please ensure the directory contains .mat files."
+TOTAL_COUNT=$((H5_COUNT + MAT_COUNT))
+
+if [ "$TOTAL_COUNT" -eq 0 ]; then
+    echo "ERROR: No data files found in $DATA_DIR"
+    echo "Please ensure the directory contains .h5 (zscore normalized) or .mat files."
     exit 1
 fi
 
-echo "Found $MAT_COUNT MAT files in data directory"
+if [ "$H5_COUNT" -gt 0 ]; then
+    echo "Found $H5_COUNT H5 files (zscore normalized) in data directory"
+else
+    echo "Found $MAT_COUNT MAT files (original format) in data directory"
+fi
 
 # Check if Python script exists
 TRAIN_SCRIPT="./train_mri_resnet.py"
