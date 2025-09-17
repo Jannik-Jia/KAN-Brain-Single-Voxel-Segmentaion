@@ -232,26 +232,9 @@ class MRIBrain2DPatchDataset(Dataset):
             # Debug print exactly like 3D CNN baseline (always print during loading)
             print(f"转置后数据形状: data={data.shape}, labels={region_labels.shape}, mask={region_mask.shape}")
             
-            # 对每个patient的351个channel进行z-score标准化 - 与3D CNN baseline完全一致
-            # data shape: (384, 336, 256, 351)
+            # Skip z-score normalization - data is already normalized by zscore_dataset_converter.py
             data = data.astype(np.float32)
-            
-            # 计算每个channel的均值和标准差
-            for ch in range(data.shape[3]):  # 351个channels
-                channel_data = data[:, :, :, ch]
-                
-                # 计算当前channel的均值和标准差
-                mean_val = np.mean(channel_data)
-                std_val = np.std(channel_data)
-                
-                # 避免除以0
-                if std_val > 1e-8:
-                    data[:, :, :, ch] = (channel_data - mean_val) / std_val
-                else:
-                    # 如果标准差为0，则将该channel设为0
-                    data[:, :, :, ch] = 0
-            
-            print(f"已完成351维channel的z-score标准化")
+            print(f"数据已由zscore_dataset_converter.py预处理，跳过重复标准化")
             
         return {
             'data': data,
@@ -530,16 +513,8 @@ class MRIBrain2DPatchDataset(Dataset):
                 else:
                     raise ValueError(f"无法识别数据格式，shape: {data_ref.shape}")
                 
-                # Apply same z-score normalization per channel as original
+                # Skip z-score normalization - data is already normalized by zscore_dataset_converter.py
                 patch_data = patch_data.astype(np.float32)
-                for ch in range(patch_data.shape[2]):  # 351 channels
-                    channel_data = patch_data[:, :, ch]
-                    mean_val = np.mean(channel_data)
-                    std_val = np.std(channel_data)
-                    if std_val > 1e-8:
-                        patch_data[:, :, ch] = (channel_data - mean_val) / std_val
-                    else:
-                        patch_data[:, :, ch] = 0
         
         # Handle boundary padding (same logic as extract_patch_2d)
         if patch_data.shape[:2] != (self.patch_size, self.patch_size):
