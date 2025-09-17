@@ -37,6 +37,10 @@ sys.path.append(str(Path(__file__).parent.parent / 'models'))
 
 from resnet import mri_resnet50, count_parameters, get_model_info
 from dataset import MRIBrain2DPatchDataset, create_data_loaders
+# Import simplified version for testing
+import sys
+sys.path.append('../models')
+from dataset_simple import MRIBrain2DPatchDatasetSimple
 from losses import create_loss_function, mixup_data, MixupLoss
 
 warnings.filterwarnings('ignore')
@@ -699,6 +703,8 @@ def main():
                        help='Enable weighted random sampling')
     parser.add_argument('--memory_efficient', action='store_true',
                        help='Enable memory-efficient mode (loads all 71M patches)')
+    parser.add_argument('--use_simple_dataset', action='store_true',
+                       help='Use simplified dataset implementation for performance testing')
     
     # Loss and optimization
     parser.add_argument('--loss_type', type=str, default='cb_focal',
@@ -759,19 +765,64 @@ def main():
     logger.info(f"Training subjects: {len(train_files)}")
     logger.info(f"Test subject: {args.test_subject}")
     
-    # Create data loaders - with optional memory-efficient mode
-    train_loader, test_loader = create_data_loaders(
-        train_files=train_files,
-        test_files=test_files,
-        patch_size=args.patch_size,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        samples_per_subject=args.samples_per_subject,
-        balance_classes=getattr(args, 'balance_classes', False),
-        augmentation=getattr(args, 'augmentation', False),
-        weighted_sampling=getattr(args, 'weighted_sampling', False),
-        memory_efficient=getattr(args, 'memory_efficient', False)
-    )
+    # Create data loaders - with optional simple dataset for performance testing
+    if getattr(args, 'use_simple_dataset', False):
+        logger.info("Using simplified dataset implementation for performance testing")
+
+        # Use simplified dataset
+        train_dataset = MRIBrain2DPatchDatasetSimple(
+            mat_files=train_files,
+            patch_size=args.patch_size,
+            samples_per_subject=args.samples_per_subject,
+            is_train=True,
+            cache_data=False,
+            balance_classes=getattr(args, 'balance_classes', False),
+            augmentation=getattr(args, 'augmentation', False),
+            memory_efficient=True
+        )
+
+        test_dataset = MRIBrain2DPatchDatasetSimple(
+            mat_files=test_files,
+            patch_size=args.patch_size,
+            samples_per_subject=None,
+            is_train=False,
+            cache_data=True,
+            balance_classes=False,
+            augmentation=False,
+            memory_efficient=False
+        )
+
+        from torch.utils.data import DataLoader
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,  # Dataset handles its own shuffling
+            num_workers=0,  # Start with single-threaded
+            pin_memory=True
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True
+        )
+
+    else:
+        # Use original data loaders
+        train_loader, test_loader = create_data_loaders(
+            train_files=train_files,
+            test_files=test_files,
+            patch_size=args.patch_size,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            samples_per_subject=args.samples_per_subject,
+            balance_classes=getattr(args, 'balance_classes', False),
+            augmentation=getattr(args, 'augmentation', False),
+            weighted_sampling=getattr(args, 'weighted_sampling', False),
+            memory_efficient=getattr(args, 'memory_efficient', False)
+        )
     
     # Log memory mode
     if getattr(args, 'memory_efficient', False):

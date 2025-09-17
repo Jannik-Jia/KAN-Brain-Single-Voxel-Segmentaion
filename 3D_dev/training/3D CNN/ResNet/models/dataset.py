@@ -159,8 +159,8 @@ class MRIBrain2DPatchDataset(Dataset):
         self.cache_access_order = []  # Track access order for LRU
         self.cache_lock = threading.Lock()  # Protect cache operations
 
-        # Prefetch mechanism
-        self.enable_prefetch = True
+        # Prefetch mechanism - TEMPORARILY DISABLED FOR PERFORMANCE TESTING
+        self.enable_prefetch = False
         self.prefetch_queue = queue.Queue(maxsize=2)  # Queue for prefetched batches
         self.prefetch_thread = None
         self.current_batch_idx = 0
@@ -814,7 +814,7 @@ class MRIBrain2DPatchDataset(Dataset):
                         next_batch_idx += 1
                     else:
                         # Wait a bit before checking again
-                        time.sleep(0.01)
+                        time.sleep(0.1)  # Reduced lock competition
                         continue
 
                 # Prefetch this batch

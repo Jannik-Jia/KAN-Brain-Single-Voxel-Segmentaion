@@ -43,6 +43,7 @@ PATIENCE=8                # 减少patience：完整数据训练收敛更快
 SAMPLES_PER_SUBJECT=10000  # 在内存高效模式下此参数被忽略，实际使用全部71M patches
 NUM_WORKERS=0              # 重要：内存高效模式必须设为0 (h5py不支持多进程)
 MEMORY_EFFICIENT="--memory_efficient"  # 启用内存高效模式
+USE_SIMPLE_DATASET="--use_simple_dataset"  # 使用简化数据集进行性能测试
 
 # Loss and optimization
 LOSS_TYPE="cb_focal"       # cb_focal, logit_adj, focal, weighted_ce, ce
@@ -195,6 +196,7 @@ ARGS="$ARGS --config ../configs/default_config.json"
 # [ -n "$USE_MIXUP" ] && ARGS="$ARGS $USE_MIXUP"  # Mixup已禁用
 [ -n "$USE_EMA" ] && ARGS="$ARGS $USE_EMA"
 [ -n "$MEMORY_EFFICIENT" ] && ARGS="$ARGS $MEMORY_EFFICIENT"  # 内存高效模式
+[ -n "$USE_SIMPLE_DATASET" ] && ARGS="$ARGS $USE_SIMPLE_DATASET"  # 简化数据集测试
 [ -n "$VERBOSE" ] && ARGS="$ARGS $VERBOSE"
 
 # Start training loop
