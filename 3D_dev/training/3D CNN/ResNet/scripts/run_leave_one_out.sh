@@ -1,11 +1,15 @@
 #!/bin/bash
-# Leave-One-Out Cross-Validation for MRI ResNet
+# Leave-One-Out Cross-Validation for MRI ResNet (原始版本)
+#
+# ⚠️  警告: 此脚本需要大量内存（30GB+）来一次性加载所有MAT文件
+# 💡 推荐使用: run_leave_one_out_batch.sh (批量加载版本，内存需求90%减少)
 #
 # Automatically runs training for all 38 subjects in Leave-One-Out fashion.
 # Each subject is used once as the test set while the remaining 37 are used for training.
 #
 # Usage:
-#     bash run_leave_one_out.sh
+#     bash run_leave_one_out.sh          # 原始版本（高内存需求）
+#     bash run_leave_one_out_batch.sh    # 批量版本（推荐）
 #
 # Configuration:
 #     Modify the variables below to adjust training parameters.
