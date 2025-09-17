@@ -35,7 +35,7 @@ import seaborn as sns
 sys.path.append(str(Path(__file__).parent.parent / 'models'))
 
 from resnet import mri_resnet50, count_parameters, get_model_info
-from batch_dataset_improved import create_improved_batch_data_loaders, ImprovedBatchMRIBrain2DPatchDataset
+from batch_dataset_optimized import create_optimized_batch_data_loaders, OptimizedBatchMRIBrain2DPatchDataset
 from losses import create_loss_function, mixup_data, MixupLoss
 
 warnings.filterwarnings('ignore')
@@ -76,7 +76,7 @@ class MRIResNetBatchTrainer:
     def __init__(
         self,
         model: nn.Module,
-        train_dataset: ImprovedBatchMRIBrain2DPatchDataset,
+        train_dataset: OptimizedBatchMRIBrain2DPatchDataset,
         test_loader: DataLoader,
         device: str = 'cuda',
         loss_type: str = 'cb_focal',
@@ -633,8 +633,8 @@ def main():
     # 数据参数
     parser.add_argument('--patch_size', type=int, default=7,
                        help='图像块大小')
-    parser.add_argument('--samples_per_subject', type=int, default=10000,
-                       help='每个被试的样本数（匹配3D CNN基线）')
+    parser.add_argument('--samples_per_subject', type=int, default=0,
+                       help='每个被试的样本数（0=使用所有有效体素，>0=限制数量）')
     parser.add_argument('--num_workers', type=int, default=4,
                        help='数据加载工作进程数')
     parser.add_argument('--balance_classes', action='store_true',
@@ -696,8 +696,8 @@ def main():
     logger.info(f"测试被试: {args.test_subject}")
     logger.info(f"每批次加载: {args.batch_files}个文件")
 
-    # 创建改进的批量数据加载器
-    train_loader, test_loader, train_dataset = create_improved_batch_data_loaders(
+    # 创建优化的批量数据加载器
+    train_loader, test_loader, train_dataset = create_optimized_batch_data_loaders(
         train_files=train_files,
         test_files=test_files,
         patch_size=args.patch_size,

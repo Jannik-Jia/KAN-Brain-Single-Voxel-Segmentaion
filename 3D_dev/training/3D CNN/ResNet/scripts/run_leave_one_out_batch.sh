@@ -44,7 +44,7 @@ WEIGHT_DECAY=0.0001
 PATIENCE=15
 
 # 数据参数
-SAMPLES_PER_SUBJECT=10000  # 匹配3D CNN基线默认值
+SAMPLES_PER_SUBJECT=0      # 0=使用所有有效体素（推荐），>0=限制数量
 NUM_WORKERS=4              # 批量版本建议减少worker数量
 
 # 损失和优化
@@ -62,7 +62,7 @@ VERBOSE="--verbose"
 
 # ==================== 验证 ====================
 
-echo "=== MRI ResNet Leave-One-Out Cross-Validation (批量加载版本) ==="
+echo "=== MRI ResNet Leave-One-Out Cross-Validation (优化批量加载版本) ==="
 echo "数据目录: $DATA_DIR (与3D CNN基线相同)"
 echo "输出目录: $OUTPUT_BASE"
 echo "批量加载配置: 每次加载 $BATCH_FILES 个文件"
@@ -128,14 +128,15 @@ echo "系统内存: $SYSTEM_MEMORY (可用: $AVAILABLE_MEMORY)"
 # 根据可用内存给出建议
 AVAILABLE_GB=$(python3 -c "import psutil; print(int(psutil.virtual_memory().available/1024**3))")
 if [ "$AVAILABLE_GB" -lt 8 ]; then
-    echo "⚠️  警告: 可用内存不足8GB，强烈建议设置:"
-    echo "   BATCH_FILES=2"
-    echo "   BATCH_SIZE=128"
-    echo "   SAMPLES_PER_SUBJECT=5000"
+    echo "⚠️  警告: 可用内存不足8GB，强烈建议修改脚本设置:"
+    echo "   BATCH_FILES=1        # 每次只加载1个文件"
+    echo "   BATCH_SIZE=64        # 减小批次大小"
+    echo "   SAMPLES_PER_SUBJECT=50000  # 限制每个文件样本数"
 elif [ "$AVAILABLE_GB" -lt 16 ]; then
     echo "💡 建议: 可用内存${AVAILABLE_GB}GB，建议设置:"
-    echo "   BATCH_FILES=2-3"
-    echo "   BATCH_SIZE=256"
+    echo "   BATCH_FILES=2        # 每次加载2个文件"
+    echo "   BATCH_SIZE=128       # 适中的批次大小"
+    echo "   SAMPLES_PER_SUBJECT=0 (当前设置，使用所有体素)"
 fi
 
 # 创建输出目录
@@ -158,7 +159,7 @@ MRI ResNet Leave-One-Out 批量加载配置
 - Patch大小: ${PATCH_SIZE}×${PATCH_SIZE}
 - 输入通道: $INPUT_CHANNELS
 - 输出类别: $NUM_CLASSES
-- 每个被试样本数: ${SAMPLES_PER_SUBJECT:-"所有有效样本"}
+- 每个被试样本数: $([ "$SAMPLES_PER_SUBJECT" -eq 0 ] && echo "所有有效体素" || echo "$SAMPLES_PER_SUBJECT")
 
 批量加载配置:
 - 每批次文件数: $BATCH_FILES
@@ -215,7 +216,8 @@ ARGS="$ARGS --device $DEVICE"
 ARGS="$ARGS --seed $SEED"
 
 # 添加可选参数
-[ -n "$SAMPLES_PER_SUBJECT" ] && ARGS="$ARGS --samples_per_subject $SAMPLES_PER_SUBJECT"
+# 始终传递SAMPLES_PER_SUBJECT，包括0值
+ARGS="$ARGS --samples_per_subject $SAMPLES_PER_SUBJECT"
 [ -n "$USE_MIXUP" ] && ARGS="$ARGS $USE_MIXUP"
 [ -n "$USE_EMA" ] && ARGS="$ARGS $USE_EMA"
 [ -n "$VERBOSE" ] && ARGS="$ARGS $VERBOSE"
