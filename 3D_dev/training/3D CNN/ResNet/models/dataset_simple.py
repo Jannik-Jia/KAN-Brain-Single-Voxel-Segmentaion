@@ -93,6 +93,10 @@ class MRIBrain2DPatchDatasetSimple(Dataset):
         # 生成所有有效坐标
         self._generate_all_coords_simple()
 
+        # 简化版本：跳过class counts计算以提高初始化速度
+        self.class_counts = {}  # 空字典，避免访问错误
+        self.class_weights = torch.ones(102)  # 均匀权重
+
         # 简单的文件缓存
         self.file_cache = {}
         self.max_cached_files = 2  # 只缓存2个文件

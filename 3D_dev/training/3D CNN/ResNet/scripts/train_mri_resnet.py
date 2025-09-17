@@ -127,9 +127,14 @@ class MRIResNetTrainer:
         
         # Get class counts from training dataset
         train_dataset = train_loader.dataset
-        class_counts = torch.tensor([
-            train_dataset.class_counts.get(i, 1) for i in range(1, 103)
-        ], dtype=torch.float32).to(device)
+        if hasattr(train_dataset, 'class_counts') and train_dataset.class_counts:
+            class_counts = torch.tensor([
+                train_dataset.class_counts.get(i, 1) for i in range(1, 103)
+            ], dtype=torch.float32).to(device)
+        else:
+            # For simplified dataset, use uniform weights
+            class_counts = torch.ones(102, dtype=torch.float32).to(device)
+            self.logger.info("Using uniform class weights (simplified dataset mode)")
         
         # Setup loss function
         self.base_criterion = create_loss_function(
