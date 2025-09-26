@@ -22,6 +22,24 @@
 pip install -r requirements.txt
 ```
 
+### 路径配置
+
+所有路径都使用相对路径，便于服务器部署：
+
+```json
+{
+  "paths": {
+    "dataset_index": "../../dataset_index_validated.json",  // 数据集索引
+    "output_base": "./output"                               // 输出目录
+  }
+}
+```
+
+**重要**：上传到服务器前请确认：
+1. `dataset_index_validated.json` 在项目根目录
+2. 数据文件路径与JSON中的路径一致
+3. 使用相对路径或通过 `--data-dir` 指定本地数据目录
+
 ### 训练
 
 #### 训练单个fold（例如fold 5）

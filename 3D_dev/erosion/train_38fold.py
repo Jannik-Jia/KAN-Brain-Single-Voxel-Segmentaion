@@ -616,10 +616,13 @@ def train_all_folds(args, all_subjects_data):
 def main():
     parser = argparse.ArgumentParser(description='38-Fold Cross Validation Training')
 
+    # Config file argument
+    parser.add_argument('--config', type=str, default='config.json',
+                       help='Path to configuration JSON file')
+
     # Data arguments
-    parser.add_argument('--dataset-index', type=str,
-                       default='/Users/jannik/KAN-Brain-Single-Voxel-Segmentaion/dataset_index_validated.json',
-                       help='Path to dataset index JSON file')
+    parser.add_argument('--dataset-index', type=str, default=None,
+                       help='Path to dataset index JSON file (overrides config)')
     parser.add_argument('--data-dir', type=str, default=None,
                        help='Optional local data directory to override paths in JSON')
 
@@ -652,6 +655,25 @@ def main():
                        help='Random seed')
 
     args = parser.parse_args()
+
+    # Load config file if exists
+    config = {}
+    if os.path.exists(args.config):
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+        logging.info(f"Loaded configuration from {args.config}")
+
+    # Apply config defaults (command line args override config file)
+    if args.dataset_index is None:
+        args.dataset_index = config.get('paths', {}).get('dataset_index', '../../dataset_index_validated.json')
+    if args.batch_size == 128:  # Using default
+        args.batch_size = config.get('training', {}).get('batch_size', 128)
+    if args.epochs == 25:  # Using default
+        args.epochs = config.get('training', {}).get('epochs', 25)
+    if args.lr == 0.00001:  # Using default
+        args.lr = config.get('training', {}).get('learning_rate', 0.00001)
+    if args.output_dir == './output':  # Using default
+        args.output_dir = config.get('paths', {}).get('output_base', './output')
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)

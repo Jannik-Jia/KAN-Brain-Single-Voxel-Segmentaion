@@ -10,7 +10,7 @@ set -e  # Exit on error
 
 # Configuration
 PYTHON_SCRIPT="train_38fold.py"
-DATASET_INDEX="/Users/jannik/KAN-Brain-Single-Voxel-Segmentaion/dataset_index_validated.json"
+DATASET_INDEX="../../dataset_index_validated.json"  # Relative path to dataset index
 OUTPUT_BASE="./output"
 EPOCHS=25
 BATCH_SIZE=128
