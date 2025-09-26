@@ -291,13 +291,13 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
     # Check if model is DataParallel
     is_data_parallel = isinstance(model, DataParallel)
 
-    # Convert to tensors
-    X_train_tensor = torch.FloatTensor(X_train).to(device if not is_data_parallel else 'cuda')
-    y_train_tensor = torch.FloatTensor(y_train).to(device if not is_data_parallel else 'cuda')
-    X_val_tensor = torch.FloatTensor(X_val).to(device if not is_data_parallel else 'cuda')
-    y_val_tensor = torch.FloatTensor(y_val).to(device if not is_data_parallel else 'cuda')
-    X_test_tensor = torch.FloatTensor(X_test).to(device if not is_data_parallel else 'cuda')
-    y_test_tensor = torch.FloatTensor(y_test).to(device if not is_data_parallel else 'cuda')
+    # Convert to tensors but keep on CPU - move to GPU batch by batch
+    X_train_tensor = torch.FloatTensor(X_train)
+    y_train_tensor = torch.FloatTensor(y_train)
+    X_val_tensor = torch.FloatTensor(X_val)
+    y_val_tensor = torch.FloatTensor(y_val)
+    X_test_tensor = torch.FloatTensor(X_test)
+    y_test_tensor = torch.FloatTensor(y_test)
 
     # Create data loader with pin_memory for faster GPU transfer
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
@@ -305,8 +305,9 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers if not is_data_parallel else 0,  # DataParallel doesn't work well with multiple workers
-        pin_memory=True if device.type == 'cuda' else False
+        num_workers=num_workers if device.type == 'cpu' else 0,  # Only use workers for CPU
+        pin_memory=True if device.type == 'cuda' else False,
+        persistent_workers=True if num_workers > 0 and device.type == 'cpu' else False
     )
 
     # Setup optimizer and loss
@@ -333,6 +334,10 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         all_train_labels = []
 
         for batch_idx, (data, target) in enumerate(train_loader):
+            # Move batch to GPU
+            data = data.to(device if not is_data_parallel else 'cuda')
+            target = target.to(device if not is_data_parallel else 'cuda')
+
             optimizer.zero_grad()
 
             target_indices = torch.argmax(target, dim=1)
@@ -372,9 +377,12 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         # Evaluation phase
         model.eval()
         with torch.no_grad():
-            # Validation set
-            val_output = model(X_val_tensor)
-            val_target_indices = torch.argmax(y_val_tensor, dim=1)
+            # Validation set - move to GPU for evaluation
+            X_val_gpu = X_val_tensor.to(device if not is_data_parallel else 'cuda')
+            y_val_gpu = y_val_tensor.to(device if not is_data_parallel else 'cuda')
+
+            val_output = model(X_val_gpu)
+            val_target_indices = torch.argmax(y_val_gpu, dim=1)
             val_base_loss = criterion(val_output, val_target_indices)
             val_l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
             val_total_loss = val_base_loss + val_l2_reg
@@ -384,9 +392,12 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
             val_f1 = f1_score(val_target_indices.cpu().numpy(), val_predicted.cpu().numpy(),
                              average='macro', zero_division=0)
 
-            # Test set
-            test_output = model(X_test_tensor)
-            test_target_indices = torch.argmax(y_test_tensor, dim=1)
+            # Test set - move to GPU for evaluation
+            X_test_gpu = X_test_tensor.to(device if not is_data_parallel else 'cuda')
+            y_test_gpu = y_test_tensor.to(device if not is_data_parallel else 'cuda')
+
+            test_output = model(X_test_gpu)
+            test_target_indices = torch.argmax(y_test_gpu, dim=1)
             test_base_loss = criterion(test_output, test_target_indices)
             test_l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
             test_total_loss = test_base_loss + test_l2_reg
