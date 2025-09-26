@@ -665,7 +665,7 @@ def main():
 
     # Apply config defaults (command line args override config file)
     if args.dataset_index is None:
-        args.dataset_index = config.get('paths', {}).get('dataset_index', '../../dataset_index_validated.json')
+        args.dataset_index = config.get('paths', {}).get('dataset_index', '/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/dataset_index_validated.json')
     if args.batch_size == 128:  # Using default
         args.batch_size = config.get('training', {}).get('batch_size', 128)
     if args.epochs == 25:  # Using default

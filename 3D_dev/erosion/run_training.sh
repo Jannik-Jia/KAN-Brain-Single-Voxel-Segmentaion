@@ -10,7 +10,7 @@ set -e  # Exit on error
 
 # Configuration
 PYTHON_SCRIPT="train_38fold.py"
-DATASET_INDEX="../../dataset_index_validated.json"  # Relative path to dataset index
+DATASET_INDEX="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/dataset_index_validated.json"  # Relative path to dataset index
 OUTPUT_BASE="./output"
 EPOCHS=25
 BATCH_SIZE=128

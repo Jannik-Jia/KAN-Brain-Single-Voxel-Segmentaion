@@ -29,7 +29,7 @@ pip install -r requirements.txt
 ```json
 {
   "paths": {
-    "dataset_index": "../../dataset_index_validated.json",  // 数据集索引
+    "dataset_index": "/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/dataset_index_validated.json",  // 数据集索引
     "output_base": "./output"                               // 输出目录
   }
 }
