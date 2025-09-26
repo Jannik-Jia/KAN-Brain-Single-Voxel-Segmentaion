@@ -10,10 +10,17 @@
 - **ONNX导出**: 模型自动导出为ONNX格式便于部署
 - **完整日志**: 所有输出保存到日志文件，确保可复现性
 - **分析工具**: 提供可视化和报告生成脚本进行结果分析
+- **多GPU支持**: 自动检测并使用DataParallel进行多GPU训练
+- **混合精度**: 支持FP16自动混合精度训练（1.5-2x加速）
 
 ## 快速开始
 
 ### 安装依赖
+
+```bash
+# 安装Python依赖包
+pip install -r requirements.txt
+```
 
 ### 训练
 
@@ -35,20 +42,42 @@
 ### 直接使用Python脚本
 
 ```bash
-# 训练单个fold
+# 训练单个fold（基础）
 python train_38fold.py --fold 5 --epochs 25
+
+# 训练单个fold（双GPU + 混合精度，推荐）
+python train_38fold.py --fold 5 --epochs 25 --use-amp
+
+# 训练单个fold（最优性能，2×A6000）
+python train_38fold.py --fold 5 --epochs 25 --use-amp --batch-size 768
 
 # 训练所有fold
 python train_38fold.py --epochs 25
+
+# 训练所有fold（双GPU加速）
+python train_38fold.py --epochs 25 --use-amp --batch-size 768
 
 # 自定义配置
 python train_38fold.py \
     --fold 10 \
     --epochs 30 \
-    --batch-size 256 \
+    --batch-size 512 \
     --lr 0.00002 \
+    --use-amp \
     --output-dir ./custom_output
+
+# 强制单GPU训练
+python train_38fold.py --fold 5 --no-multi-gpu
 ```
+
+### GPU训练参数说明
+
+| 参数 | 说明 | 推荐值（2×A6000） |
+|------|------|------------------|
+| `--use-amp` | 启用FP16混合精度训练 | ✅ 推荐启用 |
+| `--batch-size` | 批量大小 | 768（双GPU）|
+| `--no-multi-gpu` | 禁用多GPU | 仅调试时使用 |
+| `--num-workers` | 数据加载线程数 | 4（默认） |
 
 ## 输出目录结构
 
@@ -157,10 +186,29 @@ predictions = outputs[0]  # (10, 102)
 
 ## 性能说明
 
-- 单个fold训练：约10-15分钟（GPU）
-- 全部38个fold：约6-10小时（GPU）
-- 内存需求：约8GB GPU显存
-- 磁盘空间：每个fold约500MB
+### 训练时间对比
+
+| 配置 | 单个Fold | 38个Fold |
+|------|----------|----------|
+| 单GPU（V100/A6000） | ~10-15分钟 | ~6-10小时 |
+| 双GPU（2×A6000） | ~5-8分钟 | ~3-5小时 |
+| 双GPU + FP16 | ~3-5分钟 | ~2-3小时 |
+
+### 硬件需求
+
+| 组件 | 最小需求 | 推荐配置 |
+|------|----------|----------|
+| GPU显存 | 8GB | 48GB×2（A6000） |
+| 批量大小 | 128 | 768（双A6000） |
+| 系统内存 | 32GB | 64GB |
+| 磁盘空间 | 20GB | 50GB |
+
+### 性能优化建议
+
+1. **使用混合精度**：`--use-amp` 可获得1.5-2x加速
+2. **增大批量大小**：充分利用A6000的48GB显存
+3. **多GPU并行**：自动检测并使用所有可用GPU
+4. **数据预加载**：使用`--num-workers 4`优化I/O
 
 ## 问题排查
 

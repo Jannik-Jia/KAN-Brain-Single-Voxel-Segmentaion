@@ -24,6 +24,8 @@ from sklearn.metrics import (classification_report, f1_score,
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.parallel import DataParallel
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 # Setup logging
@@ -277,24 +279,42 @@ def log_detailed_metrics(metrics, epoch=None, dataset_name='Test'):
 # Training Function
 def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
                 device, batch_size=128, no_epochs=25, learning_rate=0.00001,
-                log_interval=5):
-    """Train model with detailed metrics monitoring"""
+                log_interval=5, use_amp=False, num_workers=4):
+    """
+    Train model with detailed metrics monitoring
+
+    Args:
+        use_amp: Use automatic mixed precision for faster training
+        num_workers: Number of workers for data loading
+    """
+
+    # Check if model is DataParallel
+    is_data_parallel = isinstance(model, DataParallel)
 
     # Convert to tensors
-    X_train_tensor = torch.FloatTensor(X_train).to(device)
-    y_train_tensor = torch.FloatTensor(y_train).to(device)
-    X_val_tensor = torch.FloatTensor(X_val).to(device)
-    y_val_tensor = torch.FloatTensor(y_val).to(device)
-    X_test_tensor = torch.FloatTensor(X_test).to(device)
-    y_test_tensor = torch.FloatTensor(y_test).to(device)
+    X_train_tensor = torch.FloatTensor(X_train).to(device if not is_data_parallel else 'cuda')
+    y_train_tensor = torch.FloatTensor(y_train).to(device if not is_data_parallel else 'cuda')
+    X_val_tensor = torch.FloatTensor(X_val).to(device if not is_data_parallel else 'cuda')
+    y_val_tensor = torch.FloatTensor(y_val).to(device if not is_data_parallel else 'cuda')
+    X_test_tensor = torch.FloatTensor(X_test).to(device if not is_data_parallel else 'cuda')
+    y_test_tensor = torch.FloatTensor(y_test).to(device if not is_data_parallel else 'cuda')
 
-    # Create data loader
+    # Create data loader with pin_memory for faster GPU transfer
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers if not is_data_parallel else 0,  # DataParallel doesn't work well with multiple workers
+        pin_memory=True if device.type == 'cuda' else False
+    )
 
     # Setup optimizer and loss
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
+
+    # Setup mixed precision training if requested
+    scaler = GradScaler() if use_amp else None
 
     # Training history
     history = {
@@ -315,15 +335,28 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         for batch_idx, (data, target) in enumerate(train_loader):
             optimizer.zero_grad()
 
-            output = model(data)
             target_indices = torch.argmax(target, dim=1)
 
-            base_loss = criterion(output, target_indices)
-            l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
-            total_loss = base_loss + l2_reg
+            if use_amp:
+                # Mixed precision training
+                with autocast():
+                    output = model(data)
+                    base_loss = criterion(output, target_indices)
+                    l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
+                    total_loss = base_loss + l2_reg
 
-            total_loss.backward()
-            optimizer.step()
+                scaler.scale(total_loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Standard training
+                output = model(data)
+                base_loss = criterion(output, target_indices)
+                l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
+                total_loss = base_loss + l2_reg
+
+                total_loss.backward()
+                optimizer.step()
 
             epoch_train_loss += total_loss.item()
 
@@ -417,8 +450,23 @@ def export_to_onnx(model, input_dim, save_path, device):
 # Main training functions
 def train_single_fold(args, all_subjects_data):
     """Train a single fold"""
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
+    # Setup device and multi-GPU if available
+    if args.cpu:
+        device = torch.device('cpu')
+        use_multi_gpu = False
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Check for multiple GPUs
+        n_gpus = torch.cuda.device_count()
+        use_multi_gpu = n_gpus > 1 and not args.no_multi_gpu
+
     logging.info(f"Using device: {device}")
+    if use_multi_gpu:
+        logging.info(f"Using {n_gpus} GPUs with DataParallel")
+        # A6000 has 48GB memory each, we can use larger batch size
+        if args.batch_size == 128:  # If using default, scale up
+            args.batch_size = 256 * n_gpus
+            logging.info(f"Auto-scaled batch size to {args.batch_size} for {n_gpus} GPUs")
 
     # Prepare data
     logging.info(f"Preparing data for fold {args.fold} (test subject: {args.fold})")
@@ -431,7 +479,16 @@ def train_single_fold(args, all_subjects_data):
     )
 
     # Create model
-    model = RegModel(input_dim=351).to(device)
+    model = RegModel(input_dim=351)
+
+    if use_multi_gpu:
+        # Wrap model with DataParallel for multi-GPU training
+        model = model.cuda()
+        model = DataParallel(model)
+        logging.info(f"Model wrapped with DataParallel for {n_gpus} GPUs")
+    else:
+        model = model.to(device)
+
     logging.info("Model created")
 
     # Train model
@@ -442,7 +499,9 @@ def train_single_fold(args, all_subjects_data):
         batch_size=args.batch_size,
         no_epochs=args.epochs,
         learning_rate=args.lr,
-        log_interval=args.log_interval
+        log_interval=args.log_interval,
+        use_amp=args.use_amp,  # Use mixed precision if specified
+        num_workers=args.num_workers
     )
 
     # Save model
@@ -451,12 +510,18 @@ def train_single_fold(args, all_subjects_data):
 
     # Save PyTorch model
     model_path = os.path.join(model_dir, f'model_fold{args.fold}.pth')
-    torch.save(model.state_dict(), model_path)
+    # Handle DataParallel wrapper when saving
+    if isinstance(model, DataParallel):
+        torch.save(model.module.state_dict(), model_path)
+    else:
+        torch.save(model.state_dict(), model_path)
     logging.info(f"Model saved: {model_path}")
 
     # Export to ONNX
     onnx_path = os.path.join(model_dir, f'model_fold{args.fold}.onnx')
-    export_to_onnx(model, 351, onnx_path, device)
+    # Use the underlying model for ONNX export if using DataParallel
+    export_model = model.module if isinstance(model, DataParallel) else model
+    export_to_onnx(export_model, 351, onnx_path, device)
 
     # Save training history
     history_dir = os.path.join(args.output_dir, 'history')
@@ -577,6 +642,12 @@ def main():
     # System arguments
     parser.add_argument('--cpu', action='store_true',
                        help='Use CPU even if GPU is available')
+    parser.add_argument('--no-multi-gpu', action='store_true',
+                       help='Disable multi-GPU training even if multiple GPUs available')
+    parser.add_argument('--use-amp', action='store_true',
+                       help='Use automatic mixed precision (FP16) for faster training')
+    parser.add_argument('--num-workers', type=int, default=4,
+                       help='Number of workers for data loading')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed')
 
