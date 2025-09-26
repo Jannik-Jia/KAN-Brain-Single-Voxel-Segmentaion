@@ -325,6 +325,10 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         'test_detailed_metrics': []
     }
 
+    # Log training setup
+    logging.info(f"Starting training: {no_epochs} epochs, batch_size={batch_size}, {len(train_loader)} batches/epoch")
+    logging.info(f"Total training samples: {len(X_train):,}, Val samples: {len(X_val):,}, Test samples: {len(X_test):,}")
+
     # Training loop
     for epoch in range(no_epochs):
         # Training phase
@@ -333,7 +337,11 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         all_train_preds = []
         all_train_labels = []
 
-        for batch_idx, (data, target) in enumerate(train_loader):
+        # Add progress bar for training batches
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{no_epochs} - Training',
+                   leave=False, ncols=100)
+
+        for batch_idx, (data, target) in enumerate(pbar):
             # Move batch to GPU
             data = data.to(device if not is_data_parallel else 'cuda')
             target = target.to(device if not is_data_parallel else 'cuda')
@@ -369,12 +377,24 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
             all_train_preds.extend(predicted.cpu().numpy())
             all_train_labels.extend(target_indices.cpu().numpy())
 
+            # Update progress bar with current loss
+            pbar.set_postfix({'loss': f'{total_loss.item():.4f}'})
+
+            # Log every 100 batches for large datasets
+            if batch_idx % 100 == 0 and batch_idx > 0:
+                current_acc = np.mean(np.array(all_train_preds[-1000:]) == np.array(all_train_labels[-1000:]))
+                logging.info(f"  Batch {batch_idx}/{len(train_loader)}, Loss: {total_loss.item():.4f}, Recent Acc: {current_acc:.4f}")
+
+        # Close progress bar
+        pbar.close()
+
         # Calculate training metrics
         avg_train_loss = epoch_train_loss / len(train_loader)
         train_acc = np.mean(np.array(all_train_preds) == np.array(all_train_labels))
         train_f1 = f1_score(all_train_labels, all_train_preds, average='macro', zero_division=0)
 
         # Evaluation phase
+        logging.info(f"Epoch {epoch+1}: Evaluating on validation and test sets...")
         model.eval()
         with torch.no_grad():
             # Validation set - move to GPU for evaluation
@@ -463,13 +483,31 @@ def train_single_fold(args, all_subjects_data):
     """Train a single fold"""
     # Setup device and multi-GPU if available
     if args.cpu:
-        device = torch.device('cpu')
-        use_multi_gpu = False
-    else:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # Check for multiple GPUs
-        n_gpus = torch.cuda.device_count()
-        use_multi_gpu = n_gpus > 1 and not args.no_multi_gpu
+        logging.error("CPU training is explicitly disabled. Please use GPU for training.")
+        sys.exit(1)
+
+    # Force GPU usage - exit if no GPU available
+    if not torch.cuda.is_available():
+        logging.error("No CUDA device available! This script requires GPU for training.")
+        logging.error("Please run on a machine with NVIDIA GPU and CUDA installed.")
+        sys.exit(1)
+
+    device = torch.device('cuda')
+
+    # Initialize CUDA context to avoid warning
+    torch.cuda.init()
+    torch.cuda.set_device(0)  # Set primary device
+
+    # Check for multiple GPUs
+    n_gpus = torch.cuda.device_count()
+    use_multi_gpu = n_gpus > 1 and not args.no_multi_gpu
+
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    logging.info(f"Number of GPUs: {n_gpus}")
+    logging.info(f"GPU 0 Name: {torch.cuda.get_device_name(0)}")
+    if n_gpus > 1:
+        for i in range(n_gpus):
+            logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
 
     logging.info(f"Using device: {device}")
     if use_multi_gpu:
