@@ -36,8 +36,8 @@ Model size: 190.38 MB
 ### 2. Test Data Loading
 
 ```bash
-# Replace with your actual data path
-DATA_DIR="/path/to/your/mat/files"
+# Using the pre-configured data path
+DATA_DIR="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"
 
 python -c "
 import glob
