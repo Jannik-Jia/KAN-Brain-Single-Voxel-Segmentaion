@@ -63,15 +63,18 @@ def setup_logging(output_dir: Path, verbose: bool = True) -> logging.Logger:
 class AdjacencyMatrixComputer:
     """3D脑区邻接矩阵计算器"""
 
-    def __init__(self, connectivity: int = 6, standard_matrix_size: int = 102, logger: Optional[logging.Logger] = None):
+    def __init__(self, connectivity: int = 6, standard_matrix_size: int = 102,
+                 strict_mode: bool = True, logger: Optional[logging.Logger] = None):
         """
         Args:
             connectivity: 连通性定义 (6, 18, 或 26)
             standard_matrix_size: 标准化矩阵大小 (默认102，对应标签0-101)
+            strict_mode: 严格模式 - True时超出范围报错，False时自动扩展
             logger: 日志记录器
         """
         self.connectivity = connectivity
         self.standard_matrix_size = standard_matrix_size
+        self.strict_mode = strict_mode
         self.logger = logger or logging.getLogger(self.__class__.__name__)
 
         # 定义邻接结构元素
@@ -306,14 +309,39 @@ class AdjacencyMatrixComputer:
         # 使用标准化矩阵大小
         matrix_size = self.standard_matrix_size
         max_label = int(np.max(unique_labels))
+        min_label = int(np.min(unique_labels))
 
         # 验证标签是否超出标准范围
         if max_label >= matrix_size:
-            self.logger.warning(f"最大标签{max_label}超出标准矩阵大小{matrix_size}，将自动扩展矩阵")
-            matrix_size = max_label + 1
+            out_of_range_labels = [int(label) for label in unique_labels if label >= matrix_size]
+
+            if self.strict_mode:
+                error_msg = (
+                    f"\n❌ 错误：发现超出标准范围的标签！\n"
+                    f"  - 最大标签: {max_label}\n"
+                    f"  - 标准矩阵大小: {matrix_size} (支持标签0-{matrix_size-1})\n"
+                    f"  - 超出范围的标签: {out_of_range_labels}\n"
+                    f"  \n解决方案:\n"
+                    f"  1. 检查数据是否正确\n"
+                    f"  2. 调整 --standard_matrix_size 参数为 {max_label + 1} 或更大\n"
+                    f"  3. 使用 --no-strict 参数自动扩展矩阵\n"
+                )
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            else:
+                self.logger.warning(
+                    f"⚠️ 警告: 最大标签{max_label}超出标准矩阵大小{matrix_size}\n"
+                    f"  超出范围的标签: {out_of_range_labels}\n"
+                    f"  自动扩展矩阵大小为 {max_label + 1}"
+                )
+                matrix_size = max_label + 1
+
+        # 额外检查负标签
+        if min_label < 0:
+            self.logger.warning(f"发现负标签: {min_label}，这些标签将被忽略")
 
         self.logger.info(f"创建标准化{matrix_size}×{matrix_size}邻接矩阵 (标准大小: {self.standard_matrix_size})")
-        self.logger.info(f"当前数据标签范围: 0-{max_label}, 缺失的标签对应行/列将为零")
+        self.logger.info(f"当前数据标签范围: {min_label}-{max_label}, 缺失的标签对应行/列将为零")
 
         # 初始化标准大小的邻接矩阵
         adjacency_matrix = np.zeros((matrix_size, matrix_size), dtype=np.uint8)
@@ -633,6 +661,8 @@ def main():
                       help='连通性定义 (6, 18, 或 26)')
     parser.add_argument('--standard_matrix_size', type=int, default=102,
                       help='标准化矩阵大小 (默认102，对应标签0-101)')
+    parser.add_argument('--no-strict', action='store_true',
+                      help='禁用严格模式，超出范围时自动扩展矩阵而不报错')
     parser.add_argument('--start_subject', type=int, default=1,
                       help='起始被试编号')
     parser.add_argument('--end_subject', type=int, default=38,
@@ -669,6 +699,7 @@ def main():
     computer = AdjacencyMatrixComputer(
         connectivity=args.connectivity,
         standard_matrix_size=args.standard_matrix_size,
+        strict_mode=not args.no_strict,  # 如果使用--no-strict则禁用严格模式
         logger=logger
     )
 
