@@ -389,7 +389,7 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         pbar.close()
 
         # Calculate training metrics
-        avg_train_loss = epoch_train_loss / len(train_loader)
+        avg_train_loss = epoch_train_loss / len(train_loader) if len(train_loader) > 0 else 0
         train_acc = np.mean(np.array(all_train_preds) == np.array(all_train_labels))
         train_f1 = f1_score(all_train_labels, all_train_preds, average='macro', zero_division=0)
 
@@ -425,7 +425,7 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
                 val_all_preds.extend(val_predicted.cpu().numpy())
                 val_all_labels.extend(val_target_indices.cpu().numpy())
 
-            val_total_loss /= len(val_loader)
+            val_total_loss = val_total_loss / len(val_loader) if len(val_loader) > 0 else 0
             val_acc = np.mean(np.array(val_all_preds) == np.array(val_all_labels))
             val_f1 = f1_score(val_all_labels, val_all_preds, average='macro', zero_division=0)
 
@@ -457,7 +457,7 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
                 test_all_preds.extend(test_predicted.cpu().numpy())
                 test_all_labels.extend(test_target_indices.cpu().numpy())
 
-            test_total_loss /= len(test_loader)
+            test_total_loss = test_total_loss / len(test_loader) if len(test_loader) > 0 else 0
             test_labels_np = np.array(test_all_labels)
             test_preds_np = np.array(test_all_preds)
 
@@ -470,10 +470,10 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         history['train_loss'].append(avg_train_loss)
         history['train_acc'].append(train_acc)
         history['train_f1'].append(train_f1)
-        history['val_loss'].append(val_total_loss.item())
+        history['val_loss'].append(val_total_loss)
         history['val_acc'].append(val_acc)
         history['val_f1'].append(val_f1)
-        history['test_loss'].append(test_total_loss.item())
+        history['test_loss'].append(test_total_loss)
         history['test_acc'].append(test_acc)
         history['test_f1'].append(test_f1)
         history['test_detailed_metrics'].append(test_detailed)
@@ -482,8 +482,8 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         if epoch % 1 == 0 or epoch == no_epochs - 1:
             logging.info(f"Epoch {epoch+1}/{no_epochs}:")
             logging.info(f"  Train - Loss: {avg_train_loss:.4f}, Acc: {train_acc:.4f}, Macro-F1: {train_f1:.4f}")
-            logging.info(f"  Val   - Loss: {val_total_loss.item():.4f}, Acc: {val_acc:.4f}, Macro-F1: {val_f1:.4f}")
-            logging.info(f"  Test  - Loss: {test_total_loss.item():.4f}, Gross Acc: {test_acc:.4f}, Macro-F1: {test_f1:.4f}")
+            logging.info(f"  Val   - Loss: {val_total_loss:.4f}, Acc: {val_acc:.4f}, Macro-F1: {val_f1:.4f}")
+            logging.info(f"  Test  - Loss: {test_total_loss:.4f}, Gross Acc: {test_acc:.4f}, Macro-F1: {test_f1:.4f}")
 
             # Log detailed metrics at intervals
             if epoch == 0 or epoch == no_epochs - 1 or epoch % log_interval == 0:
