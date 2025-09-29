@@ -397,34 +397,69 @@ def train_model(model, X_train, y_train, X_val, y_val, X_test, y_test,
         logging.info(f"Epoch {epoch+1}: Evaluating on validation and test sets...")
         model.eval()
         with torch.no_grad():
-            # Validation set - move to GPU for evaluation
-            X_val_gpu = X_val_tensor.to(device if not is_data_parallel else 'cuda')
-            y_val_gpu = y_val_tensor.to(device if not is_data_parallel else 'cuda')
+            # Validation set - evaluate in batches using same batch_size as training
+            val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,  # Use same batch_size as training
+                shuffle=False,
+                num_workers=0,  # No workers for evaluation to save memory
+                pin_memory=True if device.type == 'cuda' else False
+            )
 
-            val_output = model(X_val_gpu)
-            val_target_indices = torch.argmax(y_val_gpu, dim=1)
-            val_base_loss = criterion(val_output, val_target_indices)
-            val_l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
-            val_total_loss = val_base_loss + val_l2_reg
+            val_total_loss = 0
+            val_all_preds = []
+            val_all_labels = []
 
-            _, val_predicted = torch.max(val_output.data, 1)
-            val_acc = (val_predicted == val_target_indices).float().mean().item()
-            val_f1 = f1_score(val_target_indices.cpu().numpy(), val_predicted.cpu().numpy(),
-                             average='macro', zero_division=0)
+            for batch_data, batch_target in val_loader:
+                batch_data = batch_data.to(device if not is_data_parallel else 'cuda')
+                batch_target = batch_target.to(device if not is_data_parallel else 'cuda')
 
-            # Test set - move to GPU for evaluation
-            X_test_gpu = X_test_tensor.to(device if not is_data_parallel else 'cuda')
-            y_test_gpu = y_test_tensor.to(device if not is_data_parallel else 'cuda')
+                val_output = model(batch_data)
+                val_target_indices = torch.argmax(batch_target, dim=1)
+                val_base_loss = criterion(val_output, val_target_indices)
+                val_l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
+                val_total_loss += (val_base_loss + val_l2_reg).item()
 
-            test_output = model(X_test_gpu)
-            test_target_indices = torch.argmax(y_test_gpu, dim=1)
-            test_base_loss = criterion(test_output, test_target_indices)
-            test_l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
-            test_total_loss = test_base_loss + test_l2_reg
+                _, val_predicted = torch.max(val_output.data, 1)
+                val_all_preds.extend(val_predicted.cpu().numpy())
+                val_all_labels.extend(val_target_indices.cpu().numpy())
 
-            _, test_predicted = torch.max(test_output.data, 1)
-            test_labels_np = test_target_indices.cpu().numpy()
-            test_preds_np = test_predicted.cpu().numpy()
+            val_total_loss /= len(val_loader)
+            val_acc = np.mean(np.array(val_all_preds) == np.array(val_all_labels))
+            val_f1 = f1_score(val_all_labels, val_all_preds, average='macro', zero_division=0)
+
+            # Test set - evaluate in batches using same batch_size as training
+            test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
+            test_loader = DataLoader(
+                test_dataset,
+                batch_size=batch_size,  # Use same batch_size as training
+                shuffle=False,
+                num_workers=0,  # No workers for evaluation to save memory
+                pin_memory=True if device.type == 'cuda' else False
+            )
+
+            test_total_loss = 0
+            test_all_preds = []
+            test_all_labels = []
+
+            for batch_data, batch_target in test_loader:
+                batch_data = batch_data.to(device if not is_data_parallel else 'cuda')
+                batch_target = batch_target.to(device if not is_data_parallel else 'cuda')
+
+                test_output = model(batch_data)
+                test_target_indices = torch.argmax(batch_target, dim=1)
+                test_base_loss = criterion(test_output, test_target_indices)
+                test_l2_reg = kernel_l2_regularization(model, weight_decay=0.00001)
+                test_total_loss += (test_base_loss + test_l2_reg).item()
+
+                _, test_predicted = torch.max(test_output.data, 1)
+                test_all_preds.extend(test_predicted.cpu().numpy())
+                test_all_labels.extend(test_target_indices.cpu().numpy())
+
+            test_total_loss /= len(test_loader)
+            test_labels_np = np.array(test_all_labels)
+            test_preds_np = np.array(test_all_preds)
 
             # Calculate detailed test metrics
             test_detailed = calculate_detailed_metrics(test_labels_np, test_preds_np)

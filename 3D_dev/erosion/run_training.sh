@@ -13,7 +13,7 @@ PYTHON_SCRIPT="train_38fold.py"
 DATASET_INDEX="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/dataset_index_validated.json"  # Relative path to dataset index
 OUTPUT_BASE="./output"
 EPOCHS=25
-BATCH_SIZE=8192
+BATCH_SIZE=4096  # Reduced from 8192 to avoid OOM during evaluation
 LR=0.00001
 LOG_INTERVAL=5
 
