@@ -63,13 +63,15 @@ def setup_logging(output_dir: Path, verbose: bool = True) -> logging.Logger:
 class AdjacencyMatrixComputer:
     """3D脑区邻接矩阵计算器"""
 
-    def __init__(self, connectivity: int = 6, logger: Optional[logging.Logger] = None):
+    def __init__(self, connectivity: int = 6, standard_matrix_size: int = 102, logger: Optional[logging.Logger] = None):
         """
         Args:
             connectivity: 连通性定义 (6, 18, 或 26)
+            standard_matrix_size: 标准化矩阵大小 (默认102，对应标签0-101)
             logger: 日志记录器
         """
         self.connectivity = connectivity
+        self.standard_matrix_size = standard_matrix_size
         self.logger = logger or logging.getLogger(self.__class__.__name__)
 
         # 定义邻接结构元素
@@ -301,13 +303,19 @@ class AdjacencyMatrixComputer:
 
         self.logger.info(f"发现{len(unique_labels)}个有效脑区标签: {sorted(unique_labels)}")
 
-        # 动态确定矩阵大小
+        # 使用标准化矩阵大小
+        matrix_size = self.standard_matrix_size
         max_label = int(np.max(unique_labels))
-        matrix_size = max_label + 1  # 因为标签可能从0开始
 
-        self.logger.info(f"创建{matrix_size}×{matrix_size}邻接矩阵 (适应标签范围0-{max_label})")
+        # 验证标签是否超出标准范围
+        if max_label >= matrix_size:
+            self.logger.warning(f"最大标签{max_label}超出标准矩阵大小{matrix_size}，将自动扩展矩阵")
+            matrix_size = max_label + 1
 
-        # 初始化邻接矩阵
+        self.logger.info(f"创建标准化{matrix_size}×{matrix_size}邻接矩阵 (标准大小: {self.standard_matrix_size})")
+        self.logger.info(f"当前数据标签范围: 0-{max_label}, 缺失的标签对应行/列将为零")
+
+        # 初始化标准大小的邻接矩阵
         adjacency_matrix = np.zeros((matrix_size, matrix_size), dtype=np.uint8)
         contact_counts = np.zeros((matrix_size, matrix_size), dtype=np.uint32)  # 接触体素数量
 
@@ -359,7 +367,9 @@ class AdjacencyMatrixComputer:
             'min_label': int(np.min(unique_labels)),
             'max_label': int(np.max(unique_labels)),
             'unique_labels': unique_labels.tolist(),
-            'connectivity': self.connectivity
+            'connectivity': self.connectivity,
+            'standard_matrix_size': self.standard_matrix_size,
+            'is_standardized': matrix_size == self.standard_matrix_size
         }
 
         self.logger.info(f"邻接关系统计: {total_adjacencies}个邻接对, "
@@ -463,18 +473,21 @@ class AdjacencyMatrixComputer:
 
         for key, value in data_dict.items():
             try:
+                # 确保key是字符串（HDF5要求）
+                str_key = str(key)
+
                 if isinstance(value, dict):
-                    self._save_dict_to_group(subgroup, key, value)
+                    self._save_dict_to_group(subgroup, str_key, value)
                 elif isinstance(value, (list, np.ndarray)):
-                    subgroup.create_dataset(key, data=value)
+                    subgroup.create_dataset(str_key, data=value)
                 elif isinstance(value, (int, float, str, bool)):
-                    subgroup.attrs[key] = value
+                    subgroup.attrs[str_key] = value
                 else:
                     # 尝试转换为字符串
-                    subgroup.attrs[key] = str(value)
+                    subgroup.attrs[str_key] = str(value)
             except Exception as e:
                 self.logger.warning(f"无法保存 {key}: {e}")
-                subgroup.attrs[f"{key}_error"] = str(e)
+                subgroup.attrs[f"{str(key)}_error"] = str(e)
 
     def save_detailed_report(self, subject_info: Dict, output_dir: Path):
         """保存每个被试的详细说明文件"""
@@ -618,6 +631,8 @@ def main():
                       help='输出目录')
     parser.add_argument('--connectivity', type=int, default=6, choices=[6, 18, 26],
                       help='连通性定义 (6, 18, 或 26)')
+    parser.add_argument('--standard_matrix_size', type=int, default=102,
+                      help='标准化矩阵大小 (默认102，对应标签0-101)')
     parser.add_argument('--start_subject', type=int, default=1,
                       help='起始被试编号')
     parser.add_argument('--end_subject', type=int, default=38,
@@ -640,6 +655,7 @@ def main():
     logger.info(f"数据目录: {data_dir}")
     logger.info(f"输出目录: {output_dir}")
     logger.info(f"连通性: {args.connectivity}")
+    logger.info(f"标准矩阵大小: {args.standard_matrix_size}")
 
     # 查找所有MAT文件
     try:
@@ -650,7 +666,11 @@ def main():
         return 1
 
     # 初始化计算器
-    computer = AdjacencyMatrixComputer(connectivity=args.connectivity, logger=logger)
+    computer = AdjacencyMatrixComputer(
+        connectivity=args.connectivity,
+        standard_matrix_size=args.standard_matrix_size,
+        logger=logger
+    )
 
     # 处理文件范围
     if args.test_only:

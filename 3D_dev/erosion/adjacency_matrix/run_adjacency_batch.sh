@@ -22,6 +22,7 @@ echo -e "${BLUE}======================================${NC}"
 DATA_DIR="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated"
 OUTPUT_DIR="./results"
 CONNECTIVITY=6  # 6, 18, 或 26连通性
+STANDARD_MATRIX_SIZE=102  # 标准化矩阵大小 (默认102，对应标签0-101)
 START_SUBJECT=1
 END_SUBJECT=38
 
@@ -48,6 +49,7 @@ echo -e "${BLUE}配置信息:${NC}"
 echo -e "  数据目录: ${DATA_DIR}"
 echo -e "  输出目录: ${OUTPUT_DIR}"
 echo -e "  连通性: ${CONNECTIVITY}"
+echo -e "  标准矩阵大小: ${STANDARD_MATRIX_SIZE}×${STANDARD_MATRIX_SIZE}"
 echo -e "  被试范围: ${START_SUBJECT}-${END_SUBJECT}"
 echo
 
@@ -65,6 +67,7 @@ python "$SCRIPT_PATH" \
     --data_dir "$DATA_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --connectivity "$CONNECTIVITY" \
+    --standard_matrix_size "$STANDARD_MATRIX_SIZE" \
     --test_only \
     --verbose
 
@@ -95,6 +98,7 @@ python "$SCRIPT_PATH" \
     --data_dir "$DATA_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --connectivity "$CONNECTIVITY" \
+    --standard_matrix_size "$STANDARD_MATRIX_SIZE" \
     --start_subject "$START_SUBJECT" \
     --end_subject "$END_SUBJECT" \
     --verbose
