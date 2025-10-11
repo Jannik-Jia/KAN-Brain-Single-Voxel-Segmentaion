@@ -168,9 +168,9 @@ class BatchDownsamplingProcessor:
             try:
                 mat_data = sio.loadmat(mat_path)
                 self.logger.debug(f"使用scipy.io.loadmat加载成功")
-            except NotImplementedError:
-                # 如果是HDF5格式，使用h5py
-                self.logger.debug(f"文件是HDF5格式，使用h5py加载")
+            except (NotImplementedError, ValueError) as e:
+                # 如果是HDF5格式或版本不兼容，使用h5py
+                self.logger.info(f"scipy.io.loadmat失败 ({str(e)}), 尝试使用h5py加载HDF5格式")
                 mat_data = {}
                 with h5py.File(mat_path, 'r') as f:
                     # 读取关键数据
@@ -179,20 +179,105 @@ class BatchDownsamplingProcessor:
                             mat_data[key] = f[key][()]
                             self.logger.debug(f"读取 {key}: {mat_data[key].shape}")
 
+                            # MATLAB保存的HDF5可能需要转置
+                            # MATLAB是列优先（Fortran order），Python是行优先（C order）
+                            if mat_data[key].ndim >= 2:
+                                # 对于2D以上的数组，可能需要转置轴
+                                # data应该是(C, Z, Y, X) -> (Z, X, Y, C)或(X, Y, Z, C)
+                                # 我们需要检查并调整
+                                shape = mat_data[key].shape
+                                self.logger.debug(f"  原始shape: {shape}")
+
+                                # 如果是4D数据且第一维是351，需要转置
+                                if key == 'data' and len(shape) == 4 and shape[0] == 351:
+                                    # MATLAB: (351, Z, Y, X) -> Python: (Z, X, Y, 351)
+                                    mat_data[key] = np.transpose(mat_data[key], (3, 2, 1, 0))
+                                    self.logger.debug(f"  转置后shape: {mat_data[key].shape}")
+                                # 如果是3D数据，可能也需要转置
+                                elif key in ['region_mask', 'region_labels'] and len(shape) == 3:
+                                    # 检查是否需要转置（MATLAB可能是 (Z, Y, X)）
+                                    if shape != (384, 336, 256):
+                                        # 尝试转置
+                                        mat_data[key] = np.transpose(mat_data[key], (2, 1, 0))
+                                        self.logger.debug(f"  转置后shape: {mat_data[key].shape}")
+
+                self.logger.info(f"使用h5py加载HDF5格式成功")
+
             # 验证必需的keys
             required_keys = ['data', 'region_mask', 'region_labels']
             for key in required_keys:
                 if key not in mat_data:
                     raise ValueError(f"缺少必需的key: {key}")
 
+            # 验证和修正数据shape
+            data = mat_data['data']
+            region_mask = mat_data['region_mask']
+            region_labels = mat_data['region_labels']
+
+            # 验证data shape
+            if data.ndim != 4:
+                raise ValueError(f"data应该是4D数组，实际是{data.ndim}D: {data.shape}")
+
+            # 如果data的最后一维不是351，可能需要调整
+            if data.shape[-1] != 351:
+                self.logger.warning(f"data shape异常: {data.shape}, 尝试调整...")
+                # 如果第一维是351，转置
+                if data.shape[0] == 351:
+                    data = np.transpose(data, (1, 2, 3, 0))
+                    self.logger.info(f"data转置后shape: {data.shape}")
+                else:
+                    raise ValueError(f"无法识别的data shape: {data.shape}, 期望最后一维是351")
+
+            # 验证3D shape（期望是384, 336, 256）
+            expected_spatial = (384, 336, 256)
+            data_spatial = data.shape[:3]
+
+            # 如果空间维度不匹配，尝试转置
+            if data_spatial != expected_spatial:
+                self.logger.warning(f"空间维度不匹配: data={data_spatial}, 期望={expected_spatial}")
+
+                # 尝试所有可能的转置组合，找到匹配的
+                from itertools import permutations
+                found = False
+                for perm in permutations([0, 1, 2]):
+                    test_shape = tuple(data_spatial[i] for i in perm)
+                    if test_shape == expected_spatial:
+                        self.logger.info(f"找到匹配的转置: {perm}")
+                        # 应用转置（包括通道维度）
+                        full_perm = tuple(list(perm) + [3])
+                        data = np.transpose(data, full_perm)
+                        # 对mask和labels应用同样的转置（只前3维）
+                        if region_mask.shape != expected_spatial:
+                            region_mask = np.transpose(region_mask, perm)
+                        if region_labels.shape != expected_spatial:
+                            region_labels = np.transpose(region_labels, perm)
+                        found = True
+                        break
+
+                if not found:
+                    raise ValueError(f"无法将data shape {data_spatial}转换为期望的{expected_spatial}")
+
+            # 最终验证
+            if data.shape[:3] != expected_spatial or data.shape[3] != 351:
+                raise ValueError(f"最终data shape验证失败: {data.shape}, 期望: {expected_spatial + (351,)}")
+
+            if region_mask.shape != expected_spatial:
+                raise ValueError(f"region_mask shape验证失败: {region_mask.shape}, 期望: {expected_spatial}")
+
+            if region_labels.shape != expected_spatial:
+                raise ValueError(f"region_labels shape验证失败: {region_labels.shape}, 期望: {expected_spatial}")
+
             load_time = time.time() - start_time
             self.logger.info(f"数据加载成功: {mat_path.name} (耗时: {load_time:.2f}秒)")
+            self.logger.info(f"  data shape: {data.shape}")
+            self.logger.info(f"  region_mask shape: {region_mask.shape}")
+            self.logger.info(f"  region_labels shape: {region_labels.shape}")
             self.log_memory_usage(f"加载 {mat_path.name} 后")
 
             return {
-                'data': mat_data['data'],
-                'region_mask': mat_data['region_mask'],
-                'region_labels': mat_data['region_labels']
+                'data': data,
+                'region_mask': region_mask,
+                'region_labels': region_labels
             }
 
         except Exception as e:
