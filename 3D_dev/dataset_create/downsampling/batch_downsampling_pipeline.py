@@ -42,6 +42,15 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 # 导入downsampling pipeline
 from mri_downsampling_pipeline import MRIDownsamplingPipeline
 
+# 导入3D-1D转换工具用于验证
+sys.path.insert(0, str(Path(__file__).parent.parent / '1d-3d-convert'))
+try:
+    from data_3d_1d_mapper import Data3D1DMapper
+    MAPPER_AVAILABLE = True
+except ImportError:
+    MAPPER_AVAILABLE = False
+    print("Warning: data_3d_1d_mapper not available, data verification will be skipped")
+
 
 class BatchDownsamplingProcessor:
     """批量downsampling处理器，带完整日志和错误处理"""
@@ -452,6 +461,287 @@ class BatchDownsamplingProcessor:
             f.write(f"生成工具: batch_downsampling_pipeline.py v1.2.0\n")
             f.write("=" * 80 + "\n")
 
+    def _smart_verify(self,
+                      results: Dict[str, Any],
+                      subject_id: str,
+                      subject_idx: int,
+                      total_subjects: int,
+                      verify_mode: str) -> Dict[str, Any]:
+        """
+        智能验证策略
+
+        Args:
+            results: Pipeline输出结果
+            subject_id: 被试ID
+            subject_idx: 当前被试索引
+            total_subjects: 总被试数
+            verify_mode: 验证模式
+
+        Returns:
+            验证结果字典
+        """
+        # 根据验证模式决定验证策略
+        if verify_mode == 'none':
+            return {
+                'verified': True,
+                'reason': 'Verification skipped',
+                'checks': {},
+                'verification_type': 'none'
+            }
+
+        elif verify_mode == 'full':
+            # 完整验证：所有被试都进行保存后验证
+            self.logger.info(f"  → 完整验证（重新加载文件）")
+            return self.verify_saved_data(subject_id)
+
+        elif verify_mode == 'lightweight':
+            # 轻量级验证：所有被试都进行保存前验证
+            self.logger.info(f"  → 轻量级验证（内存数据）")
+            return self.verify_before_save(results, subject_id)
+
+        elif verify_mode == 'smart':
+            # 智能验证策略
+            is_first = (subject_idx == 0)
+            is_last = (subject_idx == total_subjects - 1)
+
+            if is_first:
+                # 第一个被试：完整验证，确保pipeline正常启动
+                self.logger.info(f"  → 首个被试：完整验证（重新加载文件）")
+                return self.verify_saved_data(subject_id)
+
+            elif is_last and total_subjects > 1:
+                # 最后一个被试：完整验证，确保pipeline一直正常
+                self.logger.info(f"  → 最后被试：完整验证（重新加载文件）")
+                return self.verify_saved_data(subject_id)
+
+            else:
+                # 中间被试：轻量级验证，快速高效
+                self.logger.info(f"  → 轻量级验证（内存数据，快速）")
+                return self.verify_before_save(results, subject_id)
+
+        else:
+            self.logger.warning(f"未知的验证模式: {verify_mode}，使用轻量级验证")
+            return self.verify_before_save(results, subject_id)
+
+    def verify_before_save(self, results: Dict[str, Any], subject_id: str) -> Dict[str, Any]:
+        """
+        保存前轻量级验证（内存中的数据，零I/O开销）
+
+        Args:
+            results: Pipeline输出结果
+            subject_id: 被试ID
+
+        Returns:
+            验证结果字典
+        """
+        try:
+            self.logger.debug(f"轻量级验证（保存前）: {subject_id}")
+
+            checks = {}
+
+            # 检查1: 必需的key存在性
+            required_3d_keys = ['data_lr', 'proba_labels', 'region_mask_lr']
+            has_3d = all(k in results for k in required_3d_keys)
+            checks['keys_3d'] = has_3d
+
+            if not has_3d:
+                return {
+                    'verified': False,
+                    'reason': 'Missing required 3D keys',
+                    'checks': checks,
+                    'verification_type': 'lightweight'
+                }
+
+            # 检查2: 概率和验证（3D）
+            prob_sum_3d = results['proba_labels'][results['region_mask_lr'] > 0].sum(axis=-1).mean()
+            checks['prob_sum_3d'] = float(prob_sum_3d)
+            checks['prob_sum_valid_3d'] = (0.99 <= prob_sum_3d <= 1.01)
+
+            # 检查3: 如果有1D数据，验证对应关系
+            if 'multidim_data' in results:
+                checks['keys_1d'] = True
+                n_voxels = results['n_voxels']
+                checks['n_voxels'] = n_voxels
+
+                # 体素数一致性
+                n_voxels_from_mask = np.sum(results['region_mask_lr'] > 0)
+                checks['n_voxels_match'] = (n_voxels_from_mask == n_voxels)
+
+                # 形状一致性
+                checks['multidim_data_shape'] = (results['multidim_data'].shape[0] == n_voxels)
+                checks['seg_one_hot_shape'] = (results['seg_one_hot'].shape[1] == n_voxels)
+
+                # 概率和验证（1D）
+                prob_sum_1d = results['seg_one_hot'].sum(axis=0).mean()
+                checks['prob_sum_1d'] = float(prob_sum_1d)
+                checks['prob_sum_valid_1d'] = (0.99 <= prob_sum_1d <= 1.01)
+
+                # 3D-1D对应关系（抽样检查，快速）
+                features_3d = results['data_lr'][results['region_mask_lr'] > 0]
+                # 只抽样100个体素快速检查
+                sample_size = min(100, n_voxels)
+                sample_indices = np.random.choice(n_voxels, size=sample_size, replace=False)
+
+                max_feat_diff = np.abs(features_3d[sample_indices] - results['multidim_data'][sample_indices]).max()
+                checks['max_feat_diff_sampled'] = float(max_feat_diff)
+                checks['correspondence_valid'] = (max_feat_diff < 1e-5)
+            else:
+                checks['keys_1d'] = False
+
+            # 判断总体验证结果
+            all_passed = checks['keys_3d'] and checks['prob_sum_valid_3d']
+            if checks.get('keys_1d', False):
+                all_passed = all_passed and all([
+                    checks['n_voxels_match'],
+                    checks['multidim_data_shape'],
+                    checks['seg_one_hot_shape'],
+                    checks['prob_sum_valid_1d'],
+                    checks['correspondence_valid']
+                ])
+
+            return {
+                'verified': all_passed,
+                'reason': 'Lightweight checks passed' if all_passed else 'Some lightweight checks failed',
+                'checks': checks,
+                'verification_type': 'lightweight'
+            }
+
+        except Exception as e:
+            self.logger.error(f"轻量级验证出错: {e}")
+            return {
+                'verified': False,
+                'reason': f'Verification error: {str(e)}',
+                'checks': {},
+                'verification_type': 'lightweight'
+            }
+
+    def verify_saved_data(self, subject_id: str) -> Dict[str, Any]:
+        """
+        验证已保存的3D和1D数据
+
+        Args:
+            subject_id: 被试ID
+
+        Returns:
+            验证结果字典
+        """
+        if not MAPPER_AVAILABLE:
+            return {
+                'verified': False,
+                'reason': 'Mapper not available',
+                'checks': {}
+            }
+
+        try:
+            self.logger.info(f"验证数据: {subject_id}")
+
+            # 加载3D和1D数据
+            file_3d = self.output_3d_dir / f'{subject_id}_3d.npz'
+            file_1d = self.output_1d_dir / f'{subject_id}_1d.npz'
+
+            if not file_3d.exists():
+                return {
+                    'verified': False,
+                    'reason': f'3D file not found: {file_3d}',
+                    'checks': {}
+                }
+
+            if not file_1d.exists():
+                return {
+                    'verified': False,
+                    'reason': f'1D file not found: {file_1d}',
+                    'checks': {}
+                }
+
+            data_3d = np.load(file_3d)
+            data_1d = np.load(file_1d)
+
+            checks = {}
+
+            # 检查1: 必需的key存在性
+            required_3d_keys = ['data_lr', 'proba_labels', 'region_mask_lr']
+            required_1d_keys = ['multidim_data', 'seg_one_hot', 'region_seg', 'region', 'n_voxels']
+
+            has_3d = all(k in data_3d for k in required_3d_keys)
+            has_1d = all(k in data_1d for k in required_1d_keys)
+
+            checks['keys_3d'] = has_3d
+            checks['keys_1d'] = has_1d
+
+            if not has_3d or not has_1d:
+                return {
+                    'verified': False,
+                    'reason': 'Missing required keys',
+                    'checks': checks
+                }
+
+            # 检查2: 体素数一致性
+            n_voxels_from_mask = np.sum(data_3d['region_mask_lr'] > 0)
+            n_voxels_recorded = int(data_1d['n_voxels'])
+
+            checks['n_voxels_match'] = (n_voxels_from_mask == n_voxels_recorded)
+            checks['n_voxels'] = n_voxels_recorded
+
+            # 检查3: 数据形状一致性
+            checks['multidim_data_shape'] = (data_1d['multidim_data'].shape[0] == n_voxels_recorded)
+            checks['seg_one_hot_shape'] = (data_1d['seg_one_hot'].shape[1] == n_voxels_recorded)
+
+            # 检查4: 概率和验证
+            prob_sum_3d = data_3d['proba_labels'][data_3d['region_mask_lr'] > 0].sum(axis=-1).mean()
+            prob_sum_1d = data_1d['seg_one_hot'].sum(axis=0).mean()
+
+            checks['prob_sum_3d'] = float(prob_sum_3d)
+            checks['prob_sum_1d'] = float(prob_sum_1d)
+            checks['prob_sum_valid_3d'] = (0.99 <= prob_sum_3d <= 1.01)
+            checks['prob_sum_valid_1d'] = (0.99 <= prob_sum_1d <= 1.01)
+
+            # 检查5: 3D-1D对应关系（抽样检查）
+            features_from_3d = data_3d['data_lr'][data_3d['region_mask_lr'] > 0]
+            max_feat_diff = np.abs(features_from_3d - data_1d['multidim_data']).max()
+
+            labels_from_3d = data_3d['proba_labels'][data_3d['region_mask_lr'] > 0]
+            max_label_diff = np.abs(labels_from_3d.T - data_1d['seg_one_hot']).max()
+
+            checks['max_feat_diff'] = float(max_feat_diff)
+            checks['max_label_diff'] = float(max_label_diff)
+            checks['correspondence_valid'] = (max_feat_diff < 1e-5 and max_label_diff < 1e-5)
+
+            # 判断总体验证结果
+            all_passed = all([
+                checks['keys_3d'],
+                checks['keys_1d'],
+                checks['n_voxels_match'],
+                checks['multidim_data_shape'],
+                checks['seg_one_hot_shape'],
+                checks['prob_sum_valid_3d'],
+                checks['prob_sum_valid_1d'],
+                checks['correspondence_valid']
+            ])
+
+            if all_passed:
+                self.logger.info(f"✓ 数据验证通过: {subject_id}")
+            else:
+                self.logger.warning(f"⚠ 数据验证发现问题: {subject_id}")
+                for check, result in checks.items():
+                    if isinstance(result, bool) and not result:
+                        self.logger.warning(f"  - {check}: FAILED")
+
+            return {
+                'verified': all_passed,
+                'reason': 'Full checks passed' if all_passed else 'Some checks failed',
+                'checks': checks,
+                'verification_type': 'full'
+            }
+
+        except Exception as e:
+            self.logger.error(f"验证过程出错: {e}")
+            return {
+                'verified': False,
+                'reason': f'Verification error: {str(e)}',
+                'checks': {},
+                'verification_type': 'full'
+            }
+
     def save_downsampled_data(self,
                              results: Dict[str, Any],
                              subject_id: str) -> Dict[str, float]:
@@ -539,13 +829,21 @@ class BatchDownsamplingProcessor:
             self.logger.error(traceback.format_exc())
             raise
 
-    def process_single_subject(self, mat_path: Path, subject_id: str) -> Dict[str, Any]:
+    def process_single_subject(self,
+                               mat_path: Path,
+                               subject_id: str,
+                               subject_idx: int = 0,
+                               total_subjects: int = 1,
+                               verify_mode: str = 'smart') -> Dict[str, Any]:
         """
         处理单个被试
 
         Args:
             mat_path: 输入MAT文件路径
             subject_id: 被试ID
+            subject_idx: 当前被试索引（从0开始）
+            total_subjects: 总被试数
+            verify_mode: 验证模式 ('smart', 'full', 'lightweight', 'none')
 
         Returns:
             处理结果字典
@@ -598,6 +896,12 @@ class BatchDownsamplingProcessor:
             self.logger.info("步骤4: 保存Downsampled数据")
             file_sizes = self.save_downsampled_data(pipeline_results, subject_id)
 
+            # 步骤5: 智能验证
+            self.logger.info("步骤5: 数据验证")
+            verification_result = self._smart_verify(
+                pipeline_results, subject_id, subject_idx, total_subjects, verify_mode
+            )
+
             # 记录结果
             processing_time = time.time() - start_time
 
@@ -613,13 +917,19 @@ class BatchDownsamplingProcessor:
                 'output_shape': pipeline_results['data_lr'].shape,
                 'proba_labels_shape': pipeline_results['proba_labels'].shape,
                 'slab_thickness_mm': pipeline_results['metadata']['slab_localization']['slab_thickness_mm'],
-                'coverage_fallback': pipeline_results['metadata']['slab_localization']['coverage_fallback']
+                'coverage_fallback': pipeline_results['metadata']['slab_localization']['coverage_fallback'],
+                'verification': verification_result
             })
 
             # 标记为已完成
             self.completed_subjects.add(subject_id)
 
-            self.logger.info(f"✅ 被试 {subject_id} 处理成功")
+            # 根据验证结果决定成功标识
+            if verification_result['verified']:
+                self.logger.info(f"✅ 被试 {subject_id} 处理成功（已验证）")
+            else:
+                self.logger.warning(f"⚠️ 被试 {subject_id} 处理完成，但验证失败: {verification_result['reason']}")
+
             self.logger.info(f"   处理时间: {processing_time:.1f}秒")
             self.logger.info(f"   3D数据: {file_sizes['3d_mb']:.1f}MB → {self.output_3d_dir}/{subject_id}_3d.npz")
             self.logger.info(f"   3D shape: {pipeline_results['data_lr'].shape}")
@@ -628,6 +938,9 @@ class BatchDownsamplingProcessor:
                 self.logger.info(f"   1D shape: {pipeline_results['multidim_data'].shape}")
                 self.logger.info(f"   ROI体素数: {pipeline_results['n_voxels']}")
             self.logger.info(f"   总大小: {file_sizes['3d_mb'] + file_sizes.get('1d_mb', 0):.1f}MB")
+            verify_type = verification_result.get('verification_type', 'unknown')
+            verify_status = '✓ 通过' if verification_result['verified'] else '✗ 失败'
+            self.logger.info(f"   验证状态: {verify_status} ({verify_type})")
 
         except Exception as e:
             self.logger.error(f"❌ 被试 {subject_id} 处理失败")
@@ -689,12 +1002,15 @@ class BatchDownsamplingProcessor:
         self.logger.info(f"索引已保存到: {json_path}")
         return index_mapping
 
-    def process_all_subjects(self, skip_existing: bool = True) -> Tuple[List, List]:
+    def process_all_subjects(self,
+                             skip_existing: bool = True,
+                             verify_mode: str = 'smart') -> Tuple[List, List]:
         """
         批量处理所有被试
 
         Args:
             skip_existing: 是否跳过已存在的文件
+            verify_mode: 验证模式 ('smart', 'full', 'lightweight', 'none')
 
         Returns:
             (成功列表, 失败列表)
@@ -704,6 +1020,15 @@ class BatchDownsamplingProcessor:
         self.logger.info(f"输入目录: {self.input_dir}")
         self.logger.info(f"输出目录: {self.output_dir}")
         self.logger.info(f"跳过已存在: {skip_existing}")
+        self.logger.info(f"验证模式: {verify_mode}")
+        if verify_mode == 'smart':
+            self.logger.info(f"  → 智能验证：首尾完整验证，中间轻量级验证")
+        elif verify_mode == 'full':
+            self.logger.info(f"  → 完整验证：所有被试重新加载文件验证（慢）")
+        elif verify_mode == 'lightweight':
+            self.logger.info(f"  → 轻量级验证：所有被试内存验证（快）")
+        elif verify_mode == 'none':
+            self.logger.info(f"  → 不验证：跳过所有验证（最快）")
         self.logger.info(f"已完成被试数: {len(self.completed_subjects)}")
         self.logger.info(f"{'='*80}")
 
@@ -714,7 +1039,8 @@ class BatchDownsamplingProcessor:
         successful_subjects = []
 
         # 处理每个被试
-        for subject_id, subject_info in tqdm(index_mapping.items(), desc="Downsampling进度"):
+        total_subjects = len(index_mapping)
+        for subject_idx, (subject_id, subject_info) in enumerate(tqdm(index_mapping.items(), desc="Downsampling进度")):
             # 检查是否已经处理过（断点续传）
             if subject_id in self.completed_subjects:
                 self.logger.info(f"跳过已完成的被试: {subject_id}")
@@ -731,9 +1057,14 @@ class BatchDownsamplingProcessor:
                     successful_subjects.append(subject_id)
                     continue
 
-            # 处理被试
+            # 处理被试（传递索引和总数用于智能验证）
             mat_path = Path(subject_info['filepath'])
-            result = self.process_single_subject(mat_path, subject_id)
+            result = self.process_single_subject(
+                mat_path, subject_id,
+                subject_idx=subject_idx,
+                total_subjects=total_subjects,
+                verify_mode=verify_mode
+            )
             self.processing_results.append(result)
 
             if result['status'] == 'success':
@@ -782,10 +1113,16 @@ class BatchDownsamplingProcessor:
         successful = [r for r in self.processing_results if r['status'] == 'success']
         failed = [r for r in self.processing_results if r['status'] == 'failed']
 
+        # 统计验证结果
+        verified_count = sum(1 for r in successful if r.get('verification', {}).get('verified', False))
+        verification_failed = len(successful) - verified_count
+
         self.logger.info(f"处理统计:")
         self.logger.info(f"  总处理数: {len(self.processing_results)}")
         self.logger.info(f"  成功处理: {len(successful)}")
         self.logger.info(f"  处理失败: {len(failed)}")
+        self.logger.info(f"  验证通过: {verified_count}")
+        self.logger.info(f"  验证失败: {verification_failed}")
         self.logger.info(f"  总时间: {total_time/60:.1f}分钟")
         self.logger.info(f"  最终内存: {self.process.memory_info().rss / 1024 / 1024:.1f} MB")
 
@@ -806,6 +1143,20 @@ class BatchDownsamplingProcessor:
                 self.logger.error(f"  - {r['subject_id']}")
                 self.logger.error(f"    错误类型: {r.get('error_type', 'Unknown')}")
                 self.logger.error(f"    错误信息: {r.get('error', 'Unknown')}")
+
+        # 验证失败的被试
+        if verification_failed > 0:
+            self.logger.warning(f"\n验证失败的被试:")
+            for r in successful:
+                verification = r.get('verification', {})
+                if not verification.get('verified', False):
+                    self.logger.warning(f"  - {r['subject_id']}")
+                    self.logger.warning(f"    原因: {verification.get('reason', 'Unknown')}")
+                    # 显示具体的检查失败项
+                    checks = verification.get('checks', {})
+                    for check, value in checks.items():
+                        if isinstance(value, bool) and not value:
+                            self.logger.warning(f"      × {check}")
 
         # 保存详细报告
         self._save_detailed_reports()
@@ -834,9 +1185,22 @@ class BatchDownsamplingProcessor:
         if self.processing_results:
             summary_data = []
             for r in self.processing_results:
+                # 提取验证信息
+                verification = r.get('verification', {})
+                verified = verification.get('verified', False)
+                verification_reason = verification.get('reason', '')
+                checks = verification.get('checks', {})
+
                 summary_data.append({
                     'subject_id': r['subject_id'],
                     'status': r['status'],
+                    'verified': verified,
+                    'verification_reason': verification_reason,
+                    'n_voxels': checks.get('n_voxels', 0),
+                    'prob_sum_3d': checks.get('prob_sum_3d', 0),
+                    'prob_sum_1d': checks.get('prob_sum_1d', 0),
+                    'max_feat_diff': checks.get('max_feat_diff', 0),
+                    'max_label_diff': checks.get('max_label_diff', 0),
                     'file_size_3d_mb': r.get('file_size_3d_mb', 0),
                     'file_size_1d_mb': r.get('file_size_1d_mb', 0),
                     'file_size_total_mb': r.get('file_size_total_mb', 0),
@@ -899,6 +1263,13 @@ def main():
                        help='日志级别')
     parser.add_argument('--target-spacing', type=str, default='1.8,1.8,3.0',
                        help='目标分辨率 (X,Y,Z) in mm，逗号分隔')
+    parser.add_argument('--verify-mode', type=str, default='smart',
+                       choices=['smart', 'full', 'lightweight', 'none'],
+                       help='验证模式：\n'
+                            '  smart: 智能验证（首尾完整验证，中间轻量级，推荐）\n'
+                            '  full: 完整验证所有被试（慢）\n'
+                            '  lightweight: 轻量级验证所有被试（快）\n'
+                            '  none: 跳过验证（最快）')
 
     args = parser.parse_args()
 
@@ -928,7 +1299,8 @@ def main():
             processor._generate_batch_report(0)
         else:
             successful, failed = processor.process_all_subjects(
-                skip_existing=not args.no_skip_existing
+                skip_existing=not args.no_skip_existing,
+                verify_mode=args.verify_mode
             )
 
         # 最终结果
@@ -983,18 +1355,29 @@ if __name__ == "__main__":
                 print("\n测试模式启动...")
                 index_mapping = processor.create_dataset_index()
                 test_subjects = list(index_mapping.keys())[:3]
-                for subject_id in test_subjects:
+                for idx, subject_id in enumerate(test_subjects):
                     mat_path = Path(index_mapping[subject_id]['filepath'])
-                    result = processor.process_single_subject(mat_path, subject_id)
+                    result = processor.process_single_subject(
+                        mat_path, subject_id,
+                        subject_idx=idx,
+                        total_subjects=len(test_subjects),
+                        verify_mode='smart'
+                    )
                     processor.processing_results.append(result)
                 processor._generate_batch_report(0)
             elif response == '2':
                 print("\n全量处理模式启动...")
-                successful, failed = processor.process_all_subjects(skip_existing=True)
+                successful, failed = processor.process_all_subjects(
+                    skip_existing=True,
+                    verify_mode='smart'
+                )
             elif response == '3':
                 print(f"\n断点续传模式启动...")
                 print(f"已完成被试: {sorted(processor.completed_subjects)}")
-                successful, failed = processor.process_all_subjects(skip_existing=True)
+                successful, failed = processor.process_all_subjects(
+                    skip_existing=True,
+                    verify_mode='smart'
+                )
             else:
                 print("无效选择")
         except KeyboardInterrupt:
