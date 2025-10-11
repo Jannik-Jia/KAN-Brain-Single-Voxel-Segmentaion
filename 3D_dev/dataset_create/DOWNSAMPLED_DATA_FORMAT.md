@@ -1,6 +1,6 @@
 # Downsampled数据格式说明
 
-**版本**: v1.3.0
+**版本**: v1.4.0 (3D/1D数据分离)
 **日期**: 2025-01-11
 **文件类型**: NPZ (NumPy压缩格式)
 
@@ -8,39 +8,123 @@
 
 ## 📦 输出文件结构
 
-批处理脚本运行后，每个被试会生成3个文件：
+批处理脚本运行后，**3D和1D数据分别保存**到不同文件，每个被试会生成以下文件：
 
 ```
-{subject_id}_downsampled.npz     # 主数据文件（包含3D和1D数据）
-{subject_id}_metadata.json       # 元数据（处理参数、坐标映射等）
-{subject_id}_qa_metrics.json     # QA指标（质量评估）
+output_dir/
+├── 3d/                                    # 3D数据目录
+│   ├── subject001_3d.npz                  # 被试001的3D数据
+│   ├── subject002_3d.npz
+│   └── ...
+├── 1d/                                    # 1D数据目录
+│   ├── subject001_1d.npz                  # 被试001的1D数据
+│   ├── subject002_1d.npz
+│   └── ...
+├── logs/                                  # 日志目录
+│   └── batch_downsampling_*.log
+├── subject001_metadata.json               # 被试001元数据
+├── subject001_qa_metrics.json             # 被试001 QA指标
+├── subject002_metadata.json
+├── subject002_qa_metrics.json
+└── ...
 ```
+
+### 文件说明
+
+| 文件类型 | 文件名模式 | 存储位置 | 说明 |
+|---------|-----------|---------|------|
+| **3D数据** | `{subject_id}_3d.npz` | `output_dir/3d/` | 下采样后的3D体积数据 |
+| **1D数据** | `{subject_id}_1d.npz` | `output_dir/1d/` | 展平后的1D特征矩阵 |
+| **元数据** | `{subject_id}_metadata.json` | `output_dir/` | 处理参数、坐标映射等 |
+| **QA指标** | `{subject_id}_qa_metrics.json` | `output_dir/` | 质量评估指标 |
 
 ---
 
-## 🔑 NPZ文件包含的Key
+## 🔑 3D数据文件 (`*_3d.npz`)
 
-### 必需的3D数据（所有模式）
+**文件路径**: `output_dir/3d/{subject_id}_3d.npz`
+
+**包含的Key**:
 
 | Key | 维度 | 数据类型 | 坐标系 | 说明 |
 |-----|------|---------|--------|------|
 | `data_lr` | `(Z', X', Y', 351)` | `float32` | **原始坐标系(Z,X,Y,C)** | 下采样后的多模态特征数据<br>351个通道包含所有成像模态 |
 | `proba_labels` | `(Z', X', Y', 102)` | `float32` | **原始坐标系(Z,X,Y,K)** | 概率标签（软标签）<br>每个体素对应102个脑区的概率分布<br>**注意**：不是严格one-hot，而是概率分布 |
-| `region_mask_lr` | `(Z', X', Y')` | `uint8` | **原始坐标系(Z,X,Y)** | 下采样后的ROI掩码<br>值为0或1 |
+| `region_mask_lr` | `(Z', X', Y')` | `uint8` | **原始坐标系(Z,X,Y)** | 下采样后的ROI掩码<br>值为0（背景）或1（ROI内） |
 
 **典型尺寸**（目标分辨率1.8×1.8×3.0 mm³）：
 - `Z' ≈ 18` (约54mm厚的slab)
 - `X' ≈ 128`
 - `Y' ≈ 104`
 
-### 可选的1D数据（`save_axis_order='orig'`模式）
+**文件大小**: 约 20-30 MB (压缩后)
+
+---
+
+## 🔑 1D数据文件 (`*_1d.npz`)
+
+**文件路径**: `output_dir/1d/{subject_id}_1d.npz`
+
+**包含的Key**:
 
 | Key | 维度 | 数据类型 | 说明 |
 |-----|------|---------|------|
 | `multidim_data` | `(n_voxels, 351)` | `float32` | 1D特征矩阵<br>每行对应一个ROI内的体素<br>按C-order排列 |
 | `seg_one_hot` | `(102, n_voxels)` | `float32` | 1D概率标签（软标签）<br>**注意**：实际是概率分布，不是严格one-hot<br>每列对应一个体素的102个区域概率 |
 | `region_seg` | `(n_voxels,)` | `uint8` | 1D区域标签（硬标签）<br>每个体素的最可能区域（argmax） |
+| `region` | `(Z', X', Y')` | `uint8` | ROI掩码（用于1D→3D重建）<br>与3D文件中的`region_mask_lr`相同 |
 | `n_voxels` | 标量 | `int` | ROI内体素总数 |
+
+**文件大小**: 约 10-15 MB (压缩后)
+
+**注意**: 1D文件包含 `region` mask是为了支持从1D数据重建回3D格式
+
+---
+
+## 📋 快速参考表
+
+### 3D文件内容总结
+
+| Key | Shape | Type | 说明 |
+|-----|-------|------|------|
+| `data_lr` | `(18, 128, 104, 351)` | `float32` | 多模态特征（Z,X,Y,C） |
+| `proba_labels` | `(18, 128, 104, 102)` | `float32` | 概率标签（软标签） |
+| `region_mask_lr` | `(18, 128, 104)` | `uint8` | ROI掩码（0=背景，1=脑内） |
+
+### 1D文件内容总结
+
+| Key | Shape | Type | 说明 |
+|-----|-------|------|------|
+| `multidim_data` | `(n_voxels, 351)` | `float32` | 1D特征矩阵 |
+| `seg_one_hot` | `(102, n_voxels)` | `float32` | 1D概率标签（软标签） |
+| `region_seg` | `(n_voxels,)` | `uint8` | 1D硬标签（argmax） |
+| `region` | `(18, 128, 104)` | `uint8` | ROI掩码（用于重建3D） |
+| `n_voxels` | 标量 | `int` | ROI内体素总数 |
+
+**典型值**: `n_voxels ≈ 15000-20000` (取决于ROI大小)
+
+### 加载示例（快速开始）
+
+```python
+import numpy as np
+from pathlib import Path
+
+# 设置路径
+data_dir = Path('/path/to/downsampling')
+subject = 'subject001'
+
+# 加载3D数据
+data_3d = np.load(data_dir / '3d' / f'{subject}_3d.npz')
+X_3d = data_3d['data_lr']              # (18, 128, 104, 351)
+y_3d = data_3d['proba_labels']         # (18, 128, 104, 102)
+mask = data_3d['region_mask_lr']       # (18, 128, 104)
+
+# 加载1D数据
+data_1d = np.load(data_dir / '1d' / f'{subject}_1d.npz')
+X_1d = data_1d['multidim_data']        # (n_voxels, 351)
+y_1d_soft = data_1d['seg_one_hot']     # (102, n_voxels)
+y_1d_hard = data_1d['region_seg']      # (n_voxels,)
+```
 
 ---
 
@@ -368,68 +452,158 @@ print("✓ 3D-1D对应关系验证通过！")
 
 ```python
 import numpy as np
+from pathlib import Path
 
-# 加载数据
-data = np.load('subject001_downsampled.npz')
+# 设置数据目录
+data_dir = Path('/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/downsampling')
+subject_id = 'subject001'
 
-# 查看包含的key
-print("文件包含的数据:")
-for key in data.files:
-    if isinstance(data[key], np.ndarray):
-        print(f"  {key}: {data[key].shape}")
+# 加载3D数据
+data_3d_path = data_dir / '3d' / f'{subject_id}_3d.npz'
+data_3d = np.load(data_3d_path)
+
+print("=== 3D数据文件 ===")
+for key in data_3d.files:
+    if isinstance(data_3d[key], np.ndarray):
+        print(f"  {key}: {data_3d[key].shape} ({data_3d[key].dtype})")
     else:
-        print(f"  {key}: {data[key]}")
+        print(f"  {key}: {data_3d[key]}")
 
-# 提取数据
-data_lr = data['data_lr']
-proba_labels = data['proba_labels']
-region_mask_lr = data['region_mask_lr']
-multidim_data = data['multidim_data']
-seg_one_hot = data['seg_one_hot']
-region_seg = data['region_seg']
-n_voxels = int(data['n_voxels'])
+# 提取3D数据
+data_lr = data_3d['data_lr']              # (Z', X', Y', 351)
+proba_labels = data_3d['proba_labels']    # (Z', X', Y', 102)
+region_mask_lr = data_3d['region_mask_lr']  # (Z', X', Y')
 
-print(f"\nROI体素数: {n_voxels}")
-print(f"3D shape: {data_lr.shape}")
-print(f"1D shape: {multidim_data.shape}")
+print(f"\n3D数据形状:")
+print(f"  data_lr: {data_lr.shape}")
+print(f"  proba_labels: {proba_labels.shape}")
+print(f"  region_mask_lr: {region_mask_lr.shape}")
+
+# 加载1D数据
+data_1d_path = data_dir / '1d' / f'{subject_id}_1d.npz'
+data_1d = np.load(data_1d_path)
+
+print("\n=== 1D数据文件 ===")
+for key in data_1d.files:
+    if isinstance(data_1d[key], np.ndarray):
+        print(f"  {key}: {data_1d[key].shape} ({data_1d[key].dtype})")
+    else:
+        print(f"  {key}: {data_1d[key]}")
+
+# 提取1D数据
+multidim_data = data_1d['multidim_data']  # (n_voxels, 351)
+seg_one_hot = data_1d['seg_one_hot']      # (102, n_voxels)
+region_seg = data_1d['region_seg']        # (n_voxels,)
+region = data_1d['region']                # (Z', X', Y')
+n_voxels = int(data_1d['n_voxels'])
+
+print(f"\n1D数据形状:")
+print(f"  multidim_data: {multidim_data.shape}")
+print(f"  seg_one_hot: {seg_one_hot.shape}")
+print(f"  region_seg: {region_seg.shape}")
+print(f"  ROI体素数: {n_voxels}")
 ```
 
-### 示例2：提取特定区域的特征
+### 示例2：只加载需要的数据（内存优化）
 
 ```python
+# 只需要1D数据进行模型训练
+data_1d = np.load(data_dir / '1d' / f'{subject_id}_1d.npz')
+X = data_1d['multidim_data']  # 特征
+y = data_1d['region_seg']      # 标签
+
+print(f"训练数据: X={X.shape}, y={y.shape}")
+# 不加载3D数据，节省内存
+
+# 或只需要3D数据进行可视化
+data_3d = np.load(data_dir / '3d' / f'{subject_id}_3d.npz')
+mprage_volume = data_3d['data_lr'][..., 341]  # 提取MPRAGE
+print(f"MPRAGE体积: {mprage_volume.shape}")
+```
+
+### 示例3：提取特定区域的特征
+
+```python
+# 加载1D数据
+data_1d = np.load(data_dir / '1d' / f'{subject_id}_1d.npz')
+multidim_data = data_1d['multidim_data']
+region_seg = data_1d['region_seg']
+
 # 选择海马区（假设ID为17）
 hippocampus_id = 17
 
-# 方法1：使用1D数据
+# 方法1：使用1D硬标签
 mask_hippo = region_seg == hippocampus_id
 features_hippo_1d = multidim_data[mask_hippo]
-print(f"海马体素数: {features_hippo_1d.shape[0]}")
+print(f"海马体素数(1D硬标签): {features_hippo_1d.shape[0]}")
 
-# 方法2：使用3D数据
+# 方法2：使用1D软标签（概率>阈值）
+seg_one_hot = data_1d['seg_one_hot']
+prob_threshold = 0.5
+mask_hippo_soft = seg_one_hot[hippocampus_id, :] > prob_threshold
+features_hippo_soft = multidim_data[mask_hippo_soft]
+print(f"海马体素数(1D软标签, prob>{prob_threshold}): {features_hippo_soft.shape[0]}")
+
+# 方法3：使用3D数据
+data_3d = np.load(data_dir / '3d' / f'{subject_id}_3d.npz')
+proba_labels = data_3d['proba_labels']
+data_lr = data_3d['data_lr']
+
 labels_3d = np.argmax(proba_labels, axis=-1)
 mask_hippo_3d = labels_3d == hippocampus_id
 features_hippo_3d = data_lr[mask_hippo_3d]
 print(f"海马体素数(3D): {features_hippo_3d.shape[0]}")
 ```
 
-### 示例3：计算区域平均信号
+### 示例4：计算区域平均信号
 
 ```python
+# 只加载1D数据
+data_1d = np.load(data_dir / '1d' / f'{subject_id}_1d.npz')
+multidim_data = data_1d['multidim_data']
+seg_one_hot = data_1d['seg_one_hot']
+
 # 计算每个区域的MPRAGE平均信号
 mprage_channel = 341
 
-for region_id in range(1, 102):
+print("区域平均MPRAGE信号:")
+for region_id in range(102):  # 0-101都是有效脑区
     # 使用软标签（概率加权平均）
     weights = seg_one_hot[region_id, :]  # (n_voxels,)
-    mprage_values = multidim_data[:, mprage_channel]  # (n_voxels,)
 
-    # 加权平均
     if weights.sum() > 0:
+        mprage_values = multidim_data[:, mprage_channel]  # (n_voxels,)
         weighted_mean = np.sum(weights * mprage_values) / weights.sum()
-        print(f"区域{region_id} MPRAGE加权平均: {weighted_mean:.2f}")
+        print(f"  区域{region_id}: {weighted_mean:.2f} (权重和={weights.sum():.1f})")
 ```
 
-### 示例4：使用3D-1D转换工具
+### 示例5：验证3D-1D对应关系
+
+```python
+# 加载两个文件
+data_3d = np.load(data_dir / '3d' / f'{subject_id}_3d.npz')
+data_1d = np.load(data_dir / '1d' / f'{subject_id}_1d.npz')
+
+# 提取数据
+data_lr = data_3d['data_lr']
+proba_labels = data_3d['proba_labels']
+region_mask_lr = data_3d['region_mask_lr']
+
+multidim_data = data_1d['multidim_data']
+seg_one_hot = data_1d['seg_one_hot']
+
+# 验证特征对应
+features_from_3d = data_lr[region_mask_lr > 0]  # (n_voxels, 351)
+assert np.allclose(features_from_3d, multidim_data), "特征不匹配！"
+print("✓ 3D-1D特征对应关系验证通过")
+
+# 验证标签对应
+labels_from_3d = proba_labels[region_mask_lr > 0]  # (n_voxels, 102)
+assert np.allclose(labels_from_3d.T, seg_one_hot), "标签不匹配！"
+print("✓ 3D-1D标签对应关系验证通过")
+```
+
+### 示例6：使用3D-1D转换工具
 
 ```python
 import sys
@@ -438,24 +612,39 @@ sys.path.insert(0, str(Path.cwd() / '1d-3d-convert'))
 
 from data_3d_1d_mapper import Data3D1DMapper
 
+# 加载3D数据
+data_3d_npz = np.load(data_dir / '3d' / f'{subject_id}_3d.npz')
+
 # 创建mapper
 mapper = Data3D1DMapper()
 
 # 构建3D数据字典
 data_3d = {
-    'data': data_lr,
-    'region_mask': region_mask_lr,
-    'proba_labels': proba_labels
+    'data': data_3d_npz['data_lr'],
+    'region_mask': data_3d_npz['region_mask_lr'],
+    'proba_labels': data_3d_npz['proba_labels']
 }
 
 # 转换为1D
-data_1d = mapper.convert_3d_to_1d(data_3d)
+data_1d_converted = mapper.convert_3d_to_1d(data_3d)
 
-# 验证
-assert np.allclose(data_1d['multidim_data'], multidim_data)
-assert np.allclose(data_1d['seg_one_hot'], seg_one_hot)
+# 加载保存的1D数据进行验证
+data_1d_saved = np.load(data_dir / '1d' / f'{subject_id}_1d.npz')
 
-print("✓ 转换验证通过")
+# 验证转换一致性
+assert np.allclose(data_1d_converted['multidim_data'], data_1d_saved['multidim_data'])
+assert np.allclose(data_1d_converted['seg_one_hot'], data_1d_saved['seg_one_hot'])
+
+print("✓ 3D-1D转换验证通过")
+
+# 反向转换：1D → 3D
+data_3d_recovered = mapper.convert_1d_to_3d(data_1d_converted)
+
+# 验证恢复的3D数据
+assert np.allclose(data_3d_recovered['data'], data_3d['data'])
+assert np.allclose(data_3d_recovered['proba_labels'], data_3d['proba_labels'])
+
+print("✓ 1D-3D往返转换验证通过")
 ```
 
 ---
@@ -540,9 +729,66 @@ data = np.load('subject001_downsampled.npz', mmap_mode='r')
 建议在使用前验证数据完整性：
 
 ```bash
-# 使用提供的验证脚本
-python verify_1d_data.py subject001_downsampled.npz
+# 验证单个被试的数据（需要同时加载3D和1D文件）
+python verify_separated_data.py subject001
 ```
+
+或者手动验证：
+
+```python
+import numpy as np
+from pathlib import Path
+
+def verify_subject_data(data_dir, subject_id):
+    """验证3D和1D数据的一致性"""
+    # 加载数据
+    data_3d = np.load(data_dir / '3d' / f'{subject_id}_3d.npz')
+    data_1d = np.load(data_dir / '1d' / f'{subject_id}_1d.npz')
+
+    # 检查key存在性
+    assert 'data_lr' in data_3d
+    assert 'proba_labels' in data_3d
+    assert 'region_mask_lr' in data_3d
+    assert 'multidim_data' in data_1d
+    assert 'seg_one_hot' in data_1d
+
+    # 检查体素数一致性
+    n_voxels_from_mask = np.sum(data_3d['region_mask_lr'] > 0)
+    n_voxels_recorded = int(data_1d['n_voxels'])
+    assert n_voxels_from_mask == n_voxels_recorded
+    assert data_1d['multidim_data'].shape[0] == n_voxels_recorded
+    assert data_1d['seg_one_hot'].shape[1] == n_voxels_recorded
+
+    # 检查3D-1D对应关系
+    features_from_3d = data_3d['data_lr'][data_3d['region_mask_lr'] > 0]
+    assert np.allclose(features_from_3d, data_1d['multidim_data'])
+
+    labels_from_3d = data_3d['proba_labels'][data_3d['region_mask_lr'] > 0]
+    assert np.allclose(labels_from_3d.T, data_1d['seg_one_hot'])
+
+    print(f"✓ {subject_id} 数据验证通过")
+    return True
+
+# 使用示例
+data_dir = Path('/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/downsampling')
+verify_subject_data(data_dir, 'subject001')
+```
+
+---
+
+## 📝 版本更新说明
+
+### v1.4.0 (2025-01-11)
+- **重要变更**: 3D和1D数据分离保存到不同文件
+- 3D数据保存到 `output_dir/3d/{subject_id}_3d.npz`
+- 1D数据保存到 `output_dir/1d/{subject_id}_1d.npz`
+- 1D文件中新增 `region` key用于3D重建
+- 更新了所有使用示例以反映新的文件结构
+
+### v1.3.0 (2025-01-11)
+- 添加概率标签支持
+- 完善3D-1D转换功能
+- 修复HDF5加载问题
 
 ---
 
@@ -561,4 +807,4 @@ python verify_1d_data.py subject001_downsampled.npz
 如有问题，请联系项目维护者或查看相关文档。
 
 **最后更新**: 2025-01-11
-**版本**: v1.3.0
+**版本**: v1.4.0 (3D/1D数据分离)

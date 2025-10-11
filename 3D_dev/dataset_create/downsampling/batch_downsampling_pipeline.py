@@ -50,19 +50,29 @@ class BatchDownsamplingProcessor:
                  input_dir: Path,
                  output_dir: Path,
                  log_level: str = 'INFO',
-                 target_spacing: Tuple[float, float, float] = (1.8, 1.8, 3.0)):
+                 target_spacing: Tuple[float, float, float] = (1.8, 1.8, 3.0),
+                 output_3d_dir: Optional[Path] = None,
+                 output_1d_dir: Optional[Path] = None):
         """
         初始化批量处理器
 
         Args:
             input_dir: 输入目录（3D_validated数据）
-            output_dir: 输出目录（downsampled数据）
+            output_dir: 输出目录（用于日志、报告等）
             log_level: 日志级别
             target_spacing: 目标分辨率 (X, Y, Z) in mm
+            output_3d_dir: 3D数据输出目录（可选，默认为output_dir/3d）
+            output_1d_dir: 1D数据输出目录（可选，默认为output_dir/1d）
         """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3D和1D数据分开保存
+        self.output_3d_dir = Path(output_3d_dir) if output_3d_dir else self.output_dir / '3d'
+        self.output_1d_dir = Path(output_1d_dir) if output_1d_dir else self.output_dir / '1d'
+        self.output_3d_dir.mkdir(parents=True, exist_ok=True)
+        self.output_1d_dir.mkdir(parents=True, exist_ok=True)
 
         self.target_spacing = target_spacing
 
@@ -88,6 +98,8 @@ class BatchDownsamplingProcessor:
         self.logger.info(f"批量Downsampling处理器初始化完成")
         self.logger.info(f"输入目录: {self.input_dir}")
         self.logger.info(f"输出目录: {self.output_dir}")
+        self.logger.info(f"3D数据输出: {self.output_3d_dir}")
+        self.logger.info(f"1D数据输出: {self.output_1d_dir}")
         self.logger.info(f"目标分辨率: {self.target_spacing} mm")
         self.logger.info(f"初始内存使用: {self.initial_memory:.1f} MB")
 
@@ -285,61 +297,245 @@ class BatchDownsamplingProcessor:
             self.logger.error(traceback.format_exc())
             raise
 
+    def _generate_data_info_file(self,
+                                 info_path: Path,
+                                 data_dict: Dict[str, Any],
+                                 data_type: str,
+                                 subject_id: str):
+        """
+        生成数据描述文件
+
+        Args:
+            info_path: 描述文件路径
+            data_dict: 数据字典
+            data_type: 数据类型（"3D"或"1D"）
+            subject_id: 被试ID
+        """
+        with open(info_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write(f"{data_type}数据文件说明\n")
+            f.write("=" * 80 + "\n\n")
+
+            f.write(f"被试ID: {subject_id}\n")
+            f.write(f"文件名: {subject_id}_{data_type.lower()}.npz\n")
+            f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"数据格式版本: v1.4.0\n\n")
+
+            f.write("-" * 80 + "\n")
+            f.write("数据内容说明\n")
+            f.write("-" * 80 + "\n\n")
+
+            if data_type == "3D":
+                # 3D数据说明
+                f.write("包含的Key及其维度:\n\n")
+
+                for key, value in data_dict.items():
+                    if isinstance(value, np.ndarray):
+                        f.write(f"[{key}]\n")
+                        f.write(f"  维度: {value.shape}\n")
+                        f.write(f"  数据类型: {value.dtype}\n")
+                        f.write(f"  坐标系: (Z, X, Y")
+                        if value.ndim == 4:
+                            f.write(", C)\n")
+                        else:
+                            f.write(")\n")
+
+                        # 添加说明
+                        if key == 'data_lr':
+                            f.write(f"  说明: 下采样后的多模态特征数据\n")
+                            f.write(f"        - 351个通道包含所有成像模态\n")
+                            f.write(f"        - 通道包括: QTI(15), DWI(210), CEST(4+54+54), MPRAGE, GRE, QSM等\n")
+                        elif key == 'proba_labels':
+                            f.write(f"  说明: 概率标签（软标签）\n")
+                            f.write(f"        - 102个脑区类别的概率分布\n")
+                            f.write(f"        - 每个体素的102个概率之和≈1.0\n")
+                            f.write(f"        - 注意: 不是严格one-hot，而是概率分布\n")
+                            f.write(f"        - 标签值0-101都是有效脑区（0不是背景！）\n")
+                        elif key == 'region_mask_lr':
+                            f.write(f"  说明: ROI掩码\n")
+                            f.write(f"        - 值为0表示背景（脑外）\n")
+                            f.write(f"        - 值为1表示ROI内（脑内体素）\n")
+                        f.write("\n")
+                    else:
+                        f.write(f"[{key}]\n")
+                        f.write(f"  值: {value}\n")
+                        f.write(f"  类型: {type(value).__name__}\n\n")
+
+                f.write("-" * 80 + "\n")
+                f.write("加载示例:\n")
+                f.write("-" * 80 + "\n\n")
+                f.write("```python\n")
+                f.write("import numpy as np\n\n")
+                f.write(f"# 加载3D数据\n")
+                f.write(f"data = np.load('{subject_id}_3d.npz')\n\n")
+                f.write("# 提取数据\n")
+                f.write("data_lr = data['data_lr']              # 多模态特征\n")
+                f.write("proba_labels = data['proba_labels']    # 概率标签\n")
+                f.write("region_mask_lr = data['region_mask_lr']  # ROI掩码\n\n")
+                f.write("# 提取特定模态（例如MPRAGE）\n")
+                f.write("mprage = data_lr[..., 341]  # MPRAGE在通道341\n")
+                f.write("```\n\n")
+
+            elif data_type == "1D":
+                # 1D数据说明
+                f.write("包含的Key及其维度:\n\n")
+
+                for key, value in data_dict.items():
+                    if isinstance(value, np.ndarray):
+                        f.write(f"[{key}]\n")
+                        f.write(f"  维度: {value.shape}\n")
+                        f.write(f"  数据类型: {value.dtype}\n")
+
+                        # 添加说明
+                        if key == 'multidim_data':
+                            f.write(f"  说明: 1D特征矩阵\n")
+                            f.write(f"        - 每行对应一个ROI内的体素\n")
+                            f.write(f"        - 351个通道与3D数据的data_lr相同\n")
+                            f.write(f"        - 按C-order（行优先）排列\n")
+                        elif key == 'seg_one_hot':
+                            f.write(f"  说明: 1D概率标签（软标签）\n")
+                            f.write(f"        - 每列对应一个体素的102个区域概率\n")
+                            f.write(f"        - 每列之和≈1.0\n")
+                            f.write(f"        - 注意: 实际是概率分布，不是严格one-hot\n")
+                            f.write(f"        - 标签值0-101都是有效脑区（0不是背景！）\n")
+                        elif key == 'region_seg':
+                            f.write(f"  说明: 1D区域标签（硬标签）\n")
+                            f.write(f"        - 每个体素的最可能区域（argmax）\n")
+                            f.write(f"        - 值范围: 0-101\n")
+                        elif key == 'region':
+                            f.write(f"  说明: ROI掩码（用于1D→3D重建）\n")
+                            f.write(f"        - 与3D文件中的region_mask_lr相同\n")
+                            f.write(f"        - 值为0表示背景，值为1表示ROI内\n")
+                        f.write("\n")
+                    else:
+                        f.write(f"[{key}]\n")
+                        f.write(f"  值: {value}\n")
+                        f.write(f"  类型: {type(value).__name__}\n")
+                        if key == 'n_voxels':
+                            f.write(f"  说明: ROI内的总体素数\n")
+                        f.write("\n")
+
+                f.write("-" * 80 + "\n")
+                f.write("加载示例:\n")
+                f.write("-" * 80 + "\n\n")
+                f.write("```python\n")
+                f.write("import numpy as np\n\n")
+                f.write(f"# 加载1D数据\n")
+                f.write(f"data = np.load('{subject_id}_1d.npz')\n\n")
+                f.write("# 提取数据\n")
+                f.write("X = data['multidim_data']  # 特征矩阵 (n_voxels, 351)\n")
+                f.write("y_soft = data['seg_one_hot']  # 软标签 (102, n_voxels)\n")
+                f.write("y_hard = data['region_seg']   # 硬标签 (n_voxels,)\n")
+                f.write("n_voxels = int(data['n_voxels'])  # 体素数\n\n")
+                f.write("# 用于机器学习\n")
+                f.write("# X: 训练特征\n")
+                f.write("# y_hard: 分类标签（如果需要硬标签）\n")
+                f.write("# y_soft: 概率标签（如果需要软标签）\n")
+                f.write("```\n\n")
+
+            f.write("-" * 80 + "\n")
+            f.write("重要提示:\n")
+            f.write("-" * 80 + "\n\n")
+            f.write("1. 区域标签0不是背景！\n")
+            f.write("   - 标签值0-101都是有效的脑区标签\n")
+            f.write("   - 背景由region_mask_lr/region定义（值为0的位置）\n\n")
+            f.write("2. 概率标签不是严格one-hot编码\n")
+            f.write("   - proba_labels/seg_one_hot是概率分布\n")
+            f.write("   - 每个体素可能属于多个区域（软标签）\n")
+            f.write("   - 反映下采样过程中的部分容积效应\n\n")
+            f.write("3. 坐标系统\n")
+            f.write("   - 3D数据: (Z, X, Y, C) 坐标系\n")
+            f.write("   - 1D数据: 按C-order（行优先）展平\n\n")
+
+            f.write("=" * 80 + "\n")
+            f.write(f"详细文档: DOWNSAMPLED_DATA_FORMAT.md\n")
+            f.write(f"生成工具: batch_downsampling_pipeline.py v1.2.0\n")
+            f.write("=" * 80 + "\n")
+
     def save_downsampled_data(self,
                              results: Dict[str, Any],
-                             output_path: Path,
-                             subject_id: str):
+                             subject_id: str) -> Dict[str, float]:
         """
-        保存downsampled数据
+        保存downsampled数据（3D和1D分开保存）
 
         Args:
             results: Pipeline输出结果
-            output_path: 输出文件路径
             subject_id: 被试ID
+
+        Returns:
+            文件大小字典 {'3d_mb': float, '1d_mb': float}
         """
-        self.logger.debug(f"保存downsampled数据到: {output_path}")
         start_time = time.time()
+        file_sizes = {}
 
         try:
-            # 构建保存字典
-            save_dict = {
+            # 1. 保存3D数据
+            output_3d_path = self.output_3d_dir / f"{subject_id}_3d.npz"
+            self.logger.info(f"保存3D数据到: {output_3d_path}")
+
+            save_3d_dict = {
                 'data_lr': results['data_lr'],
                 'proba_labels': results['proba_labels'],
                 'region_mask_lr': results['region_mask_lr']
             }
 
-            # 如果有1D数据（save_axis_order='orig'），也保存
+            np.savez_compressed(output_3d_path, **save_3d_dict)
+            file_sizes['3d_mb'] = output_3d_path.stat().st_size / (1024 * 1024)
+            self.logger.info(f"3D数据保存成功: {output_3d_path.name} ({file_sizes['3d_mb']:.1f} MB)")
+
+            # 1.1 生成3D数据描述文件
+            info_3d_path = self.output_3d_dir / f"{subject_id}_3d_README.txt"
+            self._generate_data_info_file(info_3d_path, save_3d_dict, "3D", subject_id)
+            self.logger.debug(f"3D数据描述文件: {info_3d_path.name}")
+
+            # 2. 保存1D数据（如果有）
             if 'multidim_data' in results:
-                save_dict.update({
+                output_1d_path = self.output_1d_dir / f"{subject_id}_1d.npz"
+                self.logger.info(f"保存1D数据到: {output_1d_path}")
+
+                save_1d_dict = {
                     'multidim_data': results['multidim_data'],
                     'seg_one_hot': results['seg_one_hot'],
                     'region_seg': results['region_seg'],
+                    'region': results['region_mask_lr'],  # 保存mask用于重建
                     'n_voxels': results['n_voxels']
-                })
-                self.logger.info(f"包含1D数据: multidim_data={results['multidim_data'].shape}, "
-                               f"seg_one_hot={results['seg_one_hot'].shape}, n_voxels={results['n_voxels']}")
+                }
 
-            # 保存为.npz格式（压缩）
-            np.savez_compressed(output_path, **save_dict)
+                np.savez_compressed(output_1d_path, **save_1d_dict)
+                file_sizes['1d_mb'] = output_1d_path.stat().st_size / (1024 * 1024)
+                self.logger.info(f"1D数据保存成功: {output_1d_path.name} ({file_sizes['1d_mb']:.1f} MB)")
+                self.logger.info(f"  multidim_data: {results['multidim_data'].shape}")
+                self.logger.info(f"  seg_one_hot: {results['seg_one_hot'].shape}")
+                self.logger.info(f"  n_voxels: {results['n_voxels']}")
 
-            # 保存metadata为JSON
-            metadata_path = output_path.parent / f"{subject_id}_metadata.json"
+                # 2.1 生成1D数据描述文件
+                info_1d_path = self.output_1d_dir / f"{subject_id}_1d_README.txt"
+                self._generate_data_info_file(info_1d_path, save_1d_dict, "1D", subject_id)
+                self.logger.debug(f"1D数据描述文件: {info_1d_path.name}")
+            else:
+                file_sizes['1d_mb'] = 0.0
+                self.logger.warning("未生成1D数据（可能使用了save_axis_order='proc'）")
+
+            # 3. 保存metadata到输出根目录
+            metadata_path = self.output_dir / f"{subject_id}_metadata.json"
             with open(metadata_path, 'w') as f:
                 json.dump(results['metadata'], f, indent=2, default=str)
+            self.logger.debug(f"Metadata保存: {metadata_path}")
 
-            # 保存QA metrics为JSON
-            qa_path = output_path.parent / f"{subject_id}_qa_metrics.json"
+            # 4. 保存QA metrics到输出根目录
+            qa_path = self.output_dir / f"{subject_id}_qa_metrics.json"
             with open(qa_path, 'w') as f:
                 json.dump(results['qa_metrics'], f, indent=2, default=str)
+            self.logger.debug(f"QA metrics保存: {qa_path}")
 
-            file_size_mb = output_path.stat().st_size / (1024 * 1024)
             save_time = time.time() - start_time
-            self.logger.info(f"文件保存成功: {output_path.name} ({file_size_mb:.1f} MB, 耗时: {save_time:.2f}秒)")
+            total_size = file_sizes['3d_mb'] + file_sizes['1d_mb']
+            self.logger.info(f"所有数据保存完成: 总大小 {total_size:.1f} MB, 耗时: {save_time:.2f}秒")
 
-            return file_size_mb
+            return file_sizes
 
         except Exception as e:
-            self.logger.error(f"保存文件失败 {output_path}: {e}")
+            self.logger.error(f"保存文件失败: {e}")
             self.logger.error(traceback.format_exc())
             raise
 
@@ -400,21 +596,18 @@ class BatchDownsamplingProcessor:
 
             # 步骤4: 保存结果
             self.logger.info("步骤4: 保存Downsampled数据")
-            output_filename = f"{subject_id}_downsampled.npz"
-            output_path = self.output_dir / output_filename
-            file_size_mb = self.save_downsampled_data(
-                pipeline_results,
-                output_path,
-                subject_id
-            )
+            file_sizes = self.save_downsampled_data(pipeline_results, subject_id)
 
             # 记录结果
             processing_time = time.time() - start_time
 
             result.update({
                 'status': 'success',
-                'output_path': str(output_path),
-                'file_size_mb': file_size_mb,
+                'output_3d_path': str(self.output_3d_dir / f"{subject_id}_3d.npz"),
+                'output_1d_path': str(self.output_1d_dir / f"{subject_id}_1d.npz") if file_sizes.get('1d_mb', 0) > 0 else None,
+                'file_size_3d_mb': file_sizes['3d_mb'],
+                'file_size_1d_mb': file_sizes.get('1d_mb', 0),
+                'file_size_total_mb': file_sizes['3d_mb'] + file_sizes.get('1d_mb', 0),
                 'processing_time': processing_time,
                 'input_shape': data_shape,
                 'output_shape': pipeline_results['data_lr'].shape,
@@ -428,11 +621,13 @@ class BatchDownsamplingProcessor:
 
             self.logger.info(f"✅ 被试 {subject_id} 处理成功")
             self.logger.info(f"   处理时间: {processing_time:.1f}秒")
-            self.logger.info(f"   输出大小: {file_size_mb:.1f}MB")
-            self.logger.info(f"   3D数据shape: {pipeline_results['data_lr'].shape}")
+            self.logger.info(f"   3D数据: {file_sizes['3d_mb']:.1f}MB → {self.output_3d_dir}/{subject_id}_3d.npz")
+            self.logger.info(f"   3D shape: {pipeline_results['data_lr'].shape}")
             if 'multidim_data' in pipeline_results:
-                self.logger.info(f"   1D数据shape: {pipeline_results['multidim_data'].shape}")
+                self.logger.info(f"   1D数据: {file_sizes['1d_mb']:.1f}MB → {self.output_1d_dir}/{subject_id}_1d.npz")
+                self.logger.info(f"   1D shape: {pipeline_results['multidim_data'].shape}")
                 self.logger.info(f"   ROI体素数: {pipeline_results['n_voxels']}")
+            self.logger.info(f"   总大小: {file_sizes['3d_mb'] + file_sizes.get('1d_mb', 0):.1f}MB")
 
         except Exception as e:
             self.logger.error(f"❌ 被试 {subject_id} 处理失败")
@@ -528,9 +723,9 @@ class BatchDownsamplingProcessor:
 
             # 检查是否跳过已存在的文件
             if skip_existing:
-                output_filename = f"{subject_id}_downsampled.npz"
-                output_path = self.output_dir / output_filename
-                if output_path.exists():
+                output_3d_path = self.output_3d_dir / f"{subject_id}_3d.npz"
+                output_1d_path = self.output_1d_dir / f"{subject_id}_1d.npz"
+                if output_3d_path.exists() and output_1d_path.exists():
                     self.logger.info(f"跳过已存在文件: {subject_id}")
                     self.completed_subjects.add(subject_id)
                     successful_subjects.append(subject_id)
@@ -596,10 +791,12 @@ class BatchDownsamplingProcessor:
 
         if successful:
             avg_time = np.mean([r['processing_time'] for r in successful])
-            avg_size = np.mean([r['file_size_mb'] for r in successful])
-            total_size = sum([r['file_size_mb'] for r in successful])
+            avg_size_3d = np.mean([r.get('file_size_3d_mb', 0) for r in successful])
+            avg_size_1d = np.mean([r.get('file_size_1d_mb', 0) for r in successful])
+            avg_size_total = np.mean([r.get('file_size_total_mb', 0) for r in successful])
+            total_size = sum([r.get('file_size_total_mb', 0) for r in successful])
             self.logger.info(f"  平均处理时间: {avg_time:.1f}秒")
-            self.logger.info(f"  平均文件大小: {avg_size:.1f}MB")
+            self.logger.info(f"  平均文件大小: 3D={avg_size_3d:.1f}MB, 1D={avg_size_1d:.1f}MB, 总计={avg_size_total:.1f}MB")
             self.logger.info(f"  总输出大小: {total_size:.1f}MB")
 
         # 失败的被试
@@ -640,12 +837,16 @@ class BatchDownsamplingProcessor:
                 summary_data.append({
                     'subject_id': r['subject_id'],
                     'status': r['status'],
-                    'file_size_mb': r.get('file_size_mb', 0),
+                    'file_size_3d_mb': r.get('file_size_3d_mb', 0),
+                    'file_size_1d_mb': r.get('file_size_1d_mb', 0),
+                    'file_size_total_mb': r.get('file_size_total_mb', 0),
                     'processing_time': r['processing_time'],
                     'input_shape': str(r.get('input_shape', '')),
                     'output_shape': str(r.get('output_shape', '')),
                     'slab_thickness_mm': r.get('slab_thickness_mm', 0),
                     'coverage_fallback': r.get('coverage_fallback', False),
+                    'output_3d_path': r.get('output_3d_path', ''),
+                    'output_1d_path': r.get('output_1d_path', ''),
                     'error': r.get('error', ''),
                     'error_type': r.get('error_type', '')
                 })
@@ -681,8 +882,14 @@ def main():
                        default='/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated',
                        help='输入目录（3D验证数据）')
     parser.add_argument('--output-dir', type=str,
-                       default='/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/downsampling/3d',
-                       help='输出目录（downsampled数据）')
+                       default='/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/downsampling',
+                       help='输出根目录（日志、报告等）')
+    parser.add_argument('--output-3d-dir', type=str,
+                       default=None,
+                       help='3D数据输出目录（默认为output-dir/3d）')
+    parser.add_argument('--output-1d-dir', type=str,
+                       default=None,
+                       help='1D数据输出目录（默认为output-dir/1d）')
     parser.add_argument('--no-skip-existing', action='store_true',
                        help='不跳过已存在的文件（强制重新处理）')
     parser.add_argument('--test-only', action='store_true',
@@ -703,7 +910,9 @@ def main():
         input_dir=Path(args.input_dir),
         output_dir=Path(args.output_dir),
         log_level=args.log_level,
-        target_spacing=target_spacing
+        target_spacing=target_spacing,
+        output_3d_dir=Path(args.output_3d_dir) if args.output_3d_dir else None,
+        output_1d_dir=Path(args.output_1d_dir) if args.output_1d_dir else None
     )
 
     try:
