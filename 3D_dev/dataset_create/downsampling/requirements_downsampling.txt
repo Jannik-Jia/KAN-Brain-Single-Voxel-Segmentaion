@@ -1,0 +1,17 @@
+# Requirements for MRI Downsampling Pipeline
+# Python 3.7+
+
+# Core dependencies
+numpy>=1.19.0
+scipy>=1.5.0
+SimpleITK>=2.0.0
+scikit-image>=0.18.0
+h5py>=3.0.0
+
+# Optional dependencies for visualization (uncomment if needed)
+# matplotlib>=3.3.0
+# seaborn>=0.11.0
+
+# Testing
+# pytest>=6.0.0
+# pytest-cov>=2.10.0
