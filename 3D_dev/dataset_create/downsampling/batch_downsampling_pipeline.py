@@ -301,13 +301,26 @@ class BatchDownsamplingProcessor:
         start_time = time.time()
 
         try:
+            # 构建保存字典
+            save_dict = {
+                'data_lr': results['data_lr'],
+                'proba_labels': results['proba_labels'],
+                'region_mask_lr': results['region_mask_lr']
+            }
+
+            # 如果有1D数据（save_axis_order='orig'），也保存
+            if 'multidim_data' in results:
+                save_dict.update({
+                    'multidim_data': results['multidim_data'],
+                    'seg_one_hot': results['seg_one_hot'],
+                    'region_seg': results['region_seg'],
+                    'n_voxels': results['n_voxels']
+                })
+                self.logger.info(f"包含1D数据: multidim_data={results['multidim_data'].shape}, "
+                               f"seg_one_hot={results['seg_one_hot'].shape}, n_voxels={results['n_voxels']}")
+
             # 保存为.npz格式（压缩）
-            np.savez_compressed(
-                output_path,
-                data_lr=results['data_lr'],
-                proba_labels=results['proba_labels'],
-                region_mask_lr=results['region_mask_lr']
-            )
+            np.savez_compressed(output_path, **save_dict)
 
             # 保存metadata为JSON
             metadata_path = output_path.parent / f"{subject_id}_metadata.json"
@@ -381,7 +394,8 @@ class BatchDownsamplingProcessor:
                 data=input_data['data'],
                 region_mask=input_data['region_mask'],
                 region_labels=input_data['region_labels'],
-                align_to_128x104x18=False
+                align_to_128x104x18=False,
+                save_axis_order='orig'  # 生成1D格式数据
             )
 
             # 步骤4: 保存结果
@@ -415,7 +429,10 @@ class BatchDownsamplingProcessor:
             self.logger.info(f"✅ 被试 {subject_id} 处理成功")
             self.logger.info(f"   处理时间: {processing_time:.1f}秒")
             self.logger.info(f"   输出大小: {file_size_mb:.1f}MB")
-            self.logger.info(f"   输出shape: {pipeline_results['data_lr'].shape}")
+            self.logger.info(f"   3D数据shape: {pipeline_results['data_lr'].shape}")
+            if 'multidim_data' in pipeline_results:
+                self.logger.info(f"   1D数据shape: {pipeline_results['multidim_data'].shape}")
+                self.logger.info(f"   ROI体素数: {pipeline_results['n_voxels']}")
 
         except Exception as e:
             self.logger.error(f"❌ 被试 {subject_id} 处理失败")

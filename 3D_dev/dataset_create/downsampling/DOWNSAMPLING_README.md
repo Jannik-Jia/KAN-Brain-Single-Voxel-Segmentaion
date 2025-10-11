@@ -315,7 +315,115 @@ output_dir/
 
 ## 高级用法
 
-### 批量处理多个被试
+### 批量处理多个被试（推荐方式）
+
+**🔥 使用 `batch_downsampling_pipeline.py` 自动批处理**
+
+这是最简单和推荐的批量处理方式，会**自动保存3D和1D数据**：
+
+```bash
+# 测试模式：处理前3个被试
+cd downsampling/
+python batch_downsampling_pipeline.py --test-only
+
+# 处理所有被试（自动生成3D+1D数据）
+python batch_downsampling_pipeline.py \
+  --input-dir /path/to/3D_validated \
+  --output-dir /path/to/downsampled_output
+
+# 强制重新处理已存在的文件
+python batch_downsampling_pipeline.py --no-skip-existing
+
+# 查看帮助
+python batch_downsampling_pipeline.py --help
+```
+
+**批处理脚本的特性**：
+- ✅ **自动生成3D和1D数据**（v1.3+）
+- ✅ 自动遍历输入目录中的所有 `*_3d_validated.mat` 文件
+- ✅ 断点续传：意外中断后可继续处理
+- ✅ 内存监控和错误处理
+- ✅ 详细日志记录
+- ✅ 生成QA报告和处理摘要
+- ✅ 支持HDF5格式MAT文件（自动fallback）
+
+**生成的文件**（每个被试）：
+```
+output_dir/
+├── subject001_downsampled.npz        # 包含3D+1D数据
+├── subject001_metadata.json          # 处理元数据
+├── subject001_qa_metrics.json        # QA指标
+├── downsampling_dataset_index.json   # 数据集索引
+├── downsampling_checkpoint.pkl       # 断点续传检查点
+├── downsampling_report_*.json        # 批处理报告
+├── downsampling_summary_*.csv        # 批处理摘要
+└── logs/
+    └── batch_downsampling_*.log      # 详细日志
+```
+
+**NPZ文件包含的数据**：
+
+**3D数据**（所有模式，原始轴顺序 Z,X,Y）：
+- `data_lr`: (Z', X', Y', 351) - 多模态特征
+- `proba_labels`: (Z', X', Y', 102) - 概率标签（软标签）
+- `region_mask_lr`: (Z', X', Y') - ROI掩码
+
+**1D数据**（v1.3+，自动生成）：
+- `multidim_data`: (n_voxels, 351) - 1D特征矩阵
+- `seg_one_hot`: (102, n_voxels) - 1D概率标签
+- `region_seg`: (n_voxels,) - 1D硬标签
+- `n_voxels`: 标量 - ROI体素数
+
+**加载和使用批处理结果**：
+```python
+import numpy as np
+
+# 加载批处理生成的数据
+data = np.load('subject001_downsampled.npz')
+
+# 查看包含的key
+print("包含的数据:")
+for key in data.files:
+    if isinstance(data[key], np.ndarray):
+        print(f"  {key}: {data[key].shape}")
+    else:
+        print(f"  {key}: {data[key]}")
+
+# 使用3D数据
+data_lr = data['data_lr']  # (Z', X', Y', 351)
+proba_labels = data['proba_labels']  # (Z', X', Y', 102)
+region_mask_lr = data['region_mask_lr']  # (Z', X', Y')
+
+# 使用1D数据
+multidim_data = data['multidim_data']  # (n_voxels, 351)
+seg_one_hot = data['seg_one_hot']  # (102, n_voxels)
+region_seg = data['region_seg']  # (n_voxels,)
+n_voxels = int(data['n_voxels'])
+
+print(f"\nROI体素数: {n_voxels}")
+print(f"3D shape: {data_lr.shape}")
+print(f"1D shape: {multidim_data.shape}")
+```
+
+**验证数据完整性**：
+```bash
+# 使用提供的验证脚本
+cd ..
+python verify_1d_data.py subject001_downsampled.npz
+```
+
+**详细数据格式说明**：
+参见 `DOWNSAMPLED_DATA_FORMAT.md` 文档，包含：
+- 每个key的详细说明
+- 维度和数据类型
+- 3D-1D对应关系
+- 使用示例
+
+---
+
+### 手动批量处理（编程方式）
+
+如果需要更多自定义控制，可以手动编写批处理循环：
 
 ```python
 from pathlib import Path
@@ -335,20 +443,29 @@ for subject_file in sorted(data_dir.glob("subject*_3d_validated.mat")):
     print(f"Processing: {subject_file.name}")
 
     mat_data = sio.loadmat(subject_file)
+
+    # 使用save_axis_order='orig'生成3D+1D数据
     results = pipeline.run(
         data=mat_data['data'],
         region_mask=mat_data['region_mask'],
-        region_labels=mat_data['region_labels']
+        region_labels=mat_data['region_labels'],
+        save_axis_order='orig'  # 关键参数
     )
 
-    # 保存结果
+    # 保存完整结果（3D+1D）
     output_file = Path("./batch_output") / f"{subject_file.stem}_downsampled.npz"
     import numpy as np
-    np.savez_compressed(output_file, **{
-        'data_lr': results['data_lr'],
-        'proba_labels': results['proba_labels'],
-        'region_mask_lr': results['region_mask_lr']
-    })
+    np.savez_compressed(output_file,
+        # 3D数据
+        data_lr=results['data_lr'],
+        proba_labels=results['proba_labels'],
+        region_mask_lr=results['region_mask_lr'],
+        # 1D数据
+        multidim_data=results['multidim_data'],
+        seg_one_hot=results['seg_one_hot'],
+        region_seg=results['region_seg'],
+        n_voxels=results['n_voxels']
+    )
 ```
 
 ### 生成1D格式数据 (v1.3+)

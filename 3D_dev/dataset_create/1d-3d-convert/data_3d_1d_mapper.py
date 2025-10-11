@@ -158,8 +158,16 @@ class Data3D1DMapper:
             data_1d['multidim_data'] = features_1d
             self.logger.info(f"特征数据: {features_4d.shape} -> {features_1d.shape}")
 
-        # 转换3D标签到1D
-        if 'region_labels' in data_3d:
+        # 转换概率标签到1D（优先使用proba_labels）
+        if 'proba_labels' in data_3d:
+            # 使用概率标签（来自downsampling pipeline）
+            proba_labels_3d = data_3d['proba_labels']
+            seg_proba_1d = self.convert_proba_labels_3d_to_1d(proba_labels_3d, region_mask)
+            data_1d['seg_one_hot'] = seg_proba_1d  # 注意：这里实际是概率分布，不是严格one-hot
+            self.logger.info(f"概率标签转换完成: {proba_labels_3d.shape} -> {seg_proba_1d.shape}")
+
+        # 如果没有proba_labels，回退到region_labels生成one-hot
+        elif 'region_labels' in data_3d:
             labels_3d = data_3d['region_labels']
             labels_1d = labels_3d[region_mask]  # (n_voxels,)
 
@@ -188,6 +196,93 @@ class Data3D1DMapper:
             data_1d['big_seg'] = data_3d['big_seg']
 
         return data_1d
+
+    def convert_proba_labels_3d_to_1d(self,
+                                      proba_labels_3d: np.ndarray,
+                                      region_mask: np.ndarray) -> np.ndarray:
+        """
+        将3D概率标签转换为1D格式
+
+        专门处理概率分布（不是one-hot），适用于downsampling pipeline输出的proba_labels
+
+        Args:
+            proba_labels_3d: (X', Y', Z', 102) 概率标签，每个体素对应102个区域的概率分布
+            region_mask: (X', Y', Z') ROI掩码
+
+        Returns:
+            seg_proba_1d: (102, n_voxels) 1D概率分布，与C-order遍历顺序一致
+        """
+        self.logger.info("开始概率标签3D到1D转换...")
+
+        # 验证输入形状
+        assert proba_labels_3d.ndim == 4, f"proba_labels应该是4D，实际是{proba_labels_3d.ndim}D"
+        n_classes = proba_labels_3d.shape[-1]
+        assert n_classes == 102, f"期望102个类别，实际有{n_classes}个"
+
+        # 验证概率和
+        prob_sum = proba_labels_3d.sum(axis=-1)[region_mask > 0]
+        mean_sum = prob_sum.mean()
+        if not (0.99 <= mean_sum <= 1.01):
+            self.logger.warning(f"概率和不等于1.0: 平均={mean_sum:.6f}")
+        else:
+            self.logger.info(f"概率和验证通过: 平均={mean_sum:.6f}")
+
+        # 提取ROI内的概率分布
+        # proba_labels_3d[region_mask] 会按C-order自动展平，得到 (n_voxels, 102)
+        seg_proba_1d = proba_labels_3d[region_mask]  # (n_voxels, 102)
+
+        # 转置为 (102, n_voxels) 格式
+        seg_proba_1d = seg_proba_1d.T  # (102, n_voxels)
+
+        n_voxels = seg_proba_1d.shape[1]
+        self.logger.info(f"概率标签转换: {proba_labels_3d.shape} -> {seg_proba_1d.shape}")
+        self.logger.info(f"  ROI内体素数: {n_voxels}")
+        self.logger.info(f"  每体素概率范围: [{seg_proba_1d.min():.4f}, {seg_proba_1d.max():.4f}]")
+
+        return seg_proba_1d
+
+    def convert_proba_labels_1d_to_3d(self,
+                                      seg_proba_1d: np.ndarray,
+                                      region_mask: np.ndarray) -> np.ndarray:
+        """
+        将1D概率标签转换回3D格式
+
+        Args:
+            seg_proba_1d: (102, n_voxels) 1D概率分布
+            region_mask: (X', Y', Z') ROI掩码
+
+        Returns:
+            proba_labels_3d: (X', Y', Z', 102) 3D概率标签
+        """
+        self.logger.info("开始概率标签1D到3D转换...")
+
+        # 验证输入
+        assert seg_proba_1d.ndim == 2, f"seg_proba应该是2D，实际是{seg_proba_1d.ndim}D"
+        n_classes, n_voxels = seg_proba_1d.shape
+        assert n_classes == 102, f"期望102个类别，实际有{n_classes}个"
+
+        region_mask_bool = region_mask.astype(bool)
+        expected_voxels = np.sum(region_mask_bool)
+        assert n_voxels == expected_voxels, \
+            f"体素数不匹配: seg_proba有{n_voxels}个，mask有{expected_voxels}个"
+
+        # 创建4D数组
+        shape_3d = region_mask.shape
+        proba_labels_3d = np.zeros((*shape_3d, n_classes), dtype=seg_proba_1d.dtype)
+
+        # 转置为 (n_voxels, 102)
+        seg_proba_reshaped = seg_proba_1d.T  # (n_voxels, 102)
+
+        # 填充到3D数组（按C-order自动映射）
+        proba_labels_3d[region_mask_bool] = seg_proba_reshaped
+
+        # 验证概率和
+        prob_sum = proba_labels_3d.sum(axis=-1)[region_mask_bool]
+        mean_sum = prob_sum.mean()
+        self.logger.info(f"恢复后概率和: 平均={mean_sum:.6f}")
+
+        self.logger.info(f"概率标签恢复: {seg_proba_1d.shape} -> {proba_labels_3d.shape}")
+        return proba_labels_3d
 
     def convert_1d_to_3d(self, data_1d: Dict[str, np.ndarray],
                         target_shape: Optional[Tuple[int, int, int]] = None,
@@ -233,14 +328,34 @@ class Data3D1DMapper:
             data_3d['data'] = features_4d
             self.logger.info(f"特征数据: {features_2d.shape} -> {features_4d.shape}")
 
-        # 从one-hot转换标签为region_labels
+        # 从one-hot/概率分布转换标签
         if 'seg_one_hot' in data_1d:
-            seg_one_hot = data_1d['seg_one_hot']
-            labels_1d = np.argmax(seg_one_hot, axis=0).astype(np.uint8)
-            labels_3d = np.zeros(current_shape, dtype=np.uint8)
-            labels_3d[region_mask] = labels_1d
-            data_3d['region_labels'] = labels_3d
-            self.logger.info(f"从one-hot恢复标签: {seg_one_hot.shape} -> {labels_3d.shape}")
+            seg_data = data_1d['seg_one_hot']  # (102, n_voxels)
+
+            # 检查是概率分布还是严格one-hot
+            col_sums = seg_data.sum(axis=0)
+            is_probability = np.any((col_sums > 0.99) & (col_sums < 1.01))
+
+            if is_probability:
+                # 这是概率分布，恢复为proba_labels
+                self.logger.info("检测到概率分布，恢复为proba_labels")
+                proba_labels_3d = self.convert_proba_labels_1d_to_3d(seg_data, region_mask)
+                data_3d['proba_labels'] = proba_labels_3d
+
+                # 同时生成region_labels（argmax）
+                labels_1d = np.argmax(seg_data, axis=0).astype(np.uint8)
+                labels_3d = np.zeros(current_shape, dtype=np.uint8)
+                labels_3d[region_mask] = labels_1d
+                data_3d['region_labels'] = labels_3d
+                self.logger.info(f"从概率分布恢复: {seg_data.shape} -> proba_labels: {proba_labels_3d.shape}, region_labels: {labels_3d.shape}")
+            else:
+                # 这是严格one-hot，只生成region_labels
+                self.logger.info("检测到one-hot编码，恢复为region_labels")
+                labels_1d = np.argmax(seg_data, axis=0).astype(np.uint8)
+                labels_3d = np.zeros(current_shape, dtype=np.uint8)
+                labels_3d[region_mask] = labels_1d
+                data_3d['region_labels'] = labels_3d
+                self.logger.info(f"从one-hot恢复标签: {seg_data.shape} -> {labels_3d.shape}")
 
         # 转换1D FreeSurfer标签到3D【不需要，仅为兼容性保留】
         if 'region_seg' in data_1d:
