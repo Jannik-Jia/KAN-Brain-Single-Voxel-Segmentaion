@@ -1303,7 +1303,7 @@ class MRIDownsamplingPipeline:
         # Save metadata
         metadata_file = self.output_dir / 'pipeline_metadata.json'
         with open(metadata_file, 'w') as f:
-            json.dump(self.metadata, f, indent=2)
+            json.dump(self.metadata, f, indent=2, default=str)
 
         self.logger.info(f"\n✓ Pipeline completed successfully!")
         self.logger.info(f"  Save axis order: {save_axis_order}")
