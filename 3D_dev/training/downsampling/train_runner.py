@@ -1420,7 +1420,37 @@ def run_single_split(
 
     logger.info("验证集指标:")
     for key, value in val_metrics.items():
-        logger.info(f"  {key}: {value:.4f}")
+        # Handle numpy arrays
+        if isinstance(value, np.ndarray):
+            if value.size == 0:
+                logger.info(f"  {key}: <empty ndarray>")
+            elif value.size == 1:
+                logger.info(f"  {key}: {float(value):.4f}")
+            else:
+                logger.info(f"  {key}: mean={np.mean(value):.4f}, std={np.std(value):.4f}, shape={value.shape}")
+        # Handle scalar values
+        elif isinstance(value, (int, float, np.integer, np.floating)):
+            logger.info(f"  {key}: {value:.4f}")
+        # Handle lists
+        elif isinstance(value, list):
+            if len(value) == 0:
+                logger.info(f"  {key}: <empty list>")
+            elif isinstance(value[0], (int, float, np.integer, np.floating)):
+                # For numeric lists, show statistics
+                logger.info(f"  {key}: mean={np.mean(value):.4f}, std={np.std(value):.4f}, min={np.min(value):.4f}, max={np.max(value):.4f}")
+            else:
+                # For non-numeric lists
+                logger.info(f"  {key}: <list with {len(value)} items>")
+        # Handle dicts
+        elif isinstance(value, dict):
+            if len(value) == 0:
+                logger.info(f"  {key}: <empty dict>")
+            else:
+                # Skip non-empty nested dicts (like aurc_curve) in console logging
+                continue
+        else:
+            # For other types, show the type info
+            logger.info(f"  {key}: <{type(value).__name__}>")
 
     # 保存验证集指标
     val_metrics_path = metrics_dir / 'metrics_val.json'
@@ -1562,7 +1592,37 @@ def run_single_split(
 
     logger.info("测试集指标:")
     for key, value in test_metrics.items():
-        logger.info(f"  {key}: {value:.4f}")
+        # Handle numpy arrays
+        if isinstance(value, np.ndarray):
+            if value.size == 0:
+                logger.info(f"  {key}: <empty ndarray>")
+            elif value.size == 1:
+                logger.info(f"  {key}: {float(value):.4f}")
+            else:
+                logger.info(f"  {key}: mean={np.mean(value):.4f}, std={np.std(value):.4f}, shape={value.shape}")
+        # Handle scalar values
+        elif isinstance(value, (int, float, np.integer, np.floating)):
+            logger.info(f"  {key}: {value:.4f}")
+        # Handle lists
+        elif isinstance(value, list):
+            if len(value) == 0:
+                logger.info(f"  {key}: <empty list>")
+            elif isinstance(value[0], (int, float, np.integer, np.floating)):
+                # For numeric lists, show statistics
+                logger.info(f"  {key}: mean={np.mean(value):.4f}, std={np.std(value):.4f}, min={np.min(value):.4f}, max={np.max(value):.4f}")
+            else:
+                # For non-numeric lists
+                logger.info(f"  {key}: <list with {len(value)} items>")
+        # Handle dicts
+        elif isinstance(value, dict):
+            if len(value) == 0:
+                logger.info(f"  {key}: <empty dict>")
+            else:
+                # Skip non-empty nested dicts (like aurc_curve) in console logging
+                continue
+        else:
+            # For other types, show the type info
+            logger.info(f"  {key}: <{type(value).__name__}>")
 
     # 保存测试集指标
     test_metrics_path = metrics_dir / 'metrics_test.json'
