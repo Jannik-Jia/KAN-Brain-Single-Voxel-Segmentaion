@@ -1485,7 +1485,9 @@ def run_single_split(
     # Risk-Coverage曲线
     if 'aurc_curve' in val_metrics:
         risk_coverage_path = figs_dir / 'val_risk_coverage.png'
-        plot_risk_coverage_curve(val_metrics['aurc_curve'], risk_coverage_path)
+        # Add the aurc value to the curve data for plotting
+        aurc_data_with_value = {**val_metrics['aurc_curve'], 'aurc': val_metrics['aurc']}
+        plot_risk_coverage_curve(aurc_data_with_value, risk_coverage_path)
         logger.info(f"  Risk-Coverage曲线已保存: {risk_coverage_path}")
 
     # 熵分布直方图
@@ -1657,7 +1659,9 @@ def run_single_split(
     # Risk-Coverage曲线
     if 'aurc_curve' in test_metrics:
         risk_coverage_path = figs_dir / 'test_risk_coverage.png'
-        plot_risk_coverage_curve(test_metrics['aurc_curve'], risk_coverage_path)
+        # Add the aurc value to the curve data for plotting
+        aurc_data_with_value = {**test_metrics['aurc_curve'], 'aurc': test_metrics['aurc']}
+        plot_risk_coverage_curve(aurc_data_with_value, risk_coverage_path)
         logger.info(f"  Risk-Coverage曲线已保存: {risk_coverage_path}")
 
     # 熵分布直方图
