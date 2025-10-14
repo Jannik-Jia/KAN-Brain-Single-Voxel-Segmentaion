@@ -244,28 +244,66 @@ def kernel_l2_regularization(model: nn.Module, weight_decay: float = 1e-5) -> to
 
 def soft_cross_entropy_loss(logits: torch.Tensor,
                             soft_targets: torch.Tensor,
-                            class_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+                            class_weights: Optional[torch.Tensor] = None,
+                            enable_quality_weighting: bool = False,
+                            quality_gamma: float = 1.0,
+                            quality_qmin: float = 0.2) -> torch.Tensor:
     """
-    软标签交叉熵损失
+    软标签交叉熵损失（支持质量感知样本权重）
 
     Args:
         logits: (batch, 102) 模型输出
         soft_targets: (batch, 102) 软标签（概率分布）
         class_weights: (102,) 类别权重（可选）
+        enable_quality_weighting: 是否启用质量感知样本权重
+        quality_gamma: 熵抑制指数γ（默认1.0）
+        quality_qmin: 质量权重下限裁剪（默认0.2）
 
     Returns:
         loss: 标量
     """
+    import math
+
     log_probs = F.log_softmax(logits, dim=1)  # (batch, 102)
+    base_loss = -(soft_targets * log_probs).sum(dim=1)  # (batch,)
 
+    # 计算样本权重（class-wise）
     if class_weights is not None:
-        # 样本权重 = sum(p_i * w_i)
         sample_weights = (soft_targets * class_weights.unsqueeze(0)).sum(dim=1)  # (batch,)
-        loss = -(soft_targets * log_probs).sum(dim=1) * sample_weights  # (batch,)
-        loss = loss.mean()
     else:
-        loss = -(soft_targets * log_probs).sum(dim=1).mean()
+        sample_weights = torch.ones_like(base_loss)
 
+    # 质量感知权重（基于软标签熵）
+    if enable_quality_weighting:
+        # 参数健壮性防御
+        quality_gamma = max(quality_gamma, 0.0)  # γ<0会反向放大高熵样本
+        quality_qmin = float(torch.clamp(torch.tensor(quality_qmin), 0.0, 1.0).item())
+
+        eps = 1e-8
+        K = soft_targets.size(1)  # 102
+
+        # 计算熵: H_i = -sum(y_i * log(y_i + eps))
+        H = -(soft_targets * torch.log(soft_targets + eps)).sum(dim=1)  # (batch,)
+
+        # 归一化到 [0, 1]: H_norm = H / log(K)
+        H_norm = torch.clamp(H / math.log(K), max=1.0)  # (batch,)
+
+        # 质量因子: q_i = (1 - H_norm)^gamma
+        q = torch.pow(1.0 - H_norm, quality_gamma)  # (batch,)
+
+        # 下限裁剪
+        if quality_qmin > 0:
+            q = torch.clamp(q, min=quality_qmin)
+
+        # 应用质量权重
+        sample_weights = sample_weights * q
+
+        # 均值归一化（保持损失尺度稳定，对齐学习率感知）
+        with torch.no_grad():
+            denom = sample_weights.mean().clamp_min(1e-8)
+        sample_weights = sample_weights / denom
+
+    loss = (base_loss * sample_weights).mean()
     return loss
 
 
@@ -551,15 +589,26 @@ def compute_aurc(pred_probs: np.ndarray,
         accuracies.append(float(accuracy))
         risks.append(float(risk))
 
-    # 计算AURC (使用梯形法则)
-    aurc = np.trapz(risks, coverages)
+    # 按coverage升序排序（避免trapz返回负值）
+    coverages = np.array(coverages)
+    risks = np.array(risks)
+    accuracies = np.array(accuracies)
+
+    # 排序索引
+    sort_idx = np.argsort(coverages)
+    coverages_sorted = coverages[sort_idx]
+    risks_sorted = risks[sort_idx]
+    accuracies_sorted = accuracies[sort_idx]
+
+    # 计算AURC (使用梯形法则，coverage升序)
+    aurc = np.trapz(risks_sorted, coverages_sorted)
 
     return {
         'aurc': float(aurc),
         'thresholds': [float(t) for t in thresholds],
-        'coverages': coverages,
-        'accuracies': accuracies,
-        'risks': risks
+        'coverages': [float(c) for c in coverages_sorted],
+        'accuracies': [float(a) for a in accuracies_sorted],
+        'risks': [float(r) for r in risks_sorted]
     }
 
 
@@ -858,6 +907,60 @@ def plot_reliability_diagram(bin_stats: List[Dict], save_path: Path):
     plt.close()
 
 
+def plot_reliability_comparison(
+    bin_stats_list: List[List[Dict]],
+    ece_list: List[float],
+    labels: List[str],
+    colors: List[str],
+    save_path: Path,
+    title: str = "Reliability Diagram Comparison"
+):
+    """
+    绘制多条可靠性曲线对比图（例如温度缩放前后对比）
+
+    Args:
+        bin_stats_list: 多组bin统计，每组是一个List[Dict]
+        ece_list: 对应的ECE值列表
+        labels: 对应的标签列表（例如 ['Before Calibration', 'After Calibration']）
+        colors: 对应的颜色列表（例如 ['red', 'blue']）
+        save_path: 保存路径
+        title: 图表标题
+    """
+    fig, ax = plt.subplots(figsize=(10, 9))
+
+    # 绘制对角线 (perfect calibration)
+    ax.plot([0, 1], [0, 1], 'k--', label='Perfect Calibration', linewidth=2.5, alpha=0.7)
+
+    # 绘制每条可靠性曲线
+    for bin_stats, ece, label, color in zip(bin_stats_list, ece_list, labels, colors):
+        confidences = [b['bin_confidence'] for b in bin_stats]
+        accuracies = [b['bin_accuracy'] for b in bin_stats]
+        sizes = [b['bin_size'] for b in bin_stats]
+
+        # 绘制散点（大小表示样本数）
+        ax.scatter(confidences, accuracies, s=[s/10 for s in sizes],
+                  alpha=0.6, color=color, edgecolors='white', linewidth=0.5)
+
+        # 绘制连线
+        ax.plot(confidences, accuracies, '-', color=color, linewidth=2,
+               label=f'{label} (ECE={ece:.4f})', alpha=0.8)
+
+    ax.set_xlabel('Confidence (Max Probability)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Accuracy (Soft Label Agreement)', fontsize=14, fontweight='bold')
+    ax.set_title(title, fontsize=16, fontweight='bold', pad=15)
+    ax.legend(fontsize=11, loc='lower right', framealpha=0.95)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.set_xlim([0, 1])
+    ax.set_ylim([0, 1])
+
+    # 设置刻度字体大小
+    ax.tick_params(axis='both', which='major', labelsize=11)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    plt.close()
+
+
 def plot_risk_coverage_curve(aurc_data: Dict, save_path: Path):
     """
     绘制Risk-Coverage曲线
@@ -983,10 +1086,11 @@ def plot_3d_slices(pred_3d: np.ndarray,
 # ============================================================================
 
 class TemperatureScaler:
-    """温度缩放校准器"""
+    """温度缩放校准器（保证 T > 0）"""
 
     def __init__(self):
-        self.temperature = 1.0
+        self._u = 0.0  # 无约束参数（内部存储）
+        self.temperature = 1.0  # 实际温度 T = softplus(u) + 1e-6
 
     def fit(self, logits: np.ndarray, true_probs: np.ndarray,
             max_iter: int = 100, lr: float = 0.01) -> float:
@@ -1009,14 +1113,16 @@ class TemperatureScaler:
         logits_torch = torch.FloatTensor(logits).requires_grad_(False)
         true_probs_torch = torch.FloatTensor(true_probs).requires_grad_(False)
 
-        # 初始化温度参数
-        temperature = torch.nn.Parameter(torch.ones(1))
+        # 初始化无约束参数 u（优化目标）
+        u = torch.nn.Parameter(torch.zeros(1))
 
         # 使用LBFGS优化
-        optimizer = LBFGS([temperature], lr=lr, max_iter=max_iter)
+        optimizer = LBFGS([u], lr=lr, max_iter=max_iter)
 
         def closure():
             optimizer.zero_grad()
+            # 通过 softplus 保证 T > 0
+            temperature = F_torch.softplus(u) + 1e-6
             # 应用温度缩放
             scaled_logits = logits_torch / temperature
             # 计算软标签NLL损失
@@ -1027,8 +1133,9 @@ class TemperatureScaler:
 
         optimizer.step(closure)
 
-        # 保存最优温度
-        self.temperature = float(temperature.item())
+        # 保存最优参数和温度
+        self._u = float(u.item())
+        self.temperature = float(F_torch.softplus(u).item() + 1e-6)
 
         return self.temperature
 
@@ -1069,6 +1176,9 @@ def run_single_split(
     class_weight_alpha: float = 0.5,
     max_vox_per_subject: Optional[int] = None,
     grad_clip_norm: Optional[float] = 1.0,
+    quality_weighting: bool = False,
+    quality_gamma: float = 1.0,
+    quality_qmin: float = 0.2,
     save_dir: str = "runs/quickstart"
 ):
     """
@@ -1087,6 +1197,9 @@ def run_single_split(
         class_weight_alpha: 类别权重平衡系数
         max_vox_per_subject: 每个被试最大体素数（用于控制显存）
         grad_clip_norm: 梯度裁剪范数（默认1.0，设为None禁用）
+        quality_weighting: 是否启用质量感知样本权重（基于软标签熵）
+        quality_gamma: 熵抑制指数γ（默认1.0，范围0.5-2.0）
+        quality_qmin: 质量权重下限裁剪（默认0.2，范围0-1）
         save_dir: 保存目录
     """
     # 设置随机种子
@@ -1206,6 +1319,28 @@ def run_single_split(
 
     logger.info(f"训练集总体素数: {train_features.shape[0]}")
 
+    # 验证软标签质量（确保不是硬one-hot）
+    logger.info("验证软标签质量...")
+    label_sum = train_labels.sum(axis=1)
+    label_max = train_labels.max(axis=1)
+
+    sum_mean = label_sum.mean()
+    sum_std = label_sum.std()
+    max_mean = label_max.mean()
+    max_std = label_max.std()
+
+    logger.info(f"  标签概率和: mean={sum_mean:.6f}, std={sum_std:.6f}")
+    logger.info(f"  标签最大值: mean={max_mean:.4f}, std={max_std:.4f}")
+
+    # 检查是否为硬one-hot（质量权重将不起作用）
+    if max_mean > 0.99:
+        logger.warning("⚠️  标签似乎是硬one-hot（最大值≈1），质量权重可能不起作用！")
+        logger.warning("    建议使用3D的proba_labels作为训练真值以获得软标签效果")
+    elif max_mean > 0.95:
+        logger.warning("⚠️  标签分布较尖锐（最大值>{:.2f}），软标签不确定性较低".format(max_mean))
+    else:
+        logger.info(f"✓ 标签为真正的软分布（最大值≈{max_mean:.2f}），适合质量权重")
+
     # 加载验证集
     logger.info("加载验证集...")
     val_data = load_subject_data(data_root, split_info['val_id'])
@@ -1245,13 +1380,39 @@ def run_single_split(
     val_dataset = BrainVoxelDataset(val_features, val_labels)
     test_dataset = BrainVoxelDataset(test_features, test_labels)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    # 检测是否使用CUDA，决定是否使用pin_memory
+    use_cuda = torch.cuda.is_available()
+    num_workers = 4 if use_cuda else 2  # GPU环境使用更多workers
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0)
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0)
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0)
+    )
 
     logger.info(f"训练集: {len(train_dataset)} 样本, {len(train_loader)} batches")
     logger.info(f"验证集: {len(val_dataset)} 样本, {len(val_loader)} batches")
     logger.info(f"测试集: {len(test_dataset)} 样本, {len(test_loader)} batches")
+    logger.info(f"DataLoader: num_workers={num_workers}, pin_memory={use_cuda}")
 
     # 计算类别权重（可选）
     class_weights = None
@@ -1287,7 +1448,8 @@ def run_single_split(
         'train_loss': [],
         'val_loss': [],
         'val_nll': [],
-        'val_gross_acc': []
+        'val_gross_acc': [],
+        'quality_stats': []  # 质量权重分布统计（每个epoch）
     }
 
     best_val_nll = float('inf')
@@ -1298,9 +1460,23 @@ def run_single_split(
         logger.info(f"\nEpoch {epoch+1}/{epochs}")
         logger.info("-" * 80)
 
+        # 计算当前epoch的有效质量权重参数（支持未来的warm-up等动态策略）
+        if quality_weighting:
+            # 应用与损失函数中相同的参数防御逻辑
+            gamma_eff = max(quality_gamma, 0.0)
+            qmin_eff = float(torch.clamp(torch.tensor(quality_qmin), 0.0, 1.0).item())
+            logger.info(f"[QualityWeighting] gamma_eff={gamma_eff:.3f}, qmin={qmin_eff:.2f}")
+        else:
+            # 未启用时使用默认值（不会实际使用，但避免变量未定义）
+            gamma_eff = quality_gamma
+            qmin_eff = quality_qmin
+
         # 训练阶段
         model.train()
         train_loss_accum = 0.0
+
+        # 收集本epoch的质量权重分布（用首个batch）
+        epoch_quality_stats = None
 
         for batch_idx, (features_batch, labels_batch) in enumerate(train_loader):
             features_batch = features_batch.to(device)
@@ -1309,7 +1485,13 @@ def run_single_split(
             optimizer.zero_grad()
 
             logits = model(features_batch)
-            base_loss = soft_cross_entropy_loss(logits, labels_batch, class_weights_tensor)
+            # 使用当前epoch的有效参数（gamma_eff, qmin_eff）
+            base_loss = soft_cross_entropy_loss(
+                logits, labels_batch, class_weights_tensor,
+                enable_quality_weighting=quality_weighting,
+                quality_gamma=gamma_eff,
+                quality_qmin=qmin_eff
+            )
 
             # 添加kernel-only L2正则化（只对权重矩阵，不包括偏置）
             l2_reg = kernel_l2_regularization(model, weight_decay=weight_decay)
@@ -1324,6 +1506,38 @@ def run_single_split(
             optimizer.step()
 
             train_loss_accum += loss.item()
+
+            # 在每个epoch的第一个batch收集质量权重统计（如果启用）
+            if batch_idx == 0 and quality_weighting:
+                import math
+                with torch.no_grad():
+                    eps = 1e-8
+                    K = labels_batch.size(1)
+                    H = -(labels_batch * torch.log(labels_batch + eps)).sum(dim=1)
+                    H_norm = torch.clamp(H / math.log(K), max=1.0)
+                    q = torch.pow(1.0 - H_norm, gamma_eff)
+                    if qmin_eff > 0:
+                        q = torch.clamp(q, min=qmin_eff)
+
+                    q_np = q.cpu().numpy()
+                    epoch_quality_stats = {
+                        'epoch': epoch + 1,
+                        'gamma': float(gamma_eff),
+                        'qmin': float(qmin_eff),
+                        'q_mean': float(q_np.mean()),
+                        'q_median': float(np.median(q_np)),
+                        'q_std': float(q_np.std()),
+                        'q_min': float(q_np.min()),
+                        'q_max': float(q_np.max()),
+                        'q_q25': float(np.percentile(q_np, 25)),
+                        'q_q75': float(np.percentile(q_np, 75))
+                    }
+
+                    # 仅在第一个epoch打印详细信息
+                    if epoch == 0:
+                        logger.info(f"Quality weighting enabled: gamma={gamma_eff:.2f}, qmin={qmin_eff:.2f}, "
+                                   f"batch_q_mean={q.mean().item():.4f}, batch_q_min={q.min().item():.4f}, "
+                                   f"batch_q_max={q.max().item():.4f}")
 
             if (batch_idx + 1) % 100 == 0:
                 logger.info(f"  Batch {batch_idx+1}/{len(train_loader)}, Loss: {loss.item():.4f}")
@@ -1343,7 +1557,13 @@ def run_single_split(
                 labels_batch = labels_batch.to(device)
 
                 logits = model(features_batch)
-                base_loss = soft_cross_entropy_loss(logits, labels_batch, class_weights_tensor)
+                # 验证阶段不使用质量权重（保持损失可比性）
+                base_loss = soft_cross_entropy_loss(
+                    logits, labels_batch, class_weights_tensor,
+                    enable_quality_weighting=False,
+                    quality_gamma=quality_gamma,
+                    quality_qmin=quality_qmin
+                )
 
                 # 添加kernel-only L2正则化
                 l2_reg = kernel_l2_regularization(model, weight_decay=weight_decay)
@@ -1365,6 +1585,10 @@ def run_single_split(
 
         history['val_nll'].append(val_metrics['nll'])
         history['val_gross_acc'].append(val_metrics['gross_accuracy'])
+
+        # 保存质量权重统计（如果启用）
+        if quality_weighting and epoch_quality_stats is not None:
+            history['quality_stats'].append(epoch_quality_stats)
 
         logger.info(f"Epoch {epoch+1} 结果:")
         logger.info(f"  训练损失: {avg_train_loss:.4f}")
@@ -1526,17 +1750,40 @@ def run_single_split(
     val_3d_dice_results = compute_3d_soft_dice(val_probs_3d, val_true_probs_3d, val_region_mask)
     logger.info(f"  3D Soft Dice (macro): {val_3d_dice_results['soft_dice_macro']:.4f}")
 
+    # Per-class Soft-Dice排序分析
+    per_class_dice = np.array(val_3d_dice_results['per_class_soft_dice'])
+    dice_ranking = np.argsort(per_class_dice)  # 升序排序（从低到高）
+
+    # Top-5 worst classes (最难分的类)
+    worst_5_idx = dice_ranking[:5]
+    worst_5_classes = [{'class_id': int(idx), 'soft_dice': float(per_class_dice[idx])}
+                       for idx in worst_5_idx]
+
+    # Top-5 best classes (最容易分的类)
+    best_5_idx = dice_ranking[-5:][::-1]  # 倒序取最后5个
+    best_5_classes = [{'class_id': int(idx), 'soft_dice': float(per_class_dice[idx])}
+                      for idx in best_5_idx]
+
+    logger.info(f"  Worst-5 classes (最难分): {[c['class_id'] for c in worst_5_classes]}")
+    logger.info(f"  Best-5 classes (最容易分): {[c['class_id'] for c in best_5_classes]}")
+
     # 3D概率指标
     val_3d_prob_metrics = compute_3d_prob_metrics(val_probs_3d, val_true_probs_3d, val_region_mask)
     logger.info(f"  3D NLL: {val_3d_prob_metrics['3d_nll']:.4f}")
     logger.info(f"  3D Brier: {val_3d_prob_metrics['3d_brier']:.4f}")
 
-    # 保存3D高级指标
+    # 保存3D高级指标（包含per-class排序）
     val_3d_adv_metrics_path = metrics_dir / 'metrics_val_3d_advanced.json'
     with open(val_3d_adv_metrics_path, 'w') as f:
         json.dump({
             'soft_dice': val_3d_dice_results,
-            'prob_metrics': val_3d_prob_metrics
+            'prob_metrics': val_3d_prob_metrics,
+            'per_class_ranking': {
+                'worst_5': worst_5_classes,
+                'best_5': best_5_classes,
+                'all_ranked': [{'class_id': int(idx), 'soft_dice': float(per_class_dice[idx])}
+                               for idx in dice_ranking]
+            }
         }, f, indent=2)
     logger.info(f"验证集3D高级指标已保存: {val_3d_adv_metrics_path}")
 
@@ -1554,6 +1801,32 @@ def run_single_split(
     logger.info(f"  Gross Acc: {val_metrics_calibrated['gross_accuracy']:.4f} (原始: {val_metrics['gross_accuracy']:.4f})")
     logger.info(f"  NLL: {val_metrics_calibrated['nll']:.4f} (原始: {val_metrics['nll']:.4f})")
     logger.info(f"  Soft ECE: {val_metrics_calibrated['soft_ece']:.4f} (原始: {val_metrics['soft_ece']:.4f})")
+
+    # 生成验证集温度缩放前后对比图
+    logger.info("生成验证集温度缩放前后可靠性曲线...")
+    if 'soft_ece_bins' in val_metrics and len(val_metrics['soft_ece_bins']) > 0:
+        val_reliability_before_path = figs_dir / 'val_reliability_before_calibration.png'
+        plot_reliability_diagram(val_metrics['soft_ece_bins'], val_reliability_before_path)
+        logger.info(f"  验证集校准前可靠性曲线: {val_reliability_before_path}")
+
+    if 'soft_ece_bins' in val_metrics_calibrated and len(val_metrics_calibrated['soft_ece_bins']) > 0:
+        val_reliability_after_path = figs_dir / 'val_reliability_after_calibration.png'
+        plot_reliability_diagram(val_metrics_calibrated['soft_ece_bins'], val_reliability_after_path)
+        logger.info(f"  验证集校准后可靠性曲线: {val_reliability_after_path}")
+
+    # 生成验证集温度缩放对比图（Before vs After）
+    if ('soft_ece_bins' in val_metrics and len(val_metrics['soft_ece_bins']) > 0 and
+        'soft_ece_bins' in val_metrics_calibrated and len(val_metrics_calibrated['soft_ece_bins']) > 0):
+        val_comparison_path = figs_dir / 'val_reliability_comparison.png'
+        plot_reliability_comparison(
+            bin_stats_list=[val_metrics['soft_ece_bins'], val_metrics_calibrated['soft_ece_bins']],
+            ece_list=[val_metrics['soft_ece'], val_metrics_calibrated['soft_ece']],
+            labels=['Before Temperature Scaling', 'After Temperature Scaling'],
+            colors=['#E74C3C', '#3498DB'],  # Red for before, Blue for after
+            save_path=val_comparison_path,
+            title='Validation Set: Calibration Improvement (Temperature Scaling)'
+        )
+        logger.info(f"  验证集校准对比图: {val_comparison_path}")
 
     # 保存温度缩放结果
     temp_scaling_results = {
@@ -1700,17 +1973,36 @@ def run_single_split(
     test_3d_dice_results = compute_3d_soft_dice(test_probs_3d, test_true_probs_3d, test_region_mask)
     logger.info(f"  3D Soft Dice (macro): {test_3d_dice_results['soft_dice_macro']:.4f}")
 
+    # Per-class Soft-Dice排序分析
+    per_class_dice_test = np.array(test_3d_dice_results['per_class_soft_dice'])
+    dice_ranking_test = np.argsort(per_class_dice_test)
+
+    # Top-5 worst/best classes
+    worst_5_test = [{'class_id': int(idx), 'soft_dice': float(per_class_dice_test[idx])}
+                    for idx in dice_ranking_test[:5]]
+    best_5_test = [{'class_id': int(idx), 'soft_dice': float(per_class_dice_test[idx])}
+                   for idx in dice_ranking_test[-5:][::-1]]
+
+    logger.info(f"  Worst-5 classes (最难分): {[c['class_id'] for c in worst_5_test]}")
+    logger.info(f"  Best-5 classes (最容易分): {[c['class_id'] for c in best_5_test]}")
+
     # 3D概率指标
     test_3d_prob_metrics = compute_3d_prob_metrics(test_probs_3d, test_true_probs_3d, test_region_mask)
     logger.info(f"  3D NLL: {test_3d_prob_metrics['3d_nll']:.4f}")
     logger.info(f"  3D Brier: {test_3d_prob_metrics['3d_brier']:.4f}")
 
-    # 保存3D高级指标
+    # 保存3D高级指标（包含per-class排序）
     test_3d_adv_metrics_path = metrics_dir / 'metrics_test_3d_advanced.json'
     with open(test_3d_adv_metrics_path, 'w') as f:
         json.dump({
             'soft_dice': test_3d_dice_results,
-            'prob_metrics': test_3d_prob_metrics
+            'prob_metrics': test_3d_prob_metrics,
+            'per_class_ranking': {
+                'worst_5': worst_5_test,
+                'best_5': best_5_test,
+                'all_ranked': [{'class_id': int(idx), 'soft_dice': float(per_class_dice_test[idx])}
+                               for idx in dice_ranking_test]
+            }
         }, f, indent=2)
     logger.info(f"测试集3D高级指标已保存: {test_3d_adv_metrics_path}")
 
@@ -1724,6 +2016,32 @@ def run_single_split(
     logger.info(f"  NLL: {test_metrics_calibrated['nll']:.4f} (原始: {test_metrics['nll']:.4f})")
     logger.info(f"  Soft ECE: {test_metrics_calibrated['soft_ece']:.4f} (原始: {test_metrics['soft_ece']:.4f})")
     logger.info(f"  Brier: {test_metrics_calibrated['brier_score']:.4f} (原始: {test_metrics['brier_score']:.4f})")
+
+    # 生成测试集温度缩放前后对比图
+    logger.info("生成测试集温度缩放前后可靠性曲线...")
+    if 'soft_ece_bins' in test_metrics and len(test_metrics['soft_ece_bins']) > 0:
+        test_reliability_before_path = figs_dir / 'test_reliability_before_calibration.png'
+        plot_reliability_diagram(test_metrics['soft_ece_bins'], test_reliability_before_path)
+        logger.info(f"  测试集校准前可靠性曲线: {test_reliability_before_path}")
+
+    if 'soft_ece_bins' in test_metrics_calibrated and len(test_metrics_calibrated['soft_ece_bins']) > 0:
+        test_reliability_after_path = figs_dir / 'test_reliability_after_calibration.png'
+        plot_reliability_diagram(test_metrics_calibrated['soft_ece_bins'], test_reliability_after_path)
+        logger.info(f"  测试集校准后可靠性曲线: {test_reliability_after_path}")
+
+    # 生成测试集温度缩放对比图（Before vs After）
+    if ('soft_ece_bins' in test_metrics and len(test_metrics['soft_ece_bins']) > 0 and
+        'soft_ece_bins' in test_metrics_calibrated and len(test_metrics_calibrated['soft_ece_bins']) > 0):
+        test_comparison_path = figs_dir / 'test_reliability_comparison.png'
+        plot_reliability_comparison(
+            bin_stats_list=[test_metrics['soft_ece_bins'], test_metrics_calibrated['soft_ece_bins']],
+            ece_list=[test_metrics['soft_ece'], test_metrics_calibrated['soft_ece']],
+            labels=['Before Temperature Scaling', 'After Temperature Scaling'],
+            colors=['#E74C3C', '#3498DB'],  # Red for before, Blue for after
+            save_path=test_comparison_path,
+            title='Test Set: Calibration Improvement (Temperature Scaling)'
+        )
+        logger.info(f"  测试集校准对比图: {test_comparison_path}")
 
     # 更新温度缩放结果（添加测试集）
     temp_scaling_results['test_metrics_before'] = {
@@ -1759,6 +2077,9 @@ def run_single_split(
         'grad_clip_norm': grad_clip_norm,
         'use_class_weights': use_class_weights,
         'class_weight_alpha': class_weight_alpha if use_class_weights else None,
+        'quality_weighting': quality_weighting,
+        'quality_gamma': quality_gamma if quality_weighting else None,
+        'quality_qmin': quality_qmin if quality_weighting else None,
         'max_vox_per_subject': max_vox_per_subject,
         'data_root': str(data_root),
         'n_train_subjects': split_info['n_train'],
@@ -1789,6 +2110,8 @@ def run_single_split(
         'test_nll_after_temp_scaling': temp_scaling_results['test_metrics_after']['nll'],
         'test_soft_ece_before_temp_scaling': temp_scaling_results['test_metrics_before']['soft_ece'],
         'test_soft_ece_after_temp_scaling': temp_scaling_results['test_metrics_after']['soft_ece'],
+        # Quality weighting statistics (if enabled)
+        'quality_stats_history': history['quality_stats'] if quality_weighting else [],
         # File references
         'files': {
             'temperature_scaling': str(temp_scaling_path.relative_to(save_dir)),
@@ -1850,6 +2173,12 @@ if __name__ == '__main__':
                        help='梯度裁剪范数（默认1.0，设为0禁用）')
     parser.add_argument('--save-dir', type=str, default='runs/quickstart',
                        help='保存目录（默认runs/quickstart）')
+    parser.add_argument('--quality-weighting', action='store_true',
+                       help='是否启用质量感知样本权重（基于软标签熵）')
+    parser.add_argument('--quality-gamma', type=float, default=1.0,
+                       help='质量权重的熵抑制指数γ（默认1.0，范围0.5-2.0）')
+    parser.add_argument('--quality-qmin', type=float, default=0.2,
+                       help='质量权重的下限裁剪qmin（默认0.2，范围0-1）')
 
     args = parser.parse_args()
 
@@ -1866,5 +2195,8 @@ if __name__ == '__main__':
         class_weight_alpha=args.class_weight_alpha,
         max_vox_per_subject=args.max_vox_per_subject,
         grad_clip_norm=args.grad_clip_norm if args.grad_clip_norm > 0 else None,
+        quality_weighting=args.quality_weighting,
+        quality_gamma=args.quality_gamma,
+        quality_qmin=args.quality_qmin,
         save_dir=args.save_dir
     )
