@@ -2,10 +2,11 @@
 
 ## 问题描述
 
-KAN模型训练成功完成，但在整理输出文件时出现问题：
+KAN和DeepMLP训练时出现多个问题：
 
-1. **符号链接删除失败**: `rm: cannot remove './results': Is a directory`
-2. **文件统计为0**: 所有文件计数显示为0（模型文件、3D Softmax、训练曲线等）
+1. **符号链接创建失败**: `ln: failed to create symbolic link './results': Operation not supported`
+2. **符号链接删除失败**: `rm: cannot remove './results': Is a directory`
+3. **文件统计为0**: 所有文件计数显示为0（模型文件、3D Softmax、训练曲线等）
 
 ```
 ✓ 模型文件: 0
@@ -25,7 +26,19 @@ KAN模型训练成功完成，但在整理输出文件时出现问题：
 
 ## 问题分析
 
-### 问题1: 符号链接删除失败
+### 问题1: 符号链接不支持
+
+**原因**: 某些文件系统不支持符号链接：
+- 网络文件系统（NFS、SMB/CIFS）
+- Windows文件系统（FAT32、exFAT）
+- Docker容器中的某些挂载卷
+- JupyterHub环境中的用户目录
+
+**错误信息**: `ln: failed to create symbolic link './results': Operation not supported`
+
+**影响**: 无法创建符号链接，导致训练立即失败。
+
+### 问题2: 符号链接删除失败
 
 **原因**: 脚本使用 `rm "$old_results_dir"` 来删除符号链接，但如果 `./results` 由于某些原因变成了真实目录，`rm` 命令会失败并报错。
 
@@ -42,7 +55,40 @@ KAN模型训练成功完成，但在整理输出文件时出现问题：
 
 ## 修复方案
 
-### 修复1: 改进符号链接删除逻辑 ✅
+### 修复1: 完全移除符号链接依赖 ✅ **最新修复**
+
+**修改位置**: `run_multiple_models.sh` 第290-348行
+
+**新策略**: 不使用符号链接，改用文件移动
+
+**修改后的流程**:
+```bash
+# 1. 备份现有的./results（如果有且不为空）
+if [[ -d "./results" ]] && [[ -n "$(ls -A "./results")" ]]; then
+    mv "./results" "./results_backup_$$"
+fi
+
+# 2. 创建新的./results目录
+mkdir -p "./results"
+
+# 3. 运行训练（train.py正常输出到./results）
+python train.py --model deep_mlp ...
+
+# 4. 训练完成后，移动文件到目标目录
+mv ./results/* ./training_runs/deep_mlp_bg_excl_*/results/
+
+# 5. 恢复备份（如果有）
+if [[ -d "./results_backup_$$" ]]; then
+    mv "./results_backup_$$" "./results"
+fi
+```
+
+**优势**:
+- ✅ 不依赖文件系统的符号链接支持
+- ✅ 适用于所有文件系统（NFS、SMB、Docker、Windows等）
+- ✅ 更可靠，减少失败风险
+
+### 修复2: 改进符号链接删除逻辑 ✅
 
 **修改位置**: `run_multiple_models.sh` 第316-320行和第333-337行
 

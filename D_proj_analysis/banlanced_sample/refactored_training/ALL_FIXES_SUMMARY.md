@@ -47,20 +47,26 @@ DeepMLP的hidden_dims为 `[2048, 1536, 1536, ...]`，但ResidualBlock是瓶颈�
 ## 修复3: 多模型训练脚本问题 ✅
 
 ### 问题
-1. 符号链接删除失败: `rm: cannot remove './results': Is a directory`
-2. 文件统计显示为0
+1. **符号链接创建失败**: `ln: failed to create symbolic link './results': Operation not supported`
+2. 符号链接删除失败: `rm: cannot remove './results': Is a directory`
+3. 文件统计显示为0
 
 ### 原因
-1. 使用 `rm` 删除目录会失败
-2. 符号链接使用相对路径可能解析错误
-3. `wc -l` 输出包含空格
+1. **文件系统不支持符号链接**（NFS、SMB、Docker、JupyterHub等）
+2. 使用 `rm` 删除目录会失败
+3. 符号链接使用相对路径可能解析错误
+4. `wc -l` 输出包含空格
 
 ### 修复
 在 `run_multiple_models.sh` 中：
-1. 改进符号链接删除逻辑（检查类型后删除）
-2. 使用绝对路径创建符号链接
-3. 使用 `tr -d ' '` 去除wc输出的空格
-4. 添加调试信息
+1. **完全移除符号链接依赖**，改用文件移动策略 ⭐
+2. 改进符号链接删除逻辑（检查类型后删除）
+3. 使用绝对路径创建符号链接（已弃用）
+4. 使用 `tr -d ' '` 去除wc输出的空格
+5. 添加调试信息
+
+**新策略流程**:
+- 备份现有 `./results` → 创建新的 `./results` → 训练 → 移动文件到目标目录 → 恢复备份
 
 ### 详细文档
 `MULTI_MODEL_FIX.md`

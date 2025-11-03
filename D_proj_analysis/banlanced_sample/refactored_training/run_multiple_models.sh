@@ -287,30 +287,23 @@ train_single_model() {
     # 运行训练
     echo -e "${BLUE}开始训练... (日志: $log_file)${NC}"
 
-    # 临时修改输出目录（通过修改train.py中的results路径）
-    # 我们需要在当前目录创建一个临时的results链接
+    # 策略：让train.py正常输出到./results，训练完成后移动文件
     local old_results_dir="./results"
     local temp_results_dir="${output_dir}/results"
 
     # 创建目标results目录
     mkdir -p "$temp_results_dir"
 
-    # 保存原始results目录（如果存在）
-    if [[ -d "$old_results_dir" ]] && [[ ! -L "$old_results_dir" ]]; then
+    # 保存原始results目录（如果存在且不为空）
+    if [[ -d "$old_results_dir" ]] && [[ -n "$(ls -A "$old_results_dir" 2>/dev/null)" ]]; then
+        echo -e "${YELLOW}备份现有results目录...${NC}"
         mv "$old_results_dir" "${old_results_dir}_backup_$$"
     elif [[ -L "$old_results_dir" ]]; then
         rm "$old_results_dir"
     fi
 
-    # 创建符号链接（使用绝对路径）
-    local abs_temp_results_dir=$(cd "$(dirname "$temp_results_dir")" && pwd)/$(basename "$temp_results_dir")
-    ln -sf "$abs_temp_results_dir" "$old_results_dir"
-
-    # 验证符号链接
-    if [[ ! -L "$old_results_dir" ]]; then
-        echo -e "${RED}❌ 创建符号链接失败${NC}"
-        return 1
-    fi
+    # 创建新的results目录
+    mkdir -p "$old_results_dir"
 
     # 运行训练
     if eval "$cmd" 2>&1 | tee "$log_file"; then
@@ -322,12 +315,14 @@ train_single_model() {
         echo -e "${GREEN}✅ 模型 $model_name 训练完成!${NC}"
         echo -e "${GREEN}   耗时: ${minutes}分${seconds}秒${NC}"
 
-        # 恢复results目录
-        if [[ -L "$old_results_dir" ]]; then
-            rm "$old_results_dir"
-        elif [[ -d "$old_results_dir" ]]; then
+        # 移动训练结果到目标目录
+        echo -e "${CYAN}移动训练结果到目标目录...${NC}"
+        if [[ -d "$old_results_dir" ]] && [[ -n "$(ls -A "$old_results_dir" 2>/dev/null)" ]]; then
+            mv "$old_results_dir"/* "$temp_results_dir/" 2>/dev/null || true
             rm -rf "$old_results_dir"
         fi
+
+        # 恢复备份的results目录
         if [[ -d "${old_results_dir}_backup_$$" ]]; then
             mv "${old_results_dir}_backup_$$" "$old_results_dir"
         fi
@@ -339,12 +334,12 @@ train_single_model() {
     else
         echo -e "${RED}❌ 模型 $model_name 训练失败!${NC}"
 
-        # 恢复results目录
-        if [[ -L "$old_results_dir" ]]; then
-            rm "$old_results_dir"
-        elif [[ -d "$old_results_dir" ]]; then
+        # 清理临时results目录
+        if [[ -d "$old_results_dir" ]]; then
             rm -rf "$old_results_dir"
         fi
+
+        # 恢复备份的results目录
         if [[ -d "${old_results_dir}_backup_$$" ]]; then
             mv "${old_results_dir}_backup_$$" "$old_results_dir"
         fi
