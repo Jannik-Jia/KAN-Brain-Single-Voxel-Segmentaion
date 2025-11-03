@@ -2,7 +2,6 @@
 # coding: utf-8
 
 """
-可视化工具
 Visualization utilities
 """
 
@@ -14,14 +13,14 @@ logger = logging.getLogger(__name__)
 
 def plot_training_history(history, save_path):
     """
-    绘制训练历史曲线
+    Plot training history curves
 
     Parameters:
     -----------
     history : dict
-        训练历史字典
+        Training history dictionary
     save_path : Path
-        保存路径
+        Save path
     """
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
     epochs = range(1, len(history['train_loss']) + 1)
@@ -67,4 +66,4 @@ def plot_training_history(history, save_path):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    logger.info(f"💾 训练图表已保存: {save_path}")
+    logger.info(f"💾 Training charts saved: {save_path}")
