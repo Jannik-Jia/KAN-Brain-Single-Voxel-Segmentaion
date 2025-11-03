@@ -258,6 +258,7 @@ class DeepMLP(nn.Module):
         self.layers = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
         self.attention_layers = nn.ModuleDict()
+        self.transition_layers = nn.ModuleList()  # 用于处理维度变化
 
         for i, hidden_dim in enumerate(hidden_dims):
             layer_modules = nn.ModuleDict()
@@ -290,6 +291,12 @@ class DeepMLP(nn.Module):
 
             # LayerNorm
             self.layer_norms.append(nn.LayerNorm(hidden_dim))
+
+            # 维度转换层：如果下一层维度不同，添加投影层
+            if i < len(hidden_dims) - 1 and hidden_dims[i] != hidden_dims[i + 1]:
+                self.transition_layers.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
+            else:
+                self.transition_layers.append(nn.Identity())
 
         # 输出层
         self.output_fc = nn.Linear(hidden_dims[-1], num_classes)
@@ -326,29 +333,35 @@ class DeepMLP(nn.Module):
         # 通过深层网络
         for i, layer_modules in enumerate(self.layers):
             # 随机深度（训练时随机跳过某些层）
+            skip_layer = False
             if self.training and self.stochastic_depth_rate > 0:
                 if torch.rand(1).item() < self.stochastic_depth_rate * (i / len(self.layers)):
-                    continue  # 跳过这一层
+                    skip_layer = True
 
-            # 主层
-            if 'block' in layer_modules:
-                x = layer_modules['block'](x)
-            else:
-                identity = x
-                x = layer_modules['linear'](x)
-                x = layer_modules['bn'](x)
-                x = F.relu(x)
-                x = layer_modules['dropout'](x)
-                x = x + identity  # 手动残差连接
+            if not skip_layer:
+                # 主层
+                if 'block' in layer_modules:
+                    x = layer_modules['block'](x)
+                else:
+                    identity = x
+                    x = layer_modules['linear'](x)
+                    x = layer_modules['bn'](x)
+                    x = F.relu(x)
+                    x = layer_modules['dropout'](x)
+                    x = x + identity  # 手动残差连接
 
-            # 自注意力
-            attn_key = f'attn_{i}'
-            if attn_key in self.attention_layers:
-                attn_out = self.attention_layers[attn_key](x)
-                x = x + attn_out  # 残差连接
+                # 自注意力
+                attn_key = f'attn_{i}'
+                if attn_key in self.attention_layers:
+                    attn_out = self.attention_layers[attn_key](x)
+                    x = x + attn_out  # 残差连接
 
-            # LayerNorm
-            x = self.layer_norms[i](x)
+                # LayerNorm
+                x = self.layer_norms[i](x)
+
+            # 维度转换（无论是否跳过该层，都需要转换维度以匹配下一层）
+            if i < len(self.transition_layers):
+                x = self.transition_layers[i](x)
 
         # 输出
         logits = self.output_fc(x)

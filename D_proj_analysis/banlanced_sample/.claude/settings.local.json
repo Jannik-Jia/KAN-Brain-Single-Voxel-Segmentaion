@@ -1,8 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)",
-      "Bash(grep:*)"
+      "Bash(awk:*)",
+      "Bash(done)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

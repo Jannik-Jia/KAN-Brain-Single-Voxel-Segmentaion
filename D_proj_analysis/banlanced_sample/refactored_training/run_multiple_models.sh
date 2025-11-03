@@ -292,6 +292,9 @@ train_single_model() {
     local old_results_dir="./results"
     local temp_results_dir="${output_dir}/results"
 
+    # 创建目标results目录
+    mkdir -p "$temp_results_dir"
+
     # 保存原始results目录（如果存在）
     if [[ -d "$old_results_dir" ]] && [[ ! -L "$old_results_dir" ]]; then
         mv "$old_results_dir" "${old_results_dir}_backup_$$"
@@ -299,8 +302,15 @@ train_single_model() {
         rm "$old_results_dir"
     fi
 
-    # 创建符号链接
-    ln -sf "$temp_results_dir" "$old_results_dir"
+    # 创建符号链接（使用绝对路径）
+    local abs_temp_results_dir=$(cd "$(dirname "$temp_results_dir")" && pwd)/$(basename "$temp_results_dir")
+    ln -sf "$abs_temp_results_dir" "$old_results_dir"
+
+    # 验证符号链接
+    if [[ ! -L "$old_results_dir" ]]; then
+        echo -e "${RED}❌ 创建符号链接失败${NC}"
+        return 1
+    fi
 
     # 运行训练
     if eval "$cmd" 2>&1 | tee "$log_file"; then
@@ -313,7 +323,11 @@ train_single_model() {
         echo -e "${GREEN}   耗时: ${minutes}分${seconds}秒${NC}"
 
         # 恢复results目录
-        rm "$old_results_dir"
+        if [[ -L "$old_results_dir" ]]; then
+            rm "$old_results_dir"
+        elif [[ -d "$old_results_dir" ]]; then
+            rm -rf "$old_results_dir"
+        fi
         if [[ -d "${old_results_dir}_backup_$$" ]]; then
             mv "${old_results_dir}_backup_$$" "$old_results_dir"
         fi
@@ -326,7 +340,11 @@ train_single_model() {
         echo -e "${RED}❌ 模型 $model_name 训练失败!${NC}"
 
         # 恢复results目录
-        rm "$old_results_dir"
+        if [[ -L "$old_results_dir" ]]; then
+            rm "$old_results_dir"
+        elif [[ -d "$old_results_dir" ]]; then
+            rm -rf "$old_results_dir"
+        fi
         if [[ -d "${old_results_dir}_backup_$$" ]]; then
             mv "${old_results_dir}_backup_$$" "$old_results_dir"
         fi
@@ -349,11 +367,16 @@ organize_outputs() {
     local results_dir="${output_dir}/results"
 
     if [[ -d "$results_dir" ]]; then
-        # 统计文件
-        local pth_count=$(find "$results_dir" -name "*.pth" 2>/dev/null | wc -l)
-        local nii_count=$(find "$results_dir" -name "*.nii.gz" 2>/dev/null | wc -l)
-        local png_count=$(find "$results_dir" -name "*.png" 2>/dev/null | wc -l)
-        local analysis_count=$(find "$results_dir" -name "per_class_analysis_*" -type d 2>/dev/null | wc -l)
+        # 统计文件（去除空格）
+        local pth_count=$(find "$results_dir" -name "*.pth" 2>/dev/null | wc -l | tr -d ' ')
+        local nii_count=$(find "$results_dir" -name "*.nii.gz" 2>/dev/null | wc -l | tr -d ' ')
+        local png_count=$(find "$results_dir" -name "*.png" 2>/dev/null | wc -l | tr -d ' ')
+        local analysis_count=$(find "$results_dir" -name "per_class_analysis_*" -type d 2>/dev/null | wc -l | tr -d ' ')
+
+        # 调试信息
+        echo -e "${YELLOW}  调试: 检查目录 $results_dir${NC}"
+        echo -e "${YELLOW}  调试: 目录内容:${NC}"
+        ls -la "$results_dir" 2>/dev/null | head -10
 
         echo -e "${GREEN}✓ 模型文件: $pth_count${NC}"
         echo -e "${GREEN}✓ 3D Softmax: $nii_count${NC}"

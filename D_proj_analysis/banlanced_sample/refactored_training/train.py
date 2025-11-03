@@ -19,6 +19,11 @@ import sys
 import argparse
 import time
 
+# 添加父目录到Python路径，以便导入visualization_toolkit
+parent_dir = Path(__file__).resolve().parent.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+
 # 导入模型
 from models import get_model, list_available_models, get_model_description
 
@@ -42,9 +47,10 @@ try:
         save_detailed_results
     )
     VISUALIZATION_AVAILABLE = True
-except ImportError:
+    print("✓ visualization_toolkit loaded successfully")
+except ImportError as e:
     VISUALIZATION_AVAILABLE = False
-    print("⚠️  Warning: visualization_toolkit not found. Per-class analysis will be skipped.")
+    print(f"⚠️  Warning: visualization_toolkit not found ({e}). Per-class analysis will be skipped.")
 
 
 def setup_logging(log_file='training.log'):

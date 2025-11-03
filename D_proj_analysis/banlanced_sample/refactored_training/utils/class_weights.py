@@ -52,14 +52,26 @@ def compute_class_weights(labels, num_classes, method='inverse_freq'):
         logger.info(f"{cls_id:<10} {int(count):<15,} {percentage:<10.2f}")
 
     if method == 'inverse_freq':
-        # 避免除以零
-        class_counts = np.maximum(class_counts, 1.0)
+        # 记录没有样本的类别
+        zero_count_classes = np.where(class_counts == 0)[0]
+        if len(zero_count_classes) > 0:
+            logger.warning(f"⚠️ 以下类别没有训练样本: {zero_count_classes.tolist()}")
+            logger.warning(f"   这些类别的权重将被设置为0")
+
+        # 避免除以零，但保持0样本的类别为0权重
+        safe_counts = np.where(class_counts > 0, class_counts, 1.0)
 
         # 计算权重：样本数的倒数
-        weights = 1.0 / class_counts
+        weights = 1.0 / safe_counts
 
-        # 归一化使平均权重为1
-        weights = weights / weights.mean()
+        # 将没有样本的类别权重设置为0
+        weights[class_counts == 0] = 0.0
+
+        # 归一化使平均权重为1（只对非零权重归一化）
+        non_zero_weights = weights[weights > 0]
+        if len(non_zero_weights) > 0:
+            scale_factor = non_zero_weights.mean()
+            weights = weights / scale_factor
 
     elif method == 'effective_num':
         # Effective Number of Samples
