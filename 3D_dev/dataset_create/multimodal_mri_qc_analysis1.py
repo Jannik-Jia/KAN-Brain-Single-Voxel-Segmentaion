@@ -630,6 +630,127 @@ def process_patient(mat_file_path, base_output_dir):
         brain_mask = mri_data['region_mask'].astype(bool)
         region_labels = mri_data['region_labels']
 
+
+        # --- 任务6: 面板级可视化导出（优先执行）---
+        if PANEL_ENABLED:
+            print("\n📌 任务6: 面板级可视化导出...")
+
+            # 创建输出目录结构
+            viz_root = patient_output_dir / "visualizations_panel"
+            axis_names = ['axial', 'coronal', 'sagittal']
+            view_types = ['checkerboard', 'edge_overlay', 'fading_gif']
+
+            for axis_name in axis_names:
+                for view_type in view_types:
+                    (viz_root / axis_name / view_type).mkdir(parents=True, exist_ok=True)
+
+            # 提取参考模态（MPRAGE）
+            ref_img3d = extract_modality(data_4d, REFERENCE_MODALITY, brain_mask)
+
+            # 获取非参考模态列表
+            mod_indices = [m for m in SELECTED_MODALITIES if m != REFERENCE_MODALITY]
+
+            # 记录manifest信息
+            manifest = []
+
+            # 遍历三个方向
+            for axis_idx, axis_name in enumerate(axis_names):
+                n_slices = ref_img3d.shape[axis_idx]
+                axis_abbr = {'axial': 'ax', 'coronal': 'co', 'sagittal': 'sa'}[axis_name]
+
+                print(f"   处理 {axis_name} 方向 (共{n_slices}层)...")
+
+                # 按stride采样切片
+                for slice_idx in range(0, n_slices, SLICE_STRIDE):
+                    # 提取参考切片和掩膜
+                    ref2d = get_slice_2d(ref_img3d, axis_idx, slice_idx)
+                    mask2d = get_slice_2d(brain_mask.astype(np.float32), axis_idx, slice_idx).astype(bool)
+
+                    # 有效性检查
+                    brain_ratio = mask2d.mean()
+                    if brain_ratio < MIN_BRAIN_RATIO:
+                        print(f"      跳过 {axis_name} slice={slice_idx} (脑实质占比 {brain_ratio:.3f} < {MIN_BRAIN_RATIO})")
+                        continue
+
+                    # 归一化参考切片
+                    ref2d_norm = normalize_slice_percentile(ref2d, mask2d)
+
+                    # 为每个模态生成tiles
+                    checker_tiles = []
+                    edge_tiles = []
+                    fading_tile_frames = []  # list of list: [mod][frame]
+
+                    for mod_idx in mod_indices:
+                        mod_name = MODALITY_NAMES.get(mod_idx, f"Ch{mod_idx}")
+                        annotation_text = f"{mod_name} | {axis_name} | slice={slice_idx}"
+
+                        # 提取模态切片
+                        mod_img3d = extract_modality(data_4d, mod_idx, brain_mask)
+                        mod2d = get_slice_2d(mod_img3d, axis_idx, slice_idx)
+                        mod2d_norm = normalize_slice_percentile(mod2d, mask2d)
+
+                        # 生成三种tile
+                        checker_tile = build_checkerboard_tile(ref2d_norm, mod2d_norm, TILE_PX,
+                                                              annotation_text=annotation_text,
+                                                              annotation_height=ANNOTATION_BAND_PX)
+                        checker_tiles.append(checker_tile)
+
+                        edge_tile = build_edge_overlay_tile(ref2d_norm, mod2d_norm, mask2d,
+                                                           draw_mod_edge=SAVE_DUAL_EDGES,
+                                                           annotation_text=annotation_text,
+                                                           annotation_height=ANNOTATION_BAND_PX)
+                        edge_tiles.append(edge_tile)
+
+                        fading_frames = build_fading_frames_for_tile(ref2d_norm, mod2d_norm, FADING_FRAMES_K,
+                                                                    annotation_text=annotation_text,
+                                                                    annotation_height=ANNOTATION_BAND_PX)
+                        fading_tile_frames.append(fading_frames)
+
+                    # 拼接面板并保存
+
+                    # (1) 棋盘格面板
+                    checker_panel = tile_mosaic(checker_tiles, TILES_PER_ROW, TILE_PAD_PX, PANEL_BG_VAL)
+                    checker_path = viz_root / axis_name / 'checkerboard' / f"{axis_name}_checker_panel_vsMPRAGE_{axis_abbr}{slice_idx:03d}_tile{TILE_PX}.png"
+                    save_png_uint8(checker_panel, checker_path, compress_level=PNG_COMPRESS_LEVEL)
+
+                    # (2) 边缘叠加面板
+                    edge_panel = tile_mosaic(edge_tiles, TILES_PER_ROW, TILE_PAD_PX, PANEL_BG_VAL)
+                    edge_path = viz_root / axis_name / 'edge_overlay' / f"{axis_name}_edge_panel_MPRAGEonMOD_{axis_abbr}{slice_idx:03d}.png"
+                    save_png_uint8(edge_panel, edge_path, compress_level=PNG_COMPRESS_LEVEL)
+
+                    # (3) 融合GIF面板（逐帧拼接）
+                    gif_panel_frames = []
+                    for frame_idx in range(FADING_FRAMES_K):
+                        # 收集所有模态在当前帧的tiles
+                        frame_tiles = [fading_tile_frames[mod_i][frame_idx] for mod_i in range(len(mod_indices))]
+                        panel_frame = tile_mosaic(frame_tiles, TILES_PER_ROW, TILE_PAD_PX, PANEL_BG_VAL)
+                        gif_panel_frames.append(panel_frame)
+
+                    gif_path = viz_root / axis_name / 'fading_gif' / f"{axis_name}_fading_panel_vsMPRAGE_{axis_abbr}{slice_idx:03d}_K{FADING_FRAMES_K}.gif"
+                    save_gif_uint8(gif_panel_frames, gif_path, fps=GIF_FPS)
+
+                    # 记录manifest
+                    manifest.append({
+                        'axis': axis_name,
+                        'slice_idx': slice_idx,
+                        'brain_ratio': float(brain_ratio),
+                        'n_modalities': len(mod_indices),
+                        'checker_path': str(checker_path.relative_to(patient_output_dir)),
+                        'edge_path': str(edge_path.relative_to(patient_output_dir)),
+                        'gif_path': str(gif_path.relative_to(patient_output_dir))
+                    })
+
+                    print(f"      ✓ {axis_name} slice={slice_idx} (脑占比={brain_ratio:.2f})")
+
+            # 保存manifest
+            manifest_path = viz_root / 'panel_manifest.json'
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+            print(f"✅ 任务6 完成，共生成 {len(manifest)} 组面板")
+            print(f"   💾 Manifest已保存: {manifest_path}")
+
+
         # --- 任务1: 模态间相似性矩阵 (来自 Cell 6) ---
         print("\n📌 任务1: 计算模态间相似性矩阵...")
         n_modalities = len(SELECTED_MODALITIES)
@@ -1015,128 +1136,7 @@ def process_patient(mat_file_path, base_output_dir):
 
         print(f"   💾 JSON报告已保存: {json_path}")
 
-
-        # --- 任务6: 面板级可视化导出 ---
-        if PANEL_ENABLED:
-            print("\n📌 任务6: 面板级可视化导出...")
-
-            # 创建输出目录结构
-            viz_root = patient_output_dir / "visualizations_panel"
-            axis_names = ['axial', 'coronal', 'sagittal']
-            view_types = ['checkerboard', 'edge_overlay', 'fading_gif']
-
-            for axis_name in axis_names:
-                for view_type in view_types:
-                    (viz_root / axis_name / view_type).mkdir(parents=True, exist_ok=True)
-
-            # 提取参考模态（MPRAGE）
-            ref_img3d = extract_modality(data_4d, REFERENCE_MODALITY, brain_mask)
-
-            # 获取非参考模态列表
-            mod_indices = [m for m in SELECTED_MODALITIES if m != REFERENCE_MODALITY]
-
-            # 记录manifest信息
-            manifest = []
-
-            # 遍历三个方向
-            for axis_idx, axis_name in enumerate(axis_names):
-                n_slices = ref_img3d.shape[axis_idx]
-                axis_abbr = {'axial': 'ax', 'coronal': 'co', 'sagittal': 'sa'}[axis_name]
-
-                print(f"   处理 {axis_name} 方向 (共{n_slices}层)...")
-
-                # 按stride采样切片
-                for slice_idx in range(0, n_slices, SLICE_STRIDE):
-                    # 提取参考切片和掩膜
-                    ref2d = get_slice_2d(ref_img3d, axis_idx, slice_idx)
-                    mask2d = get_slice_2d(brain_mask.astype(np.float32), axis_idx, slice_idx).astype(bool)
-
-                    # 有效性检查
-                    brain_ratio = mask2d.mean()
-                    if brain_ratio < MIN_BRAIN_RATIO:
-                        print(f"      跳过 {axis_name} slice={slice_idx} (脑实质占比 {brain_ratio:.3f} < {MIN_BRAIN_RATIO})")
-                        continue
-
-                    # 归一化参考切片
-                    ref2d_norm = normalize_slice_percentile(ref2d, mask2d)
-
-                    # 为每个模态生成tiles
-                    checker_tiles = []
-                    edge_tiles = []
-                    fading_tile_frames = []  # list of list: [mod][frame]
-
-                    for mod_idx in mod_indices:
-                        mod_name = MODALITY_NAMES.get(mod_idx, f"Ch{mod_idx}")
-                        annotation_text = f"{mod_name} | {axis_name} | slice={slice_idx}"
-
-                        # 提取模态切片
-                        mod_img3d = extract_modality(data_4d, mod_idx, brain_mask)
-                        mod2d = get_slice_2d(mod_img3d, axis_idx, slice_idx)
-                        mod2d_norm = normalize_slice_percentile(mod2d, mask2d)
-
-                        # 生成三种tile
-                        checker_tile = build_checkerboard_tile(ref2d_norm, mod2d_norm, TILE_PX,
-                                                              annotation_text=annotation_text,
-                                                              annotation_height=ANNOTATION_BAND_PX)
-                        checker_tiles.append(checker_tile)
-
-                        edge_tile = build_edge_overlay_tile(ref2d_norm, mod2d_norm, mask2d,
-                                                           draw_mod_edge=SAVE_DUAL_EDGES,
-                                                           annotation_text=annotation_text,
-                                                           annotation_height=ANNOTATION_BAND_PX)
-                        edge_tiles.append(edge_tile)
-
-                        fading_frames = build_fading_frames_for_tile(ref2d_norm, mod2d_norm, FADING_FRAMES_K,
-                                                                    annotation_text=annotation_text,
-                                                                    annotation_height=ANNOTATION_BAND_PX)
-                        fading_tile_frames.append(fading_frames)
-
-                    # 拼接面板并保存
-
-                    # (1) 棋盘格面板
-                    checker_panel = tile_mosaic(checker_tiles, TILES_PER_ROW, TILE_PAD_PX, PANEL_BG_VAL)
-                    checker_path = viz_root / axis_name / 'checkerboard' / f"{axis_name}_checker_panel_vsMPRAGE_{axis_abbr}{slice_idx:03d}_tile{TILE_PX}.png"
-                    save_png_uint8(checker_panel, checker_path, compress_level=PNG_COMPRESS_LEVEL)
-
-                    # (2) 边缘叠加面板
-                    edge_panel = tile_mosaic(edge_tiles, TILES_PER_ROW, TILE_PAD_PX, PANEL_BG_VAL)
-                    edge_path = viz_root / axis_name / 'edge_overlay' / f"{axis_name}_edge_panel_MPRAGEonMOD_{axis_abbr}{slice_idx:03d}.png"
-                    save_png_uint8(edge_panel, edge_path, compress_level=PNG_COMPRESS_LEVEL)
-
-                    # (3) 融合GIF面板（逐帧拼接）
-                    gif_panel_frames = []
-                    for frame_idx in range(FADING_FRAMES_K):
-                        # 收集所有模态在当前帧的tiles
-                        frame_tiles = [fading_tile_frames[mod_i][frame_idx] for mod_i in range(len(mod_indices))]
-                        panel_frame = tile_mosaic(frame_tiles, TILES_PER_ROW, TILE_PAD_PX, PANEL_BG_VAL)
-                        gif_panel_frames.append(panel_frame)
-
-                    gif_path = viz_root / axis_name / 'fading_gif' / f"{axis_name}_fading_panel_vsMPRAGE_{axis_abbr}{slice_idx:03d}_K{FADING_FRAMES_K}.gif"
-                    save_gif_uint8(gif_panel_frames, gif_path, fps=GIF_FPS)
-
-                    # 记录manifest
-                    manifest.append({
-                        'axis': axis_name,
-                        'slice_idx': slice_idx,
-                        'brain_ratio': float(brain_ratio),
-                        'n_modalities': len(mod_indices),
-                        'checker_path': str(checker_path.relative_to(patient_output_dir)),
-                        'edge_path': str(edge_path.relative_to(patient_output_dir)),
-                        'gif_path': str(gif_path.relative_to(patient_output_dir))
-                    })
-
-                    print(f"      ✓ {axis_name} slice={slice_idx} (脑占比={brain_ratio:.2f})")
-
-            # 保存manifest
-            manifest_path = viz_root / 'panel_manifest.json'
-            with open(manifest_path, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
-
-            print(f"✅ 任务6 完成，共生成 {len(manifest)} 组面板")
-            print(f"   💾 Manifest已保存: {manifest_path}")
-
-
-        print(f"✅ 完成处理: {patient_name}")
+        print(f"\n✅ 完成处理: {patient_name}")
 
         plt.close('all') # 确保关闭所有图形
 
