@@ -1,0 +1,4 @@
+results/
+    dicom_files.csv
+    dicom_series_summary.csv
+    dir_tree.txt
