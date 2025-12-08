@@ -10,7 +10,7 @@ EXCLUDE_FILE="./exclude_subjects.txt"
 
 # 训练参数（与原始一致）
 EPOCHS=25
-BATCH_SIZE=102400
+BATCH_SIZE=4096
 SAMPLES=50000
 
 # 固定的测试被试（选一个正确的被试，用于所有实验）
