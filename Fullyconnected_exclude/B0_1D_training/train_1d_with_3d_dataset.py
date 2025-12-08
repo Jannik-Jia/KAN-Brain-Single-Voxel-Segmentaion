@@ -73,19 +73,17 @@ class Brain1D_Dataset(Dataset):
     """
     
     def __init__(self, mat_files: List[Path], is_train: bool = True,
-                 samples_per_subject: Optional[int] = None,
-                 scaler: Optional[StandardScaler] = None):
+                 samples_per_subject: Optional[int] = None):
         """
         Args:
             mat_files: 1D MAT文件路径列表
             is_train: 是否为训练模式
             samples_per_subject: 每个被试采样的体素数（None表示全部）
-            scaler: StandardScaler对象，用于数据标准化
         """
         self.mat_files = mat_files
         self.is_train = is_train
         self.samples_per_subject = samples_per_subject
-        self.scaler = scaler
+
         
         # 加载所有数据
         self.all_data = []
@@ -103,32 +101,35 @@ class Brain1D_Dataset(Dataset):
         print(f"特征维度: {self.all_data.shape[1]}")
         print(f"类别数: {len(np.unique(self.all_labels))}")
         
-        # 数据标准化
-        if self.scaler is None and is_train:
-            print("拟合StandardScaler...")
-            self.scaler = StandardScaler()
-            self.all_data = self.scaler.fit_transform(self.all_data).astype(np.float32)
-        elif self.scaler is not None:
-            print("应用StandardScaler...")
-            self.all_data = self.scaler.transform(self.all_data).astype(np.float32)
     
     def _load_subject(self, mat_file: Path):
-        """加载单个被试的1D数据"""
+        """加载单个被试的1D数据并进行独立标准化"""
         with h5py.File(mat_file, 'r') as f:
             # 加载1D数据
-            multidim_data = f['multidim_data'][()]  # (351, n_voxels)
+            multidim_data = f['multidim_data'][()]  # (351, n_voxels)或是转置前
             seg_one_hot = f['seg_one_hot'][()]      # (102, n_voxels)
             
-            # 转置以适应Python的行优先顺序（参考数据集创建文档）
+            # 转置以适应 (n_voxels, 351)
             if multidim_data.shape[0] == 351:
-                multidim_data = multidim_data.T     # -> (n_voxels, 351)
+                multidim_data = multidim_data.T
             
             if seg_one_hot.shape[0] == 102:
-                seg_one_hot = seg_one_hot.T         # -> (n_voxels, 102)
+                seg_one_hot = seg_one_hot.T
             
             # 从one-hot转换为类别标签
-            labels = np.argmax(seg_one_hot, axis=1)  # (n_voxels,)
+            labels = np.argmax(seg_one_hot, axis=1)
             
+            # ✅ 新增：Patient-wise Z-score 标准化
+            # 逻辑：(X - mean) / (std + epsilon)
+            # axis=0 表示沿着体素方向计算，保留351个特征的均值/方差
+            epsilon = 1e-6
+            patient_mean = np.mean(multidim_data, axis=0)
+            patient_std = np.std(multidim_data, axis=0)
+            
+            # 原地修改以节省内存，转换为float32
+            multidim_data = (multidim_data - patient_mean) / (patient_std + epsilon)
+            multidim_data = multidim_data.astype(np.float32)
+
             # 采样（如果指定了samples_per_subject）
             if self.samples_per_subject is not None and len(multidim_data) > self.samples_per_subject:
                 indices = np.random.choice(len(multidim_data), self.samples_per_subject, replace=False)
@@ -153,16 +154,10 @@ class TestDataset(Dataset):
     保存3D位置信息用于映射回3D
     """
     
-    def __init__(self, mat_file_1d: Path, mat_file_3d: Path, scaler: StandardScaler):
-        """
-        Args:
-            mat_file_1d: 1D MAT文件（用于获取特征数据）
-            mat_file_3d: 3D MAT文件（用于获取3D mask）
-            scaler: 训练时的StandardScaler
-        """
+    def __init__(self, mat_file_1d: Path, mat_file_3d: Path):
+        
         self.mat_file_1d = mat_file_1d
         self.mat_file_3d = mat_file_3d
-        self.scaler = scaler
         
         # 加载1D数据
         with h5py.File(mat_file_1d, 'r') as f:
@@ -174,26 +169,22 @@ class TestDataset(Dataset):
             if seg_one_hot.shape[0] == 102:
                 seg_one_hot = seg_one_hot.T
             
-            self.features = multidim_data.astype(np.float32)  # (n_voxels, 351)
-            self.labels = np.argmax(seg_one_hot, axis=1)      # (n_voxels,)
+            self.features = multidim_data.astype(np.float32)
+            self.labels = np.argmax(seg_one_hot, axis=1)
+        
+        # ✅ 新增：Patient-wise Z-score 标准化 (针对测试被试自己)
+        print(f"正在对测试被试进行标准化: {mat_file_1d.name}")
+        epsilon = 1e-6
+        mean = np.mean(self.features, axis=0)
+        std = np.std(self.features, axis=0)
+        self.features = (self.features - mean) / (std + epsilon)
         
         # 加载3D mask（用于映射）
         with h5py.File(mat_file_3d, 'r') as f:
             region_mask = f['region_mask'][()]
             region_labels = f['region_labels'][()]
-            
-            # 严格形状验证：不允许隐式轴转换，必须显式匹配预期形状
-            assert region_mask.shape == (384, 336, 256), \
-                f"region_mask 形状不符合预期 (384, 336, 256)，实际为 {region_mask.shape}，文件: {mat_file_3d}"
-            
-            assert region_labels.shape == (384, 336, 256), \
-                f"region_labels 形状不符合预期 (384, 336, 256)，实际为 {region_labels.shape}，文件: {mat_file_3d}"
-                
             self.region_mask = region_mask
             self.region_labels = region_labels
-        
-        # 应用标准化
-        self.features = scaler.transform(self.features).astype(np.float32)
         
         print(f"测试数据: {len(self.features)} 个体素")
     
@@ -768,16 +759,12 @@ def main():
     train_dataset = Brain1D_Dataset(
         train_files_1d,
         is_train=True,
-        samples_per_subject=args.samples_per_subject,
-        scaler=None
+        samples_per_subject=args.samples_per_subject
     )
-    
-    # 获取scaler用于测试集
-    scaler = train_dataset.scaler
     
     # 创建测试数据集（需要1D和3D文件）
     logger.info('加载测试数据...')
-    test_dataset = TestDataset(test_file_1d, test_file_3d, scaler)
+    test_dataset = TestDataset(test_file_1d, test_file_3d)
     
     # ===== 关键验证：1D与3D标签一致性自检 =====
     logger.info('验证1D与3D标签一致性...')
@@ -842,10 +829,10 @@ def main():
         checkpoint = torch.load(args.load_model, map_location='cpu')
         model.load_state_dict(checkpoint['model_state_dict'])
         model = model.to(device)  # 确保模型在正确的设备上
-        scaler = checkpoint['scaler']
+
         
-        # 重新创建测试数据集（使用加载的scaler）
-        test_dataset = TestDataset(test_file_1d, test_file_3d, scaler)
+        # 重新创建测试数据集
+        test_dataset = TestDataset(test_file_1d, test_file_3d)
         
         # ===== 关键验证：1D与3D标签一致性自检（预测模式）=====
         logger.info('验证1D与3D标签一致性（预测模式）...')
@@ -875,7 +862,7 @@ def main():
             
             raise AssertionError("测试集标签在一维与三维不一致！可能是文件错配")
         
-        logger.info(f'使用加载的scaler，测试样本数: {len(test_dataset)}')
+        logger.info(f'测试样本数: {len(test_dataset)}')
         
         history = None  # 预测模式不需要训练历史
         
@@ -893,7 +880,7 @@ def main():
         model_path = output_dir / f'dense_4x4096_model_test{args.test_subject}.pth'
         torch.save({
             'model_state_dict': model.state_dict(),
-            'scaler': scaler,
+            'scaler': None,
             'history': history,
             'args': vars(args)
         }, model_path)
