@@ -5,17 +5,16 @@
 # ===== 配置参数 =====
 DATA_DIR_1D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D/"
 DATA_DIR_3D="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated/"
-OUTPUT_BASE_DIR="./results_exclude_experiments"
+OUTPUT_BASE_DIR="./results_exclude_experiments_full"
 EXCLUDE_FILE="./exclude_subjects.txt"
 
 # 训练参数（与原始一致）
 EPOCHS=25
 BATCH_SIZE=4096
-SAMPLES=50000
+# SAMPLES=50000  <-- 这里注释是可以的，因为不在 cmd 字符串里
 
-# 固定的测试被试（选一个正确的被试，用于所有实验）
-# 修改为你想要的正确被试名称（如 "ODP_01" 或者留空使用默认的被试1）
-FIXED_TEST_SUBJECT="ODP_01"  # 例如: "ODP_01" 或 "qhlazec"
+# 固定的测试被试
+FIXED_TEST_SUBJECT="ODP_01"
 
 # ===== 读取排除列表 =====
 echo "读取配准问题数据集列表..."
@@ -41,7 +40,7 @@ for i in "${!EXCLUDE_SUBJECTS[@]}"; do
 
     mkdir -p "${output_dir}"
 
-    # 构建命令
+    # 构建命令 (注意：直接删除了 samples_per_subject 那一行)
     cmd="python train_1d_with_3d_dataset.py \
         --data_dir_1d ${DATA_DIR_1D} \
         --data_dir_3d ${DATA_DIR_3D} \
@@ -49,7 +48,6 @@ for i in "${!EXCLUDE_SUBJECTS[@]}"; do
         --exclude_single ${exclude_subject} \
         --batch_size ${BATCH_SIZE} \
         --epochs ${EPOCHS} \
-        --samples_per_subject ${SAMPLES} \
         --save_predictions"
 
     # 如果设置了固定测试被试，添加参数
@@ -60,6 +58,7 @@ for i in "${!EXCLUDE_SUBJECTS[@]}"; do
     fi
 
     # 执行训练
+    echo "执行命令: ${cmd}"
     eval ${cmd}
 
     echo "实验 ${experiment_num} 完成！"
@@ -76,7 +75,7 @@ echo "输出目录: ${output_dir}"
 
 mkdir -p "${output_dir}"
 
-# 构建命令
+# 构建命令 (注意：直接删除了 samples_per_subject 那一行)
 cmd="python train_1d_with_3d_dataset.py \
     --data_dir_1d ${DATA_DIR_1D} \
     --data_dir_3d ${DATA_DIR_3D} \
@@ -84,7 +83,6 @@ cmd="python train_1d_with_3d_dataset.py \
     --exclude_subjects ${EXCLUDE_FILE} \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
-    --samples_per_subject ${SAMPLES} \
     --save_predictions"
 
 # 如果设置了固定测试被试，添加参数
@@ -95,6 +93,7 @@ else
 fi
 
 # 执行训练
+echo "执行命令: ${cmd}"
 eval ${cmd}
 
 echo "实验 7 完成！"
@@ -109,10 +108,3 @@ python compare_exclude_results_extended.py \
 echo ""
 echo "===== 所有实验完成！ ====="
 echo "结果保存在: ${OUTPUT_BASE_DIR}"
-echo "详细报告: ${OUTPUT_BASE_DIR}/comparison_report_extended.json"
-echo ""
-echo "生成的可视化图表:"
-echo "  - comprehensive_metrics_comparison.png  (综合指标对比)"
-echo "  - topk_accuracy_comparison.png          (Top-K准确率对比)"
-echo "  - metrics_correlation_heatmap.png       (指标相关性热力图)"
-echo "  - single_vs_all_boxplot.png             (单个vs所有箱线图)"
