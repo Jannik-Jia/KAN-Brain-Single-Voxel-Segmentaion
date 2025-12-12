@@ -9,7 +9,7 @@ OUTPUT_DIR="./results_1d_with_3d"
 
 # Alex的超参数
 EPOCHS=25
-BATCH_SIZE=128
+BATCH_SIZE=8192
 
 # 创建输出目录
 mkdir -p ${OUTPUT_DIR}
