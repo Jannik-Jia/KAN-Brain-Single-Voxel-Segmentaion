@@ -21,9 +21,201 @@ import argparse
 from tqdm import tqdm
 import logging
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score
+from sklearn.metrics import (
+    f1_score, accuracy_score, balanced_accuracy_score,
+    cohen_kappa_score, log_loss
+)
 import gc
 import subprocess
+
+
+# ==================== 指标计算辅助函数 ====================
+
+def compute_topk_accuracy(y_true, y_pred_proba, k=5):
+    """
+    计算 Top-K 准确率
+
+    Args:
+        y_true: (N,) 真实标签
+        y_pred_proba: (N, C) 预测概率
+        k: Top-K 的 K 值
+
+    Returns:
+        top_k_accuracy: float
+    """
+    if isinstance(y_pred_proba, list):
+        y_pred_proba = np.array(y_pred_proba)
+    if isinstance(y_true, list):
+        y_true = np.array(y_true)
+
+    top_k_preds = np.argsort(y_pred_proba, axis=1)[:, -k:]
+    correct = np.any(top_k_preds == y_true[:, None], axis=1)
+    return float(correct.mean())
+
+
+def compute_ece(y_true, y_pred_proba, n_bins=10):
+    """
+    计算期望校准误差 (Expected Calibration Error)
+
+    Args:
+        y_true: (N,) 真实标签
+        y_pred_proba: (N, C) 预测概率
+        n_bins: 分桶数量
+
+    Returns:
+        ece: float
+    """
+    if isinstance(y_pred_proba, list):
+        y_pred_proba = np.array(y_pred_proba)
+    if isinstance(y_true, list):
+        y_true = np.array(y_true)
+
+    confidences = np.max(y_pred_proba, axis=1)
+    predictions = np.argmax(y_pred_proba, axis=1)
+    accuracies = (predictions == y_true)
+
+    ece = 0.0
+    bin_boundaries = np.linspace(0, 1, n_bins + 1)
+
+    for i in range(n_bins):
+        mask = (confidences > bin_boundaries[i]) & (confidences <= bin_boundaries[i+1])
+        if mask.sum() > 0:
+            bin_acc = accuracies[mask].mean()
+            bin_conf = confidences[mask].mean()
+            ece += (mask.sum() / len(y_true)) * abs(bin_acc - bin_conf)
+
+    return float(ece)
+
+
+def compute_brier_score(y_true, y_pred_proba):
+    """
+    计算 Brier 分数（多类别）
+
+    Args:
+        y_true: (N,) 真实标签
+        y_pred_proba: (N, C) 预测概率
+
+    Returns:
+        brier_score: float
+    """
+    if isinstance(y_pred_proba, list):
+        y_pred_proba = np.array(y_pred_proba)
+    if isinstance(y_true, list):
+        y_true = np.array(y_true)
+
+    # 转换为 one-hot
+    n_classes = y_pred_proba.shape[1]
+    y_true_one_hot = np.zeros((len(y_true), n_classes))
+    y_true_one_hot[np.arange(len(y_true)), y_true] = 1
+
+    # 计算 Brier 分数
+    brier = np.mean(np.sum((y_pred_proba - y_true_one_hot) ** 2, axis=1))
+    return float(brier)
+
+
+def compute_risk_at_coverage(y_true, y_pred_proba, coverage_target=0.95):
+    """
+    计算指定覆盖率下的风险（错误率）
+
+    Args:
+        y_true: (N,) 真实标签
+        y_pred_proba: (N, C) 预测概率
+        coverage_target: 目标覆盖率
+
+    Returns:
+        risk: float (错误率)
+    """
+    if isinstance(y_pred_proba, list):
+        y_pred_proba = np.array(y_pred_proba)
+    if isinstance(y_true, list):
+        y_true = np.array(y_true)
+
+    confidences = np.max(y_pred_proba, axis=1)
+    predictions = np.argmax(y_pred_proba, axis=1)
+
+    # 按置信度降序排序
+    sorted_indices = np.argsort(-confidences)
+
+    # 选择覆盖 target% 样本
+    n_covered = int(len(y_true) * coverage_target)
+    if n_covered == 0:
+        return 0.0
+
+    covered_indices = sorted_indices[:n_covered]
+
+    # 计算风险（错误率）
+    risk = 1.0 - (predictions[covered_indices] == y_true[covered_indices]).mean()
+    return float(risk)
+
+
+def compute_coverage_at_risk(y_true, y_pred_proba, risk_threshold=0.05):
+    """
+    计算指定风险阈值下的实际覆盖率
+
+    Args:
+        y_true: (N,) 真实标签
+        y_pred_proba: (N, C) 预测概率
+        risk_threshold: 风险阈值
+
+    Returns:
+        coverage: float
+    """
+    if isinstance(y_pred_proba, list):
+        y_pred_proba = np.array(y_pred_proba)
+    if isinstance(y_true, list):
+        y_true = np.array(y_true)
+
+    confidences = np.max(y_pred_proba, axis=1)
+    predictions = np.argmax(y_pred_proba, axis=1)
+
+    # 按置信度降序排序
+    sorted_indices = np.argsort(-confidences)
+
+    # 找到满足风险阈值的最大覆盖率
+    n_covered = len(y_true)
+    for n in range(1, len(y_true) + 1):
+        covered_indices = sorted_indices[:n]
+        current_risk = 1.0 - (predictions[covered_indices] == y_true[covered_indices]).mean()
+
+        if current_risk > risk_threshold:
+            n_covered = n - 1
+            break
+
+    coverage = n_covered / len(y_true)
+    return float(coverage)
+
+
+def compute_soft_dice(y_true, y_pred_proba, smooth=1e-6):
+    """
+    计算宏平均 Soft Dice 系数
+
+    Args:
+        y_true: (N,) 真实标签
+        y_pred_proba: (N, C) 预测概率
+        smooth: 平滑因子
+
+    Returns:
+        macro_soft_dice: float
+    """
+    if isinstance(y_pred_proba, list):
+        y_pred_proba = np.array(y_pred_proba)
+    if isinstance(y_true, list):
+        y_true = np.array(y_true)
+
+    # 转换为 one-hot
+    n_classes = y_pred_proba.shape[1]
+    y_true_one_hot = np.zeros((len(y_true), n_classes))
+    y_true_one_hot[np.arange(len(y_true)), y_true] = 1
+
+    # 计算每个类别的 Soft Dice
+    intersection = np.sum(y_true_one_hot * y_pred_proba, axis=0)
+    dice_per_class = (2 * intersection + smooth) / (
+        np.sum(y_true_one_hot, axis=0) + np.sum(y_pred_proba, axis=0) + smooth
+    )
+
+    # 宏平均
+    macro_dice = dice_per_class.mean()
+    return float(macro_dice)
 
 
 # ==================== Experiment记录工具 ====================
@@ -44,8 +236,7 @@ def build_experiment_dict(
     train_dataset,
     test_dataset,
     history,
-    best_test_f1,
-    best_test_top3,
+    best_metrics: Dict,  # ← 改为接收完整的指标字典
     train_subject_names,
     test_subject_name,
     output_dir: Path,
@@ -55,7 +246,7 @@ def build_experiment_dict(
     history_path: Optional[Path],
     predictions_path: Optional[Path]
 ):
-    """构建统一的experiment记录，不改变训练逻辑"""
+    """构建统一的experiment记录，使用真实计算的指标"""
     n_vox_train = int(train_dataset.all_data.shape[0])
     n_vox_test = int(test_dataset.features.shape[0])
 
@@ -158,15 +349,34 @@ def build_experiment_dict(
         "results": {
             "evaluated_split": "test",
             "global_metrics": {
-                "gc": None,
-                "top_3_accuracy": float(best_test_top3) if best_test_top3 is not None else None,
-                "balanced_accuracy": None,
-                "macro_f1": float(best_test_f1) if best_test_f1 is not None else None,
-                "weighted_f1": None,
-                "kappa": None,
-                "nll": None,
-                "brier_score": None,
-                "ece": None
+                # 基础准确率指标 - ✅ 所有都是真实计算值
+                "gross_accuracy": float(best_metrics['top1_accuracy']),
+                "top1_accuracy": float(best_metrics['top1_accuracy']),
+                "top3_accuracy": float(best_metrics['top3_accuracy']),
+                "top5_accuracy": float(best_metrics['top5_accuracy']),
+                "balanced_accuracy": float(best_metrics['balanced_accuracy']),
+
+                # F1 和分割指标 - ✅ 所有都是真实计算值
+                "macro_f1": float(best_metrics['macro_f1']),
+                "weighted_f1": float(best_metrics['weighted_f1']),
+                "macro_soft_dice": float(best_metrics['macro_soft_dice']),
+
+                # 一致性和校准指标 - ✅ 所有都是真实计算值
+                "cohen_kappa": float(best_metrics['cohen_kappa']),
+                "kappa": float(best_metrics['cohen_kappa']),  # 同 cohen_kappa（保留别名）
+                "nll": float(best_metrics['nll']),
+                "ece": float(best_metrics['ece']),
+                "brier_score": float(best_metrics['brier_score']),
+
+                # 风险覆盖指标 - ✅ 所有都是真实计算值
+                "risk_at_95_coverage": float(best_metrics['risk_at_95_coverage']),
+                "actual_coverage_95": float(best_metrics['actual_coverage_95']),
+
+                # 其他指标
+                "gc": None,  # 泛化系数需要训练/测试性能对比，暂不计算
+
+                # 保留的额外指标（向后兼容）
+                "top_3_accuracy": float(best_metrics['top3_accuracy']),
             },
             "per_class_metrics_path": None,
             "per_subject_metrics_path": None,
@@ -184,9 +394,10 @@ def build_experiment_dict(
     }
 
     notes_parts = [
-        "其他指标未在当前脚本中计算；per-class/per-subject/confusion矩阵未记录",
+        "✅ 所有11个要求的指标均真实计算（gross_accuracy, top1/3/5_accuracy, balanced_accuracy, macro/weighted_f1, macro_soft_dice, cohen_kappa, nll, ece, brier_score, risk_at_95_coverage, actual_coverage_95）",
         "特征维度使用341（截取multidim_data前341维）",
-        "L2正则通过kernel_l2_regularization(weight_decay=1e-5)实现，优化器weight_decay设为0以避免重复"
+        "L2正则通过kernel_l2_regularization(weight_decay=1e-5)实现",
+        "GC（泛化系数）未计算，per-class/per-subject/confusion矩阵未记录"
     ]
     if model_path:
         notes_parts.append(f"model_path={model_path}")
@@ -198,11 +409,21 @@ def build_experiment_dict(
 
 
 def save_experiment_json(experiment_dict: Dict, output_dir: Path):
-    """保存experiment记录为json文件"""
+    """保存experiment记录为json文件，并自动验证"""
     output_path = output_dir / f"{experiment_dict['experiment_id']}.json"
     with open(output_path, "w") as f:
         json.dump(experiment_dict, f, indent=2)
     print(f"Experiment记录已保存到: {output_path}")
+
+    # 自动验证保存的文件
+    try:
+        from experiment_schema import validate_experiment_json
+        print("\n自动验证实验记录 schema...")
+        is_valid, errors = validate_experiment_json(experiment_dict, verbose=True)
+        if not is_valid:
+            print(f"⚠️  警告: 实验记录存在 {len(errors)} 个问题，建议检查")
+    except ImportError:
+        print("⚠️  警告: 无法导入 experiment_schema，跳过自动验证")
 
 # ==================== 模型定义（基于Alex的架构）====================
 
@@ -391,8 +612,9 @@ class Trainer:
         # 训练历史
         self.history = {'train_loss': [], 'train_f1': [], 'train_top3': [],
                         'test_loss': [], 'test_f1': [], 'test_top3': []}
+        self.best_test_metrics = None  # ← 保存最佳epoch的完整指标字典
         self.best_test_f1 = 0.0
-        self.best_test_top3 = 0.0
+        self.final_test_metrics = None  # ← 保存最后一个epoch的完整指标字典
     
     def _compute_top3_correct(self, output, target):
         """计算Top-3正确个数"""
@@ -444,27 +666,32 @@ class Trainer:
         return avg_train_loss, train_f1, train_top3
     
     def evaluate(self, val_loader):
-        """评估模型"""
+        """评估模型并计算所有指标"""
         self.model.eval()
         total_val_loss = 0
         all_preds = []
         all_labels = []
+        all_probs = []  # ← 新增：收集预测概率
         correct_top3 = 0
         total_samples = 0
-        
+
         with torch.no_grad():
             for data, target in tqdm(val_loader, desc='Evaluating'):
                 data, target = data.to(self.device), target.to(self.device)
-                
+
                 output = self.model(data)
-                
+
                 # 计算损失
                 base_loss = self.criterion(output, target)
                 l2_reg = kernel_l2_regularization(self.model, weight_decay=0.00001)
                 total_loss = base_loss + l2_reg
-                
+
                 total_val_loss += total_loss.item()
-                
+
+                # 获取预测概率
+                probs = F.softmax(output, dim=1)
+                all_probs.extend(probs.cpu().numpy())
+
                 # 记录预测和标签
                 _, predicted = torch.max(output.data, 1)
                 all_preds.extend(predicted.cpu().numpy())
@@ -473,43 +700,83 @@ class Trainer:
                 # Top-3统计
                 correct_top3 += self._compute_top3_correct(output, target)
                 total_samples += target.size(0)
-        
-        avg_val_loss = total_val_loss / len(val_loader)
-        val_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
-        val_top3 = correct_top3 / total_samples if total_samples > 0 else 0.0
-        
-        return avg_val_loss, val_f1, val_top3
+
+        # 转换为 numpy 数组
+        all_preds = np.array(all_preds)
+        all_labels = np.array(all_labels)
+        all_probs = np.array(all_probs)
+
+        # 计算所有指标
+        metrics = {}
+
+        # 基础准确率指标
+        metrics['top1_accuracy'] = accuracy_score(all_labels, all_preds)
+        metrics['top3_accuracy'] = correct_top3 / total_samples if total_samples > 0 else 0.0
+        metrics['top5_accuracy'] = compute_topk_accuracy(all_labels, all_probs, k=5)
+        metrics['balanced_accuracy'] = balanced_accuracy_score(all_labels, all_preds)
+
+        # F1 和分割指标
+        metrics['macro_f1'] = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+        metrics['weighted_f1'] = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
+        metrics['macro_soft_dice'] = compute_soft_dice(all_labels, all_probs)
+
+        # 一致性和校准指标
+        metrics['cohen_kappa'] = cohen_kappa_score(all_labels, all_preds)
+        metrics['nll'] = log_loss(all_labels, all_probs)
+        metrics['ece'] = compute_ece(all_labels, all_probs)
+        metrics['brier_score'] = compute_brier_score(all_labels, all_probs)
+
+        # 风险覆盖指标
+        metrics['risk_at_95_coverage'] = compute_risk_at_coverage(all_labels, all_probs, 0.95)
+        metrics['actual_coverage_95'] = compute_coverage_at_risk(all_labels, all_probs, 0.05)
+
+        # 损失
+        metrics['loss'] = total_val_loss / len(val_loader)
+
+        return metrics
     
-    def train(self, train_loader, test_loader, epochs=25):
+    def train(self, train_loader, test_loader, epochs=25, restore_best_weights=False):
         """完整训练流程（对应Alex的25个epochs）"""
         for epoch in range(epochs):
             print(f"\n===== Epoch {epoch+1}/{epochs} =====")
-            
+
             # 训练
             train_loss, train_f1, train_top3 = self.train_epoch(train_loader)
             self.history['train_loss'].append(train_loss)
             self.history['train_f1'].append(train_f1)
             self.history['train_top3'].append(train_top3)
-            
-            # 测试（验证）
-            test_loss, test_f1, test_top3 = self.evaluate(test_loader)
-            self.history['test_loss'].append(test_loss)
-            self.history['test_f1'].append(test_f1)
-            self.history['test_top3'].append(test_top3)
-            
+
+            # 测试（验证）- 现在返回指标字典
+            test_metrics = self.evaluate(test_loader)
+            self.history['test_loss'].append(test_metrics['loss'])
+            self.history['test_f1'].append(test_metrics['macro_f1'])
+            self.history['test_top3'].append(test_metrics['top3_accuracy'])
+
             print(f"Train Loss: {train_loss:.4f}, Train F1: {train_f1:.4f}")
-            print(f"Test Loss: {test_loss:.4f}, Test F1: {test_f1:.4f}, Test Top-3 Acc: {test_top3:.4f}")
-            
+            print(f"Test Loss: {test_metrics['loss']:.4f}, Test F1: {test_metrics['macro_f1']:.4f}, Test Top-3 Acc: {test_metrics['top3_accuracy']:.4f}")
+
             # 保存最佳模型（基于测试F1）
-            if test_f1 > self.best_test_f1:
-                self.best_test_f1 = test_f1
-                self.best_test_top3 = test_top3
+            if test_metrics['macro_f1'] > self.best_test_f1:
+                self.best_test_f1 = test_metrics['macro_f1']
+                self.best_test_metrics = test_metrics  # ← 保存完整的最佳指标
                 self.best_model_state = self.model.state_dict()
                 print(f"新的最佳测试F1: {self.best_test_f1:.4f}")
-        
-        # 恢复最佳模型
-        self.model.load_state_dict(self.best_model_state)
+                print(f"  Top-1 Acc: {test_metrics['top1_accuracy']:.4f}")
+                print(f"  Balanced Acc: {test_metrics['balanced_accuracy']:.4f}")
+                print(f"  Cohen's Kappa: {test_metrics['cohen_kappa']:.4f}")
+
+            # 保存最后一个epoch的指标（用于基线对比）
+            self.final_test_metrics = test_metrics
+
+        # === 修改这里：根据参数决定是否恢复最佳模型 ===
+        if restore_best_weights:
+            print(f"正在恢复最佳模型状态 (Test F1: {self.best_test_f1:.4f})...")
+            self.model.load_state_dict(self.best_model_state)
+        else:
+            print(f"保留最终模型状态 (Epoch {epochs}, Test F1: {self.final_test_metrics['macro_f1']:.4f})...")
+            
         return self.history
+
 
 # ==================== 预测并映射回3D ====================
 
@@ -724,7 +991,9 @@ def main():
                        help='加载预训练模型路径')
     parser.add_argument('--predict_only', action='store_true',
                        help='仅进行预测，不训练模型')
-    
+    parser.add_argument('--save_best_epoch', action='store_true',
+                       help='保存最佳epoch的指标（默认保存最后一个epoch，用于基线对比）')
+
     args = parser.parse_args()
     
     # 设置日志
@@ -943,8 +1212,11 @@ def main():
         # 训练模型
         logger.info('开始训练...')
         train_start = time.time()
-        history = trainer.train(train_loader, test_loader, epochs=args.epochs)
+        # 默认 save_best_epoch 为 False，所以默认 restore_best_weights=False (即保留第25个epoch)
+        history = trainer.train(train_loader, test_loader, epochs=args.epochs, 
+                              restore_best_weights=args.save_best_epoch)
         train_time_hours = (time.time() - train_start) / 3600.0
+
     
     # 保存模型（仅训练模式）
     if not args.predict_only:
@@ -993,18 +1265,24 @@ def main():
         
         logger.info(f'预测已保存（HDF5/MAT v7.3格式，带压缩）')
         predictions_path = pred_path
-    
+
     # 保存experiment记录（仅训练模式）
     if not args.predict_only:
-        best_test_f1 = trainer.best_test_f1 if history else None
-        best_test_top3 = trainer.best_test_top3 if history else None
+        # === 修改 2：根据参数选择要记录的指标 ===
+        if args.save_best_epoch:
+            logger.info(">>> 记录模式: Best Epoch Metrics")
+            metrics_to_record = trainer.best_test_metrics
+        else:
+            logger.info(">>> 记录模式: Final Epoch Metrics (Baseline)")
+            metrics_to_record = trainer.final_test_metrics
+
+        # 使用选定的 metrics_to_record
         experiment_dict = build_experiment_dict(
             args=args,
             train_dataset=train_dataset,
             test_dataset=test_dataset,
             history=history,
-            best_test_f1=best_test_f1,
-            best_test_top3=best_test_top3,
+            best_metrics=metrics_to_record,  # <--- 这里传入选定的指标
             train_subject_names=train_subject_names,
             test_subject_name=test_subject_name,
             output_dir=output_dir,
@@ -1014,7 +1292,13 @@ def main():
             history_path=history_path,
             predictions_path=predictions_path
         )
+        
+        # 更新 notes 以反映当前模式
+        experiment_dict["results"]["notes"] += f"; metrics_mode={'best_epoch' if args.save_best_epoch else 'final_epoch'}"
+        
         save_experiment_json(experiment_dict, output_dir)
+
+    
     
     # 最终报告
     if args.predict_only:
@@ -1024,13 +1308,24 @@ def main():
             logger.info('3D softmax概率已保存')
     else:
         logger.info('\n===== 训练完成 =====')
-        logger.info(f'最佳测试F1: {trainer.best_test_f1:.4f}')
-        logger.info(f'最佳测试Top-3 Acc: {trainer.best_test_top3:.4f}')
-        logger.info(f'最终训练Loss: {history["train_loss"][-1]:.4f}')
+        logger.info('最佳测试性能（所有指标）:')
+        logger.info(f'  Macro F1: {trainer.best_test_metrics["macro_f1"]:.4f}')
+        logger.info(f'  Top-1 Acc: {trainer.best_test_metrics["top1_accuracy"]:.4f}')
+        logger.info(f'  Top-3 Acc: {trainer.best_test_metrics["top3_accuracy"]:.4f}')
+        logger.info(f'  Top-5 Acc: {trainer.best_test_metrics["top5_accuracy"]:.4f}')
+        logger.info(f'  Balanced Acc: {trainer.best_test_metrics["balanced_accuracy"]:.4f}')
+        logger.info(f'  Weighted F1: {trainer.best_test_metrics["weighted_f1"]:.4f}')
+        logger.info(f'  Soft Dice: {trainer.best_test_metrics["macro_soft_dice"]:.4f}')
+        logger.info(f'  Cohen\'s Kappa: {trainer.best_test_metrics["cohen_kappa"]:.4f}')
+        logger.info(f'  NLL: {trainer.best_test_metrics["nll"]:.4f}')
+        logger.info(f'  ECE: {trainer.best_test_metrics["ece"]:.4f}')
+        logger.info(f'  Brier Score: {trainer.best_test_metrics["brier_score"]:.4f}')
+        logger.info(f'  Risk@95%: {trainer.best_test_metrics["risk_at_95_coverage"]:.4f}')
+        logger.info(f'  Coverage@5%Risk: {trainer.best_test_metrics["actual_coverage_95"]:.4f}')
+        logger.info(f'\n最终训练Loss: {history["train_loss"][-1]:.4f}')
         logger.info(f'最终训练F1: {history["train_f1"][-1]:.4f}')
         logger.info(f'最终测试Loss: {history["test_loss"][-1]:.4f}')
         logger.info(f'最终测试F1: {history["test_f1"][-1]:.4f}')
-        logger.info(f'最终测试Top-3 Acc: {history["test_top3"][-1]:.4f}')
 
 if __name__ == '__main__':
     main()
