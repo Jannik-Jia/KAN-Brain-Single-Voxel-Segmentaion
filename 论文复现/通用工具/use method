@@ -1,0 +1,57 @@
+# 假设你在 train_1d_with_3d_dataset.py 中
+
+from experiment_logger import ExperimentLogger
+
+# 1. 初始化 (在 main 开始时)
+logger = ExperimentLogger(
+    experiment_id=f"kan_multiclass_test{args.test_subject}",
+    method_name="KAN Multiclass (Spline Order 3)",
+    method_key="kan_multiclass",
+    family="kan",
+    subfamily="kan_multiclass"
+)
+
+# 2. 记录配置 (在加载数据/模型后)
+logger.set_task(
+    split_id=f"loo_subject_{args.test_subject}",
+    train_sub=train_subject_names,
+    test_sub=[test_subject_name]
+)
+
+# 记录模型特有信息 (KAN 特有的配置)
+logger.set_model_details(
+    param_count_m=model_param_count / 1e6,
+    input_dim=341,
+    output_dim=102,
+    kan_config={
+        "grid_size": 5,
+        "spline_order": 3,
+        "base_activation": "silu"
+    },
+    dropout=0.1
+)
+
+logger.set_training_config(
+    batch_size=args.batch_size, 
+    epochs=args.epochs, 
+    lr=args.learning_rate,
+    optimizer="adam"
+)
+
+# ... 训练过程 ...
+
+# 3. 记录结果 (在评估后)
+# 假设 evaluate() 返回了 predictions 和 true_labels
+metrics = trainer.evaluate(test_loader) # 这里你可以稍微改下你的 evaluate 让它返回原始 proba
+# 或者直接传入 raw data 让 logger 算:
+# logger.log_results(y_true=all_labels, y_pred_proba=all_probs, loss_val=final_loss)
+
+# 如果你已经有了 metrics 字典 (像你现在的代码那样)，你可以手动通过 hack 注入，
+# 但推荐使用 log_results 让它自动算一遍确保统一
+# 这里演示直接注入现有 metrics 的方法（兼容你现有逻辑）：
+logger.data["results"]["global_metrics"] = trainer.best_test_metrics
+logger.data["results"]["evaluated_split"] = "test"
+logger.set_hardware(train_time_hours=train_time_hours)
+
+# 4. 保存
+logger.save(args.output_dir)
