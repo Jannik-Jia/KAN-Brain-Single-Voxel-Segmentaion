@@ -311,14 +311,29 @@ class Trainer:
 
         return avg_val_loss, val_f1, val_acc, val_metrics
     
-    def train(self, train_loader, test_loader, epochs=25):
-        """完整训练流程（对应Alex的25个epochs）"""
+    def train(self, train_loader, test_loader, epochs=25, patience=5):
+        """
+        完整训练流程（对应Alex的25个epochs）
+
+        Args:
+            train_loader: 训练数据加载器
+            test_loader: 测试数据加载器
+            epochs: 最大训练轮数
+            patience: early stopping耐心值（连续多少个epoch没改善就停止）
+        """
         best_test_acc = 0  # 改用gross accuracy作为最佳模型标准
+        best_epoch = 0  # 记录最佳模型出现的epoch
+        patience_counter = 0  # early stopping计数器
+        early_stopped = False  # 是否提前停止
+
+        # 初始化best_model_state（防止从未更新的情况）
+        self.best_model_state = self.model.state_dict()
 
         for epoch in range(epochs):
             print(f"\n===== Epoch {epoch+1}/{epochs} =====")
 
-            # 是否计算完整指标（最后一个epoch）
+            # 是否计算完整指标（最后一个epoch或即将early stop）
+            # 注意：我们不能提前知道是否会early stop，所以先按正常逻辑
             compute_full = (epoch == epochs - 1)
 
             # 训练
@@ -351,22 +366,50 @@ class Trainer:
                 print(f"Macro Soft Dice: {test_metrics['macro_soft_dice']:.4f}")
                 print(f"Risk@95% Coverage: {test_metrics['risk_at_95_coverage']:.4f}")
 
-            # 保存最佳模型（基于测试gross accuracy）
-            if test_acc > best_test_acc:
+            # 保存最佳模型（基于测试gross accuracy）+ Early Stopping逻辑
+            # 第一个epoch或有改善时保存
+            if epoch == 0 or test_acc > best_test_acc:
                 best_test_acc = test_acc
+                best_epoch = epoch + 1
                 self.best_model_state = self.model.state_dict()
-                print(f"新的最佳测试Gross Accuracy: {best_test_acc:.4f}")
+                patience_counter = 0  # 重置patience计数器
+                if epoch == 0:
+                    print(f"初始测试Gross Accuracy: {best_test_acc:.4f} (Epoch {best_epoch})")
+                else:
+                    print(f"新的最佳测试Gross Accuracy: {best_test_acc:.4f} (Epoch {best_epoch})")
+            else:
+                patience_counter += 1
+                print(f"测试Gross Accuracy未改善 (patience: {patience_counter}/{patience})")
+
+                # 检查是否需要early stopping
+                if patience_counter >= patience:
+                    print(f"\n早停触发！连续{patience}个epoch测试Gross Accuracy未改善")
+                    print(f"最佳模型出现在Epoch {best_epoch}，Gross Accuracy: {best_test_acc:.4f}")
+                    early_stopped = True
+                    break  # 跳出训练循环
+
+        # 训练结束（可能是正常结束或early stopping）
+        if early_stopped:
+            print(f"\n训练因early stopping在第{epoch+1}个epoch结束（共运行{epoch+1}/{epochs}个epoch）")
+        else:
+            print(f"\n训练正常完成，共运行{epochs}个epoch")
 
         # 恢复最佳模型
+        print(f"恢复最佳模型（来自Epoch {best_epoch}）")
         self.model.load_state_dict(self.best_model_state)
 
-        # 在最佳模型上重新评估完整指标
+        # 在最佳模型上重新评估完整指标（确保即使提前停止也有完整指标）
         print("\n===== 最佳模型的完整评估 =====")
         _, best_f1, best_acc, best_metrics = self.evaluate(test_loader, compute_full_metrics=True)
         self.history['best_test_metrics'] = best_metrics
 
+        # 保存early stopping相关信息
+        self.history['best_epoch'] = best_epoch
+        self.history['early_stopped'] = early_stopped
+        self.history['total_epochs'] = epoch + 1  # 实际运行的epoch数
+
         if best_metrics:
-            print(f"Best Test Gross Accuracy: {best_acc:.4f}")
+            print(f"Best Test Gross Accuracy: {best_acc:.4f} (Epoch {best_epoch})")
             print(f"Best Test F1: {best_f1:.4f}")
             print(f"Top-1/3/5 Accuracy: {best_metrics['top1_accuracy']:.4f} / {best_metrics['top3_accuracy']:.4f} / {best_metrics['top5_accuracy']:.4f}")
             print(f"Balanced Accuracy: {best_metrics['balanced_accuracy']:.4f}")
@@ -567,6 +610,26 @@ def predict_and_map_to_3d(model, test_dataset, device='cuda', batch_size=512):
     
     return predictions_3d
 
+# ==================== 辅助函数：JSON序列化 ====================
+
+def convert_to_json_serializable(obj):
+    """
+    递归转换对象为JSON可序列化的格式
+    处理numpy类型、字典、列表等
+    """
+    if isinstance(obj, dict):
+        return {key: convert_to_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 # ==================== 辅助函数：读取排除列表 ====================
 
 def load_exclude_list(exclude_file: Path) -> set:
@@ -622,6 +685,8 @@ def main():
                        help='批次大小（Alex使用128）')
     parser.add_argument('--epochs', type=int, default=25,
                        help='训练轮数（Alex使用25）')
+    parser.add_argument('--patience', type=int, default=5,
+                       help='Early stopping耐心值（连续多少个epoch test gross acc没改善就停止训练，默认5）')
     parser.add_argument('--samples_per_subject', type=int, default=None,
                        help='每个被试采样的体素数（None表示全部）')
     parser.add_argument('--save_predictions', action='store_true',
@@ -884,7 +949,8 @@ def main():
         
         # 训练模型
         logger.info('开始训练...')
-        history = trainer.train(train_loader, test_loader, epochs=args.epochs)
+        logger.info(f'Early stopping patience: {args.patience}')
+        history = trainer.train(train_loader, test_loader, epochs=args.epochs, patience=args.patience)
     
     # 保存模型（仅训练模式）
     if not args.predict_only:
@@ -897,10 +963,11 @@ def main():
         }, model_path)
         logger.info(f'模型保存至: {model_path}')
         
-        # 保存训练历史
+        # 保存训练历史（转换numpy类型为JSON可序列化格式）
         history_path = output_dir / f'history_test{args.test_subject}.json'
+        history_serializable = convert_to_json_serializable(history)
         with open(history_path, 'w') as f:
-            json.dump(history, f, indent=2)
+            json.dump(history_serializable, f, indent=2)
     
     # 如果需要，保存3D预测概率
     if args.save_predictions:
@@ -941,8 +1008,20 @@ def main():
             logger.info('3D softmax概率已保存')
     else:
         logger.info('\n===== 训练完成 =====')
+
+        # Early stopping信息
+        if history.get('early_stopped', False):
+            logger.info(f'Early Stopping: 是（在第{history["total_epochs"]}个epoch停止）')
+            logger.info(f'最佳模型来自: Epoch {history["best_epoch"]}')
+        else:
+            logger.info(f'Early Stopping: 否（完成全部{history["total_epochs"]}个epoch）')
+            logger.info(f'最佳模型来自: Epoch {history["best_epoch"]}')
+
+        # 最佳指标
         logger.info(f'最佳测试Gross Accuracy: {max(history["test_acc"]):.4f}')
         logger.info(f'最佳测试F1: {max(history["test_f1"]):.4f}')
+
+        # 最终epoch的指标
         logger.info(f'最终训练Loss: {history["train_loss"][-1]:.4f}')
         logger.info(f'最终训练F1: {history["train_f1"][-1]:.4f}')
         logger.info(f'最终训练Acc: {history["train_acc"][-1]:.4f}')
