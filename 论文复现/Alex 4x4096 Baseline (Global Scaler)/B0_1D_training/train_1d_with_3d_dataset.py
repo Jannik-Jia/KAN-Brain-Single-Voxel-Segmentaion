@@ -722,7 +722,7 @@ class Trainer:
 
         # 一致性和校准指标
         metrics['cohen_kappa'] = cohen_kappa_score(all_labels, all_preds)
-        metrics['nll'] = log_loss(all_labels, all_probs)
+        metrics['nll'] = log_loss(all_labels, all_probs, labels=list(range(102)))
         metrics['ece'] = compute_ece(all_labels, all_probs)
         metrics['brier_score'] = compute_brier_score(all_labels, all_probs)
 
