@@ -209,6 +209,7 @@ class Trainer:
         self.history = {
             'train_loss': [], 'test_loss': [],
             'train_f1': [], 'test_f1': [],
+            'train_acc': [], 'test_acc': [],  # 每个epoch记录gross accuracy
             # 新增指标
             'train_metrics': [], 'test_metrics': []
         }
@@ -251,6 +252,10 @@ class Trainer:
         avg_train_loss = epoch_train_loss / len(train_loader)
         train_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
+        # 计算gross accuracy（每个epoch都计算）
+        from sklearn.metrics import accuracy_score
+        train_acc = accuracy_score(all_labels, all_preds)
+
         # 计算完整指标（可选，避免每个epoch都计算）
         train_metrics = None
         if compute_full_metrics and len(all_probs) > 0:
@@ -259,7 +264,7 @@ class Trainer:
             y_probs = np.array(all_probs)
             train_metrics = compute_all_metrics(y_true, y_pred, y_probs)
 
-        return avg_train_loss, train_f1, train_metrics
+        return avg_train_loss, train_f1, train_acc, train_metrics
     
     def evaluate(self, val_loader, compute_full_metrics=True):
         """评估模型"""
@@ -292,6 +297,10 @@ class Trainer:
         avg_val_loss = total_val_loss / len(val_loader)
         val_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
+        # 计算gross accuracy（每个epoch都计算）
+        from sklearn.metrics import accuracy_score
+        val_acc = accuracy_score(all_labels, all_preds)
+
         # 计算完整指标
         val_metrics = None
         if compute_full_metrics and len(all_probs) > 0:
@@ -300,11 +309,11 @@ class Trainer:
             y_probs = np.array(all_probs)
             val_metrics = compute_all_metrics(y_true, y_pred, y_probs)
 
-        return avg_val_loss, val_f1, val_metrics
+        return avg_val_loss, val_f1, val_acc, val_metrics
     
     def train(self, train_loader, test_loader, epochs=25):
         """完整训练流程（对应Alex的25个epochs）"""
-        best_test_f1 = 0
+        best_test_acc = 0  # 改用gross accuracy作为最佳模型标准
 
         for epoch in range(epochs):
             print(f"\n===== Epoch {epoch+1}/{epochs} =====")
@@ -313,21 +322,23 @@ class Trainer:
             compute_full = (epoch == epochs - 1)
 
             # 训练
-            train_loss, train_f1, train_metrics = self.train_epoch(train_loader, compute_full_metrics=compute_full)
+            train_loss, train_f1, train_acc, train_metrics = self.train_epoch(train_loader, compute_full_metrics=compute_full)
             self.history['train_loss'].append(train_loss)
             self.history['train_f1'].append(train_f1)
+            self.history['train_acc'].append(train_acc)
             if train_metrics:
                 self.history['train_metrics'].append(train_metrics)
 
             # 测试（验证）
-            test_loss, test_f1, test_metrics = self.evaluate(test_loader, compute_full_metrics=compute_full)
+            test_loss, test_f1, test_acc, test_metrics = self.evaluate(test_loader, compute_full_metrics=compute_full)
             self.history['test_loss'].append(test_loss)
             self.history['test_f1'].append(test_f1)
+            self.history['test_acc'].append(test_acc)
             if test_metrics:
                 self.history['test_metrics'].append(test_metrics)
 
-            print(f"Train Loss: {train_loss:.4f}, Train F1: {train_f1:.4f}")
-            print(f"Test Loss: {test_loss:.4f}, Test F1: {test_f1:.4f}")
+            print(f"Train Loss: {train_loss:.4f}, Train F1: {train_f1:.4f}, Train Acc: {train_acc:.4f}")
+            print(f"Test Loss: {test_loss:.4f}, Test F1: {test_f1:.4f}, Test Acc: {test_acc:.4f}")
 
             # 在最后一个epoch显示完整指标
             if compute_full and test_metrics:
@@ -340,23 +351,23 @@ class Trainer:
                 print(f"Macro Soft Dice: {test_metrics['macro_soft_dice']:.4f}")
                 print(f"Risk@95% Coverage: {test_metrics['risk_at_95_coverage']:.4f}")
 
-            # 保存最佳模型（基于测试F1）
-            if test_f1 > best_test_f1:
-                best_test_f1 = test_f1
+            # 保存最佳模型（基于测试gross accuracy）
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
                 self.best_model_state = self.model.state_dict()
-                print(f"新的最佳测试F1: {best_test_f1:.4f}")
+                print(f"新的最佳测试Gross Accuracy: {best_test_acc:.4f}")
 
         # 恢复最佳模型
         self.model.load_state_dict(self.best_model_state)
 
         # 在最佳模型上重新评估完整指标
         print("\n===== 最佳模型的完整评估 =====")
-        _, best_f1, best_metrics = self.evaluate(test_loader, compute_full_metrics=True)
+        _, best_f1, best_acc, best_metrics = self.evaluate(test_loader, compute_full_metrics=True)
         self.history['best_test_metrics'] = best_metrics
 
         if best_metrics:
+            print(f"Best Test Gross Accuracy: {best_acc:.4f}")
             print(f"Best Test F1: {best_f1:.4f}")
-            print(f"Gross Accuracy: {best_metrics['gross_accuracy']:.4f}")
             print(f"Top-1/3/5 Accuracy: {best_metrics['top1_accuracy']:.4f} / {best_metrics['top3_accuracy']:.4f} / {best_metrics['top5_accuracy']:.4f}")
             print(f"Balanced Accuracy: {best_metrics['balanced_accuracy']:.4f}")
             print(f"Macro-F1: {best_metrics['macro_f1']:.4f}")
@@ -930,11 +941,14 @@ def main():
             logger.info('3D softmax概率已保存')
     else:
         logger.info('\n===== 训练完成 =====')
+        logger.info(f'最佳测试Gross Accuracy: {max(history["test_acc"]):.4f}')
         logger.info(f'最佳测试F1: {max(history["test_f1"]):.4f}')
         logger.info(f'最终训练Loss: {history["train_loss"][-1]:.4f}')
         logger.info(f'最终训练F1: {history["train_f1"][-1]:.4f}')
+        logger.info(f'最终训练Acc: {history["train_acc"][-1]:.4f}')
         logger.info(f'最终测试Loss: {history["test_loss"][-1]:.4f}')
         logger.info(f'最终测试F1: {history["test_f1"][-1]:.4f}')
+        logger.info(f'最终测试Acc: {history["test_acc"][-1]:.4f}')
 
 if __name__ == '__main__':
     main()
