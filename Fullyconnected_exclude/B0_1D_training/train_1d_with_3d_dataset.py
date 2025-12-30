@@ -23,6 +23,7 @@ import logging
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
 import gc
+import copy
 
 # 导入评估指标模块
 from evaluation_metrics import compute_all_metrics
@@ -197,19 +198,34 @@ class TestDataset(Dataset):
 # ==================== 训练器类 ====================
 
 class Trainer:
-    def __init__(self, model, device='cuda', learning_rate=0.00001):
+    def __init__(self, model, device='cuda', learning_rate=0.00001,
+                 min_delta_acc=1e-4, lr_factor=0.5, lr_patience=2, min_lr=1e-7):
         self.model = model.to(device)
         self.device = device
-        
+        self.min_delta_acc = min_delta_acc
+
         # Alex的配置：Adam优化器，学习率1e-5
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.criterion = nn.CrossEntropyLoss()
-        
+
+        # 学习率调度器：ReduceLROnPlateau，监控test_acc (mode='max')
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='max',
+            factor=lr_factor,
+            patience=lr_patience,
+            threshold=min_delta_acc,
+            threshold_mode='abs',
+            min_lr=min_lr,
+            verbose=False  # 我们手动打印更详细的信息
+        )
+
         # 训练历史 - 扩展为包含所有指标
         self.history = {
             'train_loss': [], 'test_loss': [],
             'train_f1': [], 'test_f1': [],
             'train_acc': [], 'test_acc': [],  # 每个epoch记录gross accuracy
+            'lr': [],  # 新增：记录每个epoch的学习率
             # 新增指标
             'train_metrics': [], 'test_metrics': []
         }
@@ -287,12 +303,15 @@ class Trainer:
 
                 total_val_loss += total_loss.item()
 
-                # 记录预测、标签和概率
-                probs = torch.softmax(output, dim=1)
+                # 记录预测和标签
                 _, predicted = torch.max(output, 1)
                 all_preds.extend(predicted.cpu().numpy())
                 all_labels.extend(target.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
+
+                # 只在需要计算完整指标时才收集概率（节省内存）
+                if compute_full_metrics:
+                    probs = torch.softmax(output, dim=1)
+                    all_probs.extend(probs.cpu().numpy())
 
         avg_val_loss = total_val_loss / len(val_loader)
         val_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
@@ -327,10 +346,12 @@ class Trainer:
         early_stopped = False  # 是否提前停止
 
         # 初始化best_model_state（防止从未更新的情况）
-        self.best_model_state = self.model.state_dict()
+        self.best_model_state = copy.deepcopy(self.model.state_dict())
 
         for epoch in range(epochs):
-            print(f"\n===== Epoch {epoch+1}/{epochs} =====")
+            # 获取当前学习率
+            current_lr = self.optimizer.param_groups[0]['lr']
+            print(f"\n===== Epoch {epoch+1}/{epochs} (lr={current_lr:.2e}) =====")
 
             # 是否计算完整指标（最后一个epoch或即将early stop）
             # 注意：我们不能提前知道是否会early stop，所以先按正常逻辑
@@ -349,11 +370,22 @@ class Trainer:
             self.history['test_loss'].append(test_loss)
             self.history['test_f1'].append(test_f1)
             self.history['test_acc'].append(test_acc)
+            self.history['lr'].append(current_lr)  # 记录当前epoch的学习率
             if test_metrics:
                 self.history['test_metrics'].append(test_metrics)
 
             print(f"Train Loss: {train_loss:.4f}, Train F1: {train_f1:.4f}, Train Acc: {train_acc:.4f}")
             print(f"Test Loss: {test_loss:.4f}, Test F1: {test_f1:.4f}, Test Acc: {test_acc:.4f}")
+
+            # 学习率调度器更新
+            prev_lr = self.optimizer.param_groups[0]['lr']
+            self.scheduler.step(test_acc)
+            new_lr = self.optimizer.param_groups[0]['lr']
+
+            # 检测学习率是否下降（用于后续 early-stopping 逻辑）
+            lr_reduced = (new_lr < prev_lr)
+            if lr_reduced:
+                print(f"LR reduced: {prev_lr:.2e} -> {new_lr:.2e}")
 
             # 在最后一个epoch显示完整指标
             if compute_full and test_metrics:
@@ -367,19 +399,34 @@ class Trainer:
                 print(f"Risk@95% Coverage: {test_metrics['risk_at_95_coverage']:.4f}")
 
             # 保存最佳模型（基于测试gross accuracy）+ Early Stopping逻辑
-            # 第一个epoch或有改善时保存
-            if epoch == 0 or test_acc > best_test_acc:
+            # 第一个epoch或有改善时保存（改善需超过min_delta阈值）
+            # 判断是否有显著改善
+            significant_improvement = (epoch == 0) or (test_acc > best_test_acc + self.min_delta_acc)
+
+            if epoch == 0:
+                # 第一个epoch：初始化best
                 best_test_acc = test_acc
                 best_epoch = epoch + 1
-                self.best_model_state = self.model.state_dict()
+                self.best_model_state = copy.deepcopy(self.model.state_dict())
+                patience_counter = 0
+                print(f"初始测试Gross Accuracy: {best_test_acc:.4f} (Epoch {best_epoch})")
+            elif significant_improvement:
+                # 有显著改善（超过min_delta阈值）
+                best_test_acc = test_acc
+                best_epoch = epoch + 1
+                self.best_model_state = copy.deepcopy(self.model.state_dict())
                 patience_counter = 0  # 重置patience计数器
-                if epoch == 0:
-                    print(f"初始测试Gross Accuracy: {best_test_acc:.4f} (Epoch {best_epoch})")
-                else:
-                    print(f"新的最佳测试Gross Accuracy: {best_test_acc:.4f} (Epoch {best_epoch})")
+                print(f"新的最佳测试Gross Accuracy: {best_test_acc:.4f} (Epoch {best_epoch}, 提升>{self.min_delta_acc})")
             else:
-                patience_counter += 1
-                print(f"测试Gross Accuracy未改善 (patience: {patience_counter}/{patience})")
+                # 未显著改善
+                if lr_reduced:
+                    # LR刚降低，重置patience_counter，给新学习率更多机会
+                    patience_counter = 0
+                    print(f"LR刚降低：重置early-stopping patience_counter=0")
+                else:
+                    patience_counter += 1
+                    delta = test_acc - best_test_acc
+                    print(f"测试Gross Accuracy未显著改善 (delta={delta:.6f}, 需要>{self.min_delta_acc}, patience: {patience_counter}/{patience})")
 
                 # 检查是否需要early stopping
                 if patience_counter >= patience:
@@ -405,6 +452,7 @@ class Trainer:
 
         # 保存early stopping相关信息
         self.history['best_epoch'] = best_epoch
+        self.history['best_test_acc'] = best_test_acc  # 按min_delta规则的最佳acc
         self.history['early_stopped'] = early_stopped
         self.history['total_epochs'] = epoch + 1  # 实际运行的epoch数
 
@@ -687,6 +735,14 @@ def main():
                        help='训练轮数（Alex使用25）')
     parser.add_argument('--patience', type=int, default=5,
                        help='Early stopping耐心值（连续多少个epoch test gross acc没改善就停止训练，默认5）')
+    parser.add_argument('--min_delta_acc', type=float, default=1e-4,
+                       help='test_acc改善的最小阈值，低于此值不算改善（默认1e-4）')
+    parser.add_argument('--lr_factor', type=float, default=0.5,
+                       help='ReduceLROnPlateau的衰减因子（默认0.5）')
+    parser.add_argument('--lr_patience', type=int, default=2,
+                       help='ReduceLROnPlateau的耐心值（默认2）')
+    parser.add_argument('--min_lr', type=float, default=1e-7,
+                       help='学习率下限（默认1e-7）')
     parser.add_argument('--samples_per_subject', type=int, default=None,
                        help='每个被试采样的体素数（None表示全部）')
     parser.add_argument('--save_predictions', action='store_true',
@@ -896,60 +952,71 @@ def main():
     
     logger.info(f'模型参数量: {sum(p.numel() for p in model.parameters()):,}')
     
-    # 检查是否为预测模式
-    if args.predict_only or args.load_model:
+    # 检查是否为预测模式（仅由 --predict_only 决定）
+    if args.predict_only:
+        # 预测模式必须提供 --load_model
         if not args.load_model:
             raise ValueError("预测模式需要指定模型路径 --load_model")
-        
+
         logger.info(f'加载预训练模型: {args.load_model}')
         checkpoint = torch.load(args.load_model, map_location='cpu')
         model.load_state_dict(checkpoint['model_state_dict'])
-        model = model.to(device)  # 确保模型在正确的设备上
+        model = model.to(device)
 
-        
         # 重新创建测试数据集
         test_dataset = TestDataset(test_file_1d, test_file_3d)
-        
+
         # ===== 关键验证：1D与3D标签一致性自检（预测模式）=====
         logger.info('验证1D与3D标签一致性（预测模式）...')
         mask = test_dataset.region_mask.astype(bool)
-        labels_3d = test_dataset.region_labels[mask]  # 从3D掩膜位置提取标签
-        labels_1d = test_dataset.labels               # 1D数据集的标签
-        
+        labels_3d = test_dataset.region_labels[mask]
+        labels_1d = test_dataset.labels
+
         if len(labels_1d) != len(labels_3d):
             logger.error(f"标签数量不匹配: 1D={len(labels_1d)}, 3D={len(labels_3d)}")
             raise ValueError("1D和3D标签数量不一致")
-        
+
         labels_match = np.array_equal(labels_1d, labels_3d)
         if labels_match:
             logger.info(f'  ✅ 标签一致性验证通过：{len(labels_1d)}个体素标签完全匹配')
         else:
-            # 计算不匹配的详细信息
             n_mismatch = np.sum(labels_1d != labels_3d)
             mismatch_rate = n_mismatch / len(labels_1d) * 100
-            
             logger.error(f'  ❌ 标签一致性验证失败！')
             logger.error(f'     不匹配体素数: {n_mismatch}/{len(labels_1d)} ({mismatch_rate:.2f}%)')
-            
-            # 显示前几个不匹配的位置
             mismatch_indices = np.where(labels_1d != labels_3d)[0][:10]
             for idx in mismatch_indices:
                 logger.error(f'     体素{idx}: 1D标签={labels_1d[idx]}, 3D标签={labels_3d[idx]}')
-            
             raise AssertionError("测试集标签在一维与三维不一致！可能是文件错配")
-        
+
         logger.info(f'测试样本数: {len(test_dataset)}')
-        
         history = None  # 预测模式不需要训练历史
-        
+
     else:
         # 训练模式
-        # 创建训练器
-        trainer = Trainer(model, device=device, learning_rate=0.00001)
-        
+        # 如果指定了 --load_model，先加载权重作为初始化
+        if args.load_model:
+            logger.info(f'加载预训练模型作为初始化: {args.load_model}')
+            checkpoint = torch.load(args.load_model, map_location='cpu')
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model = model.to(device)
+
+        # 创建训练器（传入学习率调度相关参数）
+        trainer = Trainer(
+            model,
+            device=device,
+            learning_rate=0.00001,
+            min_delta_acc=args.min_delta_acc,
+            lr_factor=args.lr_factor,
+            lr_patience=args.lr_patience,
+            min_lr=args.min_lr
+        )
+
         # 训练模型
         logger.info('开始训练...')
         logger.info(f'Early stopping patience: {args.patience}')
+        logger.info(f'Min delta for improvement: {args.min_delta_acc}')
+        logger.info(f'LR scheduler: factor={args.lr_factor}, patience={args.lr_patience}, min_lr={args.min_lr}')
         history = trainer.train(train_loader, test_loader, epochs=args.epochs, patience=args.patience)
     
     # 保存模型（仅训练模式）
@@ -1017,9 +1084,8 @@ def main():
             logger.info(f'Early Stopping: 否（完成全部{history["total_epochs"]}个epoch）')
             logger.info(f'最佳模型来自: Epoch {history["best_epoch"]}')
 
-        # 最佳指标
-        logger.info(f'最佳测试Gross Accuracy: {max(history["test_acc"]):.4f}')
-        logger.info(f'最佳测试F1: {max(history["test_f1"]):.4f}')
+        # 最佳指标（按min_delta规则确定的best，与保存的模型一致）
+        logger.info(f'最佳测试Gross Accuracy: {history["best_test_acc"]:.4f} (Epoch {history["best_epoch"]})')
 
         # 最终epoch的指标
         logger.info(f'最终训练Loss: {history["train_loss"][-1]:.4f}')
