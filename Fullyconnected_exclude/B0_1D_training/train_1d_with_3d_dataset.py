@@ -717,6 +717,153 @@ def should_exclude_subject(subject_name: str, exclude_set: set) -> bool:
             return True
     return False
 
+# ==================== 单次训练函数（用于交叉验证）====================
+
+def train_single_fold(
+    test_subject_name: str,
+    train_subject_names: List[str],
+    idx_1d: Dict,
+    idx_3d: Dict,
+    fold_output_dir: Path,
+    args,
+    device,
+    logger
+) -> Dict:
+    """
+    训练单个fold
+
+    Args:
+        test_subject_name: 测试被试名
+        train_subject_names: 训练被试名列表
+        idx_1d: 1D文件索引字典
+        idx_3d: 3D文件索引字典
+        fold_output_dir: 该fold的输出目录
+        args: 命令行参数
+        device: 计算设备
+        logger: 日志器
+
+    Returns:
+        fold_result: 包含该fold训练结果的字典
+    """
+    fold_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 获取文件路径
+    test_file_1d = idx_1d[test_subject_name]
+    test_file_3d = idx_3d[test_subject_name]
+    train_files_1d = [idx_1d[name] for name in train_subject_names]
+
+    logger.info(f'训练集: {len(train_files_1d)} 个被试')
+    logger.info(f'测试被试名: {test_subject_name}')
+
+    # 创建训练数据集
+    train_dataset = Brain1D_Dataset(
+        train_files_1d,
+        is_train=True,
+        samples_per_subject=args.samples_per_subject
+    )
+
+    # 创建测试数据集
+    test_dataset = TestDataset(test_file_1d, test_file_3d)
+
+    # 验证1D与3D标签一致性
+    mask = test_dataset.region_mask.astype(bool)
+    labels_3d = test_dataset.region_labels[mask]
+    labels_1d = test_dataset.labels
+
+    if len(labels_1d) != len(labels_3d):
+        raise ValueError(f"标签数量不匹配: 1D={len(labels_1d)}, 3D={len(labels_3d)}")
+
+    if not np.array_equal(labels_1d, labels_3d):
+        raise AssertionError("测试集标签在一维与三维不一致！")
+
+    logger.info(f'训练样本数: {len(train_dataset)}, 测试样本数: {len(test_dataset)}')
+
+    # 创建数据加载器
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    # 创建模型
+    model = RegModel(input_dim=351, num_classes=102)
+
+    # 如果指定了 --load_model，先加载权重作为初始化
+    if args.load_model:
+        logger.info(f'加载预训练模型作为初始化: {args.load_model}')
+        checkpoint = torch.load(args.load_model, map_location='cpu')
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+    # 创建训练器
+    trainer = Trainer(
+        model,
+        device=device,
+        learning_rate=0.00001,
+        min_delta_acc=args.min_delta_acc,
+        lr_factor=args.lr_factor,
+        lr_patience=args.lr_patience,
+        min_lr=args.min_lr
+    )
+
+    # 训练模型
+    history = trainer.train(train_loader, test_loader, epochs=args.epochs, patience=args.patience)
+
+    # 保存模型
+    model_path = fold_output_dir / 'model.pth'
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'history': history,
+        'test_subject': test_subject_name,
+        'args': vars(args)
+    }, model_path)
+
+    # 保存训练历史
+    history_path = fold_output_dir / 'history.json'
+    history_serializable = convert_to_json_serializable(history)
+    with open(history_path, 'w') as f:
+        json.dump(history_serializable, f, indent=2)
+
+    # 构建fold结果
+    fold_result = {
+        'test_subject': test_subject_name,
+        'best_test_acc': history['best_test_acc'],
+        'best_epoch': history['best_epoch'],
+        'early_stopped': history['early_stopped'],
+        'total_epochs': history['total_epochs'],
+        'final_test_acc': history['test_acc'][-1],
+        'final_test_f1': history['test_f1'][-1],
+    }
+
+    # 如果有best_test_metrics，添加更多指标
+    if 'best_test_metrics' in history and history['best_test_metrics']:
+        metrics = history['best_test_metrics']
+        fold_result.update({
+            'balanced_accuracy': metrics.get('balanced_accuracy'),
+            'macro_f1': metrics.get('macro_f1'),
+            'weighted_f1': metrics.get('weighted_f1'),
+            'cohen_kappa': metrics.get('cohen_kappa'),
+            'macro_soft_dice': metrics.get('macro_soft_dice'),
+        })
+
+    # 清理GPU内存
+    del model, trainer, train_dataset, test_dataset, train_loader, test_loader
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return fold_result
+
+
 # ==================== 主函数 ====================
 
 def main():
@@ -757,6 +904,8 @@ def main():
                        help='单次排除的被试名（用于每次排除一个的实验）')
     parser.add_argument('--fixed_test_subject', type=str, default=None,
                        help='固定测试被试名（用于对比实验）')
+    parser.add_argument('--cross_validation', action='store_true',
+                       help='启用交叉验证模式：每个可用被试轮流作为测试集')
 
     args = parser.parse_args()
     
@@ -848,7 +997,154 @@ def main():
 
     logger.info(f'剩余可用被试: {len(subject_names)}个')
 
-    # ===== 选择测试被试 =====
+    # ===== 交叉验证模式 vs 单次训练模式 =====
+    if args.cross_validation:
+        # ===== 交叉验证模式 =====
+        logger.info(f'\n{"="*60}')
+        logger.info(f'交叉验证模式: {len(subject_names)}-fold cross validation')
+        logger.info(f'{"="*60}\n')
+
+        fold_results = []
+        total_folds = len(subject_names)
+
+        for fold_idx, test_subject_name in enumerate(subject_names):
+            fold_num = fold_idx + 1
+            logger.info(f'\n{"="*60}')
+            logger.info(f'Fold {fold_num}/{total_folds}: 测试被试 = {test_subject_name}')
+            logger.info(f'{"="*60}')
+
+            # 设置该fold的随机种子（保证可复现）
+            fold_seed = 42 + fold_idx
+            torch.manual_seed(fold_seed)
+            torch.cuda.manual_seed(fold_seed)
+            np.random.seed(fold_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(fold_seed)
+
+            # 训练集：除测试被试外的所有被试
+            train_subject_names_fold = [name for name in subject_names if name != test_subject_name]
+
+            # 该fold的输出目录
+            fold_output_dir = output_dir / f'fold_{fold_num:02d}_{test_subject_name}'
+
+            # 训练该fold
+            try:
+                fold_result = train_single_fold(
+                    test_subject_name=test_subject_name,
+                    train_subject_names=train_subject_names_fold,
+                    idx_1d=idx_1d,
+                    idx_3d=idx_3d,
+                    fold_output_dir=fold_output_dir,
+                    args=args,
+                    device=device,
+                    logger=logger
+                )
+                fold_result['fold'] = fold_num
+                fold_result['status'] = 'success'
+                fold_results.append(fold_result)
+
+                logger.info(f'Fold {fold_num} 完成: best_test_acc={fold_result["best_test_acc"]:.4f}')
+
+            except Exception as e:
+                logger.error(f'Fold {fold_num} 失败: {e}')
+                fold_results.append({
+                    'fold': fold_num,
+                    'test_subject': test_subject_name,
+                    'status': 'failed',
+                    'error': str(e)
+                })
+
+        # ===== 生成交叉验证汇总报告 =====
+        logger.info(f'\n{"="*60}')
+        logger.info('交叉验证完成，生成汇总报告...')
+        logger.info(f'{"="*60}\n')
+
+        # 筛选成功的fold
+        successful_folds = [r for r in fold_results if r.get('status') == 'success']
+        failed_folds = [r for r in fold_results if r.get('status') == 'failed']
+
+        if successful_folds:
+            # 计算统计量
+            test_accs = [r['best_test_acc'] for r in successful_folds]
+            mean_acc = np.mean(test_accs)
+            std_acc = np.std(test_accs)
+
+            best_fold = max(successful_folds, key=lambda x: x['best_test_acc'])
+            worst_fold = min(successful_folds, key=lambda x: x['best_test_acc'])
+
+            # 构建汇总报告
+            cv_summary = {
+                'config': {
+                    'total_folds': total_folds,
+                    'successful_folds': len(successful_folds),
+                    'failed_folds': len(failed_folds),
+                    'excluded_subjects': list(exclude_set) if exclude_set else [],
+                    'epochs': args.epochs,
+                    'patience': args.patience,
+                    'batch_size': args.batch_size,
+                    'min_delta_acc': args.min_delta_acc,
+                    'lr_factor': args.lr_factor,
+                    'lr_patience': args.lr_patience,
+                    'min_lr': args.min_lr,
+                },
+                'fold_results': fold_results,
+                'summary': {
+                    'mean_test_acc': float(mean_acc),
+                    'std_test_acc': float(std_acc),
+                    'best_fold': {
+                        'fold': best_fold['fold'],
+                        'test_subject': best_fold['test_subject'],
+                        'test_acc': best_fold['best_test_acc']
+                    },
+                    'worst_fold': {
+                        'fold': worst_fold['fold'],
+                        'test_subject': worst_fold['test_subject'],
+                        'test_acc': worst_fold['best_test_acc']
+                    }
+                }
+            }
+
+            # 如果有更多指标，也计算它们的统计量
+            if 'balanced_accuracy' in successful_folds[0] and successful_folds[0]['balanced_accuracy'] is not None:
+                ba_values = [r['balanced_accuracy'] for r in successful_folds if r.get('balanced_accuracy') is not None]
+                if ba_values:
+                    cv_summary['summary']['mean_balanced_accuracy'] = float(np.mean(ba_values))
+                    cv_summary['summary']['std_balanced_accuracy'] = float(np.std(ba_values))
+
+            if 'macro_f1' in successful_folds[0] and successful_folds[0]['macro_f1'] is not None:
+                f1_values = [r['macro_f1'] for r in successful_folds if r.get('macro_f1') is not None]
+                if f1_values:
+                    cv_summary['summary']['mean_macro_f1'] = float(np.mean(f1_values))
+                    cv_summary['summary']['std_macro_f1'] = float(np.std(f1_values))
+
+            if 'cohen_kappa' in successful_folds[0] and successful_folds[0]['cohen_kappa'] is not None:
+                kappa_values = [r['cohen_kappa'] for r in successful_folds if r.get('cohen_kappa') is not None]
+                if kappa_values:
+                    cv_summary['summary']['mean_cohen_kappa'] = float(np.mean(kappa_values))
+                    cv_summary['summary']['std_cohen_kappa'] = float(np.std(kappa_values))
+
+            # 保存汇总报告
+            summary_path = output_dir / 'cv_summary.json'
+            with open(summary_path, 'w') as f:
+                json.dump(cv_summary, f, indent=2)
+
+            # 打印汇总
+            logger.info(f'===== 交叉验证汇总 =====')
+            logger.info(f'成功完成: {len(successful_folds)}/{total_folds} folds')
+            if failed_folds:
+                logger.info(f'失败: {len(failed_folds)} folds')
+            logger.info(f'平均测试Accuracy: {mean_acc:.4f} ± {std_acc:.4f}')
+            logger.info(f'最佳Fold: {best_fold["fold"]} ({best_fold["test_subject"]}), acc={best_fold["best_test_acc"]:.4f}')
+            logger.info(f'最差Fold: {worst_fold["fold"]} ({worst_fold["test_subject"]}), acc={worst_fold["best_test_acc"]:.4f}')
+            logger.info(f'汇总报告已保存至: {summary_path}')
+
+        else:
+            logger.error('所有fold都失败了！')
+
+        return  # 交叉验证模式结束
+
+    # ===== 单次训练模式（原有逻辑）=====
+    # 选择测试被试
     if args.fixed_test_subject:
         # 固定测试被试名（用于对比实验）
         test_subject_name = None
@@ -875,7 +1171,7 @@ def main():
     # 训练集：除测试被试外的所有被试
     train_subject_names = [name for name in subject_names if name != test_subject_name]
     train_files_1d = [idx_1d[name] for name in train_subject_names]
-    
+
     logger.info(f'训练集: {len(train_files_1d)} 个被试')
     logger.info(f'测试被试名: {test_subject_name}')
     logger.info(f'测试集1D: {test_file_1d.name}')
