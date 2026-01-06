@@ -10,7 +10,7 @@ DEVICE=0
 
 # 运行训练
 python main_deepmlp.py \
-    --test_subject "YHC_10_lnvguay" \
+    --test_subject "YHC_10_lncguay" \
     --epochs $EPOCHS \
     --batch_size $BATCH_SIZE \
     --lr $LR \
