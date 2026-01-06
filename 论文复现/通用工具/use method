@@ -1,8 +1,73 @@
-# 假设你在 train_1d_with_3d_dataset.py 中
+# 通用工具使用方法
 
+## 1. 数据加载器 (data_loaders.py)
+
+### 快速开始 - Per-Patient Z-Score 模式（推荐）
+
+```python
+from data_loaders import create_datasets, NormMode
+
+# 一行代码创建数据集
+train_ds, test_ds, train_names, test_name = create_datasets(
+    data_dir_1d="/path/to/1D/data",
+    data_dir_3d="/path/to/3D/data",
+    test_subject_idx=38,  # 测试被试编号 (1-based)
+    norm_mode=NormMode.PER_PATIENT_ZSCORE
+)
+
+# 创建 DataLoader
+from torch.utils.data import DataLoader
+train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
+```
+
+### 手动创建数据集
+
+```python
+from data_loaders import Brain1D_Dataset, TestDataset, NormMode
+from pathlib import Path
+
+# Per-Patient Z-Score 模式
+train_files = list(Path("./data/1D").glob("*.mat"))
+train_dataset = Brain1D_Dataset(train_files, norm_mode=NormMode.PER_PATIENT_ZSCORE)
+
+test_dataset = TestDataset(
+    mat_file_1d=Path("./test_1d.mat"),
+    mat_file_3d=Path("./test_3d_validated.mat"),
+    norm_mode=NormMode.PER_PATIENT_ZSCORE
+)
+
+# Global StandardScaler 模式
+train_dataset = Brain1D_Dataset(train_files, norm_mode=NormMode.GLOBAL_SCALER)
+test_dataset = TestDataset(
+    mat_file_1d, mat_file_3d,
+    norm_mode=NormMode.GLOBAL_SCALER,
+    scaler=train_dataset.scaler  # 必须传入训练时的scaler
+)
+```
+
+### 获取标准化配置（用于实验记录）
+
+```python
+norm_config = train_dataset.get_norm_config()
+# 返回: {"type": "per_patient_zscore", "params": {"epsilon": 1e-8, "fit_scope": "per_patient"}}
+```
+
+### 标签一致性验证
+
+```python
+is_valid = test_dataset.verify_label_consistency()
+# ✅ 标签一致性验证通过：100,000个体素完全匹配
+```
+
+---
+
+## 2. 实验日志器 (experiment_logger.py)
+
+```python
 from experiment_logger import ExperimentLogger
 
-# 1. 初始化 (在 main 开始时)
+# 1. 初始化
 logger = ExperimentLogger(
     experiment_id=f"kan_multiclass_test{args.test_subject}",
     method_name="KAN Multiclass (Spline Order 3)",
@@ -11,14 +76,13 @@ logger = ExperimentLogger(
     subfamily="kan_multiclass"
 )
 
-# 2. 记录配置 (在加载数据/模型后)
+# 2. 记录配置
 logger.set_task(
     split_id=f"loo_subject_{args.test_subject}",
     train_sub=train_subject_names,
     test_sub=[test_subject_name]
 )
 
-# 记录模型特有信息 (KAN 特有的配置)
 logger.set_model_details(
     param_count_m=model_param_count / 1e6,
     input_dim=341,
@@ -32,26 +96,54 @@ logger.set_model_details(
 )
 
 logger.set_training_config(
-    batch_size=args.batch_size, 
-    epochs=args.epochs, 
+    batch_size=args.batch_size,
+    epochs=args.epochs,
     lr=args.learning_rate,
     optimizer="adam"
 )
 
-# ... 训练过程 ...
-
-# 3. 记录结果 (在评估后)
-# 假设 evaluate() 返回了 predictions 和 true_labels
-metrics = trainer.evaluate(test_loader) # 这里你可以稍微改下你的 evaluate 让它返回原始 proba
-# 或者直接传入 raw data 让 logger 算:
-# logger.log_results(y_true=all_labels, y_pred_proba=all_probs, loss_val=final_loss)
-
-# 如果你已经有了 metrics 字典 (像你现在的代码那样)，你可以手动通过 hack 注入，
-# 但推荐使用 log_results 让它自动算一遍确保统一
-# 这里演示直接注入现有 metrics 的方法（兼容你现有逻辑）：
+# 3. 记录结果
 logger.data["results"]["global_metrics"] = trainer.best_test_metrics
 logger.data["results"]["evaluated_split"] = "test"
 logger.set_hardware(train_time_hours=train_time_hours)
 
 # 4. 保存
 logger.save(args.output_dir)
+```
+
+---
+
+## 3. 指标计算器 (metrics.py)
+
+```python
+from metrics import MetricCalculator
+
+# 一次性计算所有标准指标
+metrics = MetricCalculator.compute_all(
+    y_true=labels,           # (N,) 真实标签
+    y_pred_proba=probs,      # (N, C) Softmax概率
+    loss_val=loss,           # 可选
+    n_classes=102
+)
+
+# 返回包含所有 schema 要求指标的字典：
+# - gross_accuracy, top1_accuracy, top3_accuracy, top5_accuracy
+# - balanced_accuracy, macro_f1, weighted_f1, macro_soft_dice
+# - cohen_kappa, nll, ece, brier_score
+# - risk_at_95_coverage, actual_coverage_95
+```
+
+---
+
+## 4. 验证器 (validator.py)
+
+用于验证实验记录是否符合 schema 规范。
+
+---
+
+## 标准化模式对比
+
+| 模式 | experiment_id | method_key | subfamily |
+|------|---------------|------------|-----------|
+| Per-Patient Z-Score | `*_perpatient_zscore_*` | `*_perpatient_zscore` | `*_per_patient` |
+| Global Scaler | `*_globalstd_*` | `*_globalstd` | `baseline_*` |
