@@ -19,7 +19,7 @@ CONFIG = {
     'data_dir_3d': "/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated",
 
     # 测试被试名称
-    'test_subject': "YHC_10_lnvguay",
+    'test_subject': "YHC_10_lncguay",
 
     # 特征维度
     'feature_dim': 341,
