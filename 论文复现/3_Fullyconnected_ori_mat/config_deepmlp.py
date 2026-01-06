@@ -15,8 +15,8 @@ CONFIG = {
 
     # ==================== 数据配置 ====================
     # 1D 和 3D 数据目录
-    'data_dir_1d': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/1D",
-    'data_dir_3d': "/home/jovyan/gpu_space/workspace_jiayi/KAN training/brain_voxel_data/3D",
+    'data_dir_1d': "/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/1D",
+    'data_dir_3d': "/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/3D_validated",
 
     # 测试被试名称
     'test_subject': "YHC_10_lnvguay",
