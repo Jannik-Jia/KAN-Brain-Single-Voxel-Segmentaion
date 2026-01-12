@@ -109,6 +109,9 @@ def main():
 
     # 设置环境
     device = setup_environment(config)
+    if device.type != "cuda":
+        print("检测到未使用GPU，终止训练以避免CPU运行。请检查CUDA/驱动/设备ID后重试。")
+        return
 
     # ==================== 加载数据 ====================
     print("\n加载数据...")
@@ -123,12 +126,50 @@ def main():
         random_seed=config['random_seed']
     )
 
-    # 检测实际类别数
-    unique_labels = np.unique(train_dataset.all_labels)
-    actual_num_classes = len(unique_labels)
-    print(f"\n检测到 {actual_num_classes} 个类别")
-    print(f"标签范围: {unique_labels.min()} - {unique_labels.max()}")
-    config['num_class'] = actual_num_classes
+    # 检测标签范围，确保覆盖所有可能标签（即便单个被试缺类）
+    train_min, train_max = train_dataset.all_labels.min(), train_dataset.all_labels.max()
+    val_min, val_max = val_dataset.all_labels.min(), val_dataset.all_labels.max()
+    test_min, test_max = test_dataset.labels.min(), test_dataset.labels.max()
+
+    overall_min = min(train_min, val_min, test_min)
+    overall_max = max(train_max, val_max, test_max)
+
+    # 固定输出至少覆盖 102 类，避免标签稀疏导致 num_class 过小
+    target_num_classes = max(102, int(overall_max) + 1)
+
+    if overall_min < 0:
+        raise ValueError(f"标签存在负值，最小值为 {overall_min}")
+    if overall_max >= target_num_classes:
+        raise ValueError(
+            f"标签最大值 {overall_max} 超过 num_class 上限 {target_num_classes - 1}"
+        )
+
+    print(f"\n标签范围 (train/val/test): {overall_min} - {overall_max}")
+    print(f"设置 num_class = {target_num_classes}（覆盖全类以防缺失类别）")
+    config['num_class'] = target_num_classes
+
+    # 配置早停参数（仅用于监控记录，不提前终止训练）
+    n_epochs = config.get('epochs', 30)
+    if n_epochs >= 80:
+        early_stop_cfg = {
+            "enabled": True,
+            "monitor": "val_macro_f1",
+            "mode": "max",
+            "min_epochs": 40,
+            "patience": 10,
+            "delta": 0.0005
+        }
+    else:
+        early_stop_cfg = {
+            "enabled": True,
+            "monitor": "val_macro_f1",
+            "mode": "max",
+            "min_epochs": 15,
+            "patience": 5,
+            "delta": 0.001
+        }
+    config['early_stopping'] = early_stop_cfg
+    print(f"早停配置: {early_stop_cfg}")
 
     # 创建 DataLoader
     train_loader = DataLoader(
@@ -224,6 +265,7 @@ def main():
         experiment_name=experiment_name,
         config=config
     )
+    config['early_stopping_actual'] = training_results.get('early_stopping', {})
 
     train_time = time.time() - train_start
     print(f"\n训练完成，用时: {train_time / 60:.2f} 分钟")
@@ -314,14 +356,19 @@ def main():
         # 设置训练时间
         logger.set_training_time(train_time)
 
+        # 写入实际早停监控结果（即便未触发）
+        if config.get('early_stopping_actual'):
+            logger.data["training"]["early_stopping_actual"] = config['early_stopping_actual']
+
         # 记录结果
         logger.log_results_from_eval_dict(test_results, split="test")
 
-        # 添加说明：early_stopping 是计划配置，实际训练固定 N 个 epoch
+        # 添加说明：early_stopping 仅监控记录，不提前终止，训练固定 N 个 epoch
         logger.data["results"]["notes"] = (
             f"Residual MLP 4x4096 with skip connections. "
-            f"训练固定 {config['epochs']} 个 epoch，early_stopping 为计划配置未实际执行。"
+            f"训练固定 {config['epochs']} 个 epoch，early_stopping 仅监控不提前终止。"
             f"最佳模型基于验证集 macro_f1 选择。"
+            f" 早停监控实况: {config.get('early_stopping_actual', {})}"
         )
 
         # 设置结果路径

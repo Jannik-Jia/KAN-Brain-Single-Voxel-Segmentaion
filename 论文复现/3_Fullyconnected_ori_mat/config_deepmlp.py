@@ -36,7 +36,7 @@ CONFIG = {
 
     # ==================== 训练配置 ====================
     'epochs': 30,
-    'batch_size': 128,
+    'batch_size': 8192,
     'lr': 1e-5,
     'weight_decay': 1e-5,
     'optimizer': 'adamw',

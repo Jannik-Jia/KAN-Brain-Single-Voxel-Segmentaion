@@ -254,6 +254,7 @@ def main():
         experiment_name=experiment_name,
         config=config
     )
+    config['early_stopping_actual'] = training_results.get('early_stopping', {})
 
     train_time = time.time() - train_start
     print(f"\n训练完成，用时: {train_time / 60:.2f} 分钟")
@@ -336,13 +337,18 @@ def main():
         # 设置训练时间
         logger.set_training_time(train_time)
 
+        # 写入实际早停监控结果（即便未触发）
+        if config.get('early_stopping_actual'):
+            logger.data["training"]["early_stopping_actual"] = config['early_stopping_actual']
+
         # 记录结果
         logger.log_results_from_eval_dict(test_results, split="test")
 
-        # 添加说明：early_stopping 是计划配置，实际训练固定 N 个 epoch
+        # 添加说明：early_stopping 仅监控记录，不提前终止，训练固定 N 个 epoch
         logger.data["results"]["notes"] = (
-            f"训练固定 {config['epochs']} 个 epoch，early_stopping 为计划配置未实际执行。"
+            f"训练固定 {config['epochs']} 个 epoch，early_stopping 仅监控不提前终止。"
             f"最佳模型基于验证集 macro_f1 选择。"
+            f" 早停监控实况: {config.get('early_stopping_actual', {})}"
         )
 
         # 设置结果路径
