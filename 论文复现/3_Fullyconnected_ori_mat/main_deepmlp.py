@@ -115,12 +115,27 @@ def main():
         random_seed=config['random_seed']
     )
 
-    # 检测实际类别数
-    unique_labels = np.unique(train_dataset.all_labels)
-    actual_num_classes = len(unique_labels)
-    print(f"\n检测到 {actual_num_classes} 个类别")
-    print(f"标签范围: {unique_labels.min()} - {unique_labels.max()}")
-    config['num_class'] = actual_num_classes
+    # 检测标签范围，确保覆盖所有可能标签（即便单个被试缺类）
+    train_min, train_max = train_dataset.all_labels.min(), train_dataset.all_labels.max()
+    val_min, val_max = val_dataset.all_labels.min(), val_dataset.all_labels.max()
+    test_min, test_max = test_dataset.labels.min(), test_dataset.labels.max()
+
+    overall_min = min(train_min, val_min, test_min)
+    overall_max = max(train_max, val_max, test_max)
+
+    # 固定输出至少覆盖 102 类，避免标签稀疏导致 num_class 过小
+    target_num_classes = max(102, int(overall_max) + 1)
+
+    if overall_min < 0:
+        raise ValueError(f"标签存在负值，最小值为 {overall_min}")
+    if overall_max >= target_num_classes:
+        raise ValueError(
+            f"标签最大值 {overall_max} 超过 num_class 上限 {target_num_classes - 1}"
+        )
+
+    print(f"\n标签范围 (train/val/test): {overall_min} - {overall_max}")
+    print(f"设置 num_class = {target_num_classes}（覆盖全类以防缺失类别）")
+    config['num_class'] = target_num_classes
 
     # 创建 DataLoader
     train_loader = DataLoader(
