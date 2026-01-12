@@ -101,6 +101,9 @@ def main():
 
     # 设置环境
     device = setup_environment(config)
+    if device.type != "cuda":
+        print("检测到未使用GPU，终止训练以避免CPU运行。请检查CUDA/驱动/设备ID后重试。")
+        return
 
     # ==================== 加载数据 ====================
     print("\n加载数据...")
@@ -136,6 +139,29 @@ def main():
     print(f"\n标签范围 (train/val/test): {overall_min} - {overall_max}")
     print(f"设置 num_class = {target_num_classes}（覆盖全类以防缺失类别）")
     config['num_class'] = target_num_classes
+
+    # 配置早停参数（仅用于监控记录，不提前终止训练）
+    n_epochs = config.get('epochs', 30)
+    if n_epochs >= 80:
+        early_stop_cfg = {
+            "enabled": True,
+            "monitor": "val_macro_f1",
+            "mode": "max",
+            "min_epochs": 40,
+            "patience": 10,
+            "delta": 0.0005
+        }
+    else:
+        early_stop_cfg = {
+            "enabled": True,
+            "monitor": "val_macro_f1",
+            "mode": "max",
+            "min_epochs": 15,
+            "patience": 5,
+            "delta": 0.001
+        }
+    config['early_stopping'] = early_stop_cfg
+    print(f"早停配置: {early_stop_cfg}")
 
     # 创建 DataLoader
     train_loader = DataLoader(

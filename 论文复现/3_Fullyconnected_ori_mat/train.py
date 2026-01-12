@@ -55,6 +55,20 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
     # 🔧 新增：获取背景处理信息
     ignore_index = get_ignore_index(config) if config else None
     label_info = get_label_info_string(config) if config else "标准处理"
+
+    # 早停配置（仅监控记录，不提前终止训练）
+    early_cfg = config.get('early_stopping', {}) if config else {}
+    es_enabled = early_cfg.get('enabled', False)
+    es_monitor = early_cfg.get('monitor', 'val_macro_f1')
+    es_mode = early_cfg.get('mode', 'max')
+    es_min_epochs = early_cfg.get('min_epochs', 0)
+    es_patience = early_cfg.get('patience', 0)
+    es_delta = early_cfg.get('delta', 0.0)
+    best_metric = -np.inf if es_mode == 'max' else np.inf
+    best_epoch = None
+    patience_counter = 0
+    early_stop_triggered = False
+    early_stop_epoch = None
     
     # 初始化统计变量
     loss_list = []
@@ -87,6 +101,12 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
         f.write(f"Batch size: {train_loader.batch_size}\n")
         f.write(f"Background processing: {label_info}\n")  # 🔧 新增背景处理信息
         f.write(f"Loss function ignore_index: {ignore_index}\n\n")  # 🔧 新增ignore信息
+        if es_enabled:
+            f.write("Early stopping config: ")
+            f.write(f"monitor={es_monitor}, mode={es_mode}, min_epochs={es_min_epochs}, ")
+            f.write(f"patience={es_patience}, delta={es_delta}\n\n")
+        else:
+            f.write("Early stopping: disabled\n\n")
         f.write("Epoch,Train_Loss,Train_Acc,Train_F1,Val_Acc,Val_F1,Val_Kappa,Val_BalAcc,LR\n")
     
     # 创建CSV日志
@@ -112,7 +132,13 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
             train_all_targets = []
             
             # 批次循环 - 移除tqdm
-            for batch_idx, (data, target) in enumerate(train_loader):
+            train_iterator = tqdm(
+                train_loader,
+                desc=f"Train {e+1}/{num_epochs}",
+                leave=False,
+                dynamic_ncols=True
+            )
+            for batch_idx, (data, target) in enumerate(train_iterator):
                 data, target = data.to(device), target.to(device)
                 
                 optimizer.zero_grad()
@@ -175,7 +201,13 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
 
                 # 验证阶段
                 with torch.no_grad():
-                    for batch_idx, (data, target) in enumerate(val_loader):
+                    val_iterator = tqdm(
+                        val_loader,
+                        desc=f"Val {e+1}/{num_epochs}",
+                        leave=False,
+                        dynamic_ncols=True
+                    )
+                    for batch_idx, (data, target) in enumerate(val_iterator):
                         data, target = data.to(device), target.to(device)
                         out = model(data)
                         _, pred = torch.max(out, dim=1)
@@ -209,6 +241,48 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                     val_f1_macro = 0.0
                     val_kappa = 0.0
                     val_balanced_acc = 0.0
+
+                # 早停监控（不提前终止，仅记录触发点和最佳指标）
+                if es_enabled:
+                    if es_monitor == 'val_macro_f1':
+                        monitored_metric = val_f1_macro
+                    elif es_monitor == 'val_acc':
+                        monitored_metric = val_accuracy
+                    elif es_monitor == 'val_kappa':
+                        monitored_metric = val_kappa
+                    elif es_monitor == 'val_balanced_acc':
+                        monitored_metric = val_balanced_acc
+                    else:
+                        monitored_metric = val_f1_macro
+
+                    if es_mode == 'max':
+                        if monitored_metric > best_metric + es_delta:
+                            best_metric = monitored_metric
+                            best_epoch = e + 1
+                            patience_counter = 0
+                        else:
+                            if (e + 1) >= es_min_epochs:
+                                patience_counter += 1
+                    else:
+                        if monitored_metric < best_metric - es_delta:
+                            best_metric = monitored_metric
+                            best_epoch = e + 1
+                            patience_counter = 0
+                        else:
+                            if (e + 1) >= es_min_epochs:
+                                patience_counter += 1
+
+                    if (not early_stop_triggered
+                        and (e + 1) >= es_min_epochs
+                        and patience_counter >= es_patience):
+                        early_stop_triggered = True
+                        early_stop_epoch = e + 1
+                        es_msg = (f"Early stopping 条件满足于 Epoch {early_stop_epoch} "
+                                  f"(最佳 {es_monitor}={best_metric:.4f} @ epoch {best_epoch}); "
+                                  "继续训练以完整记录")
+                        print(es_msg)
+                        with open(log_file, 'a') as f:
+                            f.write(es_msg + "\n")
                 
                 # 保存验证结果
                 val_acc_list.append(val_accuracy)
@@ -243,7 +317,19 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
                     'train_time': time.time() - train_st,
                     'num_classes': config.get('num_class') if config else None,
                     'background_processed': label_info,  # 🔧 新增背景处理信息
-                    'ignore_index': ignore_index  # 🔧 新增ignore信息
+                    'ignore_index': ignore_index,  # 🔧 新增ignore信息
+                    'early_stopping': {
+                        'enabled': es_enabled,
+                        'monitor': es_monitor,
+                        'mode': es_mode,
+                        'min_epochs': es_min_epochs,
+                        'patience': es_patience,
+                        'delta': es_delta,
+                        'best_epoch': best_epoch if es_enabled else None,
+                        'best_metric': best_metric if es_enabled else None,
+                        'triggered': early_stop_triggered if es_enabled else False,
+                        'trigger_epoch': early_stop_epoch if es_enabled else None
+                    }
                 }
                 
                 # 其余保存逻辑保持不变...
@@ -337,5 +423,17 @@ def train_brain_voxel_mlp_multiclass(model, train_loader, val_loader, criterion,
         'val_balanced_acc_list': val_balanced_acc_list,
         'train_time': train_time,
         'lr_list': lr_list,
-        'last_epoch': e+1
+        'last_epoch': e+1,
+        'early_stopping': {
+            'enabled': es_enabled,
+            'monitor': es_monitor,
+            'mode': es_mode,
+            'min_epochs': es_min_epochs,
+            'patience': es_patience,
+            'delta': es_delta,
+            'best_epoch': best_epoch if es_enabled else None,
+            'best_metric': best_metric if es_enabled else None,
+            'triggered': early_stop_triggered if es_enabled else False,
+            'trigger_epoch': early_stop_epoch if es_enabled else None
+        }
     }
