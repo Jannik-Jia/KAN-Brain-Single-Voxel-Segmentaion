@@ -227,6 +227,159 @@ class RegModel_MLayer(nn.Module):
         return x
 
 
+# ==================== Paper-Compliant M-Layer (arXiv:2008.03936) ====================
+
+def expm_approx(M: torch.Tensor, k: int = 6) -> torch.Tensor:
+    """
+    Scaling & Squaring 矩阵指数近似（论文提出的快速算法）
+
+    原理：
+    - exp(M) = exp(M / 2^k)^(2^k)
+    - 对于较小的 M / 2^k，可以用一阶近似：exp(M/2^k) ≈ I + M/2^k
+    - 然后通过 k 次平方运算得到最终结果
+
+    Args:
+        M: 输入矩阵，形状 [B, n, n]
+        k: 平方次数（默认6，精度足够大多数应用）
+
+    Returns:
+        E: exp(M) 的近似值，形状 [B, n, n]
+    """
+    B, n, _ = M.shape
+    # 创建单位矩阵并扩展到 batch
+    I = torch.eye(n, device=M.device, dtype=M.dtype).unsqueeze(0).expand(B, -1, -1)
+    # 一阶近似: E ≈ I + M / 2^k
+    E = I + M / (2 ** k)
+    # k 次平方运算
+    for _ in range(k):
+        E = torch.matmul(E, E)
+    return E
+
+
+class RegModel_MLayerPaper(nn.Module):
+    """
+    Paper-Compliant M-Layer 实现（严格遵循 arXiv:2008.03936 的定义）
+
+    核心约束（论文一致性）：
+    1) 唯一非线性：矩阵指数 exp(M)
+       - 禁止 ReLU、Dropout、clamp、LayerNorm、softmax、sigmoid 等任何非线性
+    2) M(x) 对输入 x 是仿射（affine）：
+       - M(x) = B + Σ_a z_a(x) * T_a
+       - z(x) = U @ x + u 是线性层输出
+       - T_a 是可学习基矩阵，B 是可学习偏置矩阵
+    3) 输出是线性投影：
+       - p = Linear(vec(exp(M)))
+       - 等价论文中的 p = V + S:exp(M)
+       - 绝对不用 exp(M) @ h 这类 operator-based 形式
+
+    参数化（按任务要求）：
+    - embed: Linear(input_dim, basis_dim, bias=True) -- 生成 z(x)
+    - basis: Parameter(basis_dim, matrix_size, matrix_size) -- 基矩阵 T_a
+    - B: Parameter(matrix_size, matrix_size) -- 偏置矩阵
+    - out: Linear(matrix_size*matrix_size, num_classes, bias=True) -- 线性输出层
+
+    前向传播：
+    - z = embed(x)                                      # [B, basis_dim]
+    - M = B + einsum('ba,amn->bmn', z, basis)          # [B, n, n]
+    - M = scale * M                                     # 线性缩放（不破坏"唯一非线性"）
+    - E = matrix_exp(M)                                 # 唯一非线性
+    - logits = out(E.reshape(B, n*n))                  # 线性投影
+    """
+
+    def __init__(
+        self,
+        input_dim: int = 351,
+        num_classes: int = 102,
+        matrix_size: int = 8,
+        basis_dim: int = 64,
+        expm_mode: str = 'exact',
+        expm_k: int = 6,
+        scale: float = 1.0,
+        init_std: float = 0.01
+    ):
+        """
+        Args:
+            input_dim: 输入特征维度
+            num_classes: 输出类别数
+            matrix_size: 方阵大小 n（exp(M) 的 M 是 n×n 矩阵）
+            basis_dim: 基矩阵数量 A（z(x) 的维度）
+            expm_mode: 矩阵指数计算模式 ('exact' 使用 torch.matrix_exp, 'approx' 使用 scaling & squaring)
+            expm_k: approx 模式下的平方次数
+            scale: M 的线性缩放因子（用于数值稳定性）
+            init_std: 参数初始化标准差
+        """
+        super(RegModel_MLayerPaper, self).__init__()
+
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        self.matrix_size = matrix_size
+        self.basis_dim = basis_dim
+        self.expm_mode = expm_mode
+        self.expm_k = expm_k
+        self.scale = scale
+
+        # z(x) = U @ x + u: 线性嵌入层，生成基矩阵组合系数
+        self.embed = nn.Linear(input_dim, basis_dim, bias=True)
+
+        # T_a: 可学习基矩阵 (basis_dim 个 matrix_size×matrix_size 的矩阵)
+        self.basis = nn.Parameter(
+            torch.randn(basis_dim, matrix_size, matrix_size) * init_std
+        )
+
+        # B: 可学习偏置矩阵
+        self.B = nn.Parameter(torch.zeros(matrix_size, matrix_size))
+
+        # 线性输出层: vec(exp(M)) -> logits
+        self.out = nn.Linear(matrix_size * matrix_size, num_classes, bias=True)
+
+        # 保存配置（用于 checkpoint）
+        self.m_layer_paper_config = {
+            'matrix_size': matrix_size,
+            'basis_dim': basis_dim,
+            'expm_mode': expm_mode,
+            'expm_k': expm_k,
+            'scale': scale,
+            'init_std': init_std
+        }
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        前向传播（严格遵循论文定义，唯一非线性是 matrix_exp）
+
+        Args:
+            x: 输入张量，形状 [B, input_dim]
+
+        Returns:
+            logits: 输出张量，形状 [B, num_classes]
+        """
+        B = x.shape[0]
+
+        # Step 1: 计算线性嵌入 z(x) = U @ x + u
+        # 这是纯线性操作
+        z = self.embed(x)  # [B, basis_dim]
+
+        # Step 2: 构造矩阵 M(x) = B + Σ_a z_a(x) * T_a
+        # M 对 x 是仿射的（线性变换 + 偏置）
+        # 使用 einsum: z[b,a] * basis[a,m,n] -> M[b,m,n]
+        M = self.B + torch.einsum('ba,amn->bmn', z, self.basis)  # [B, n, n]
+
+        # Step 3: 线性缩放（不破坏"唯一非线性"约束）
+        M = self.scale * M
+
+        # Step 4: 计算矩阵指数（唯一的非线性操作）
+        if self.expm_mode == 'exact':
+            E = torch.matrix_exp(M)  # [B, n, n]
+        else:  # approx
+            E = expm_approx(M, k=self.expm_k)  # [B, n, n]
+
+        # Step 5: 展平并线性投影到输出空间
+        # p = V + S:exp(M)，等价于 Linear(vec(exp(M)))
+        E_flat = E.reshape(B, -1)  # [B, n*n]
+        logits = self.out(E_flat)  # [B, num_classes]
+
+        return logits
+
+
 def count_parameters(model):
     """计算模型参数量"""
     return sum(p.numel() for p in model.parameters())
@@ -267,43 +420,67 @@ def load_model_state_dict_compatible(model, state_dict, strict=True):
 
 
 def print_model_comparison(input_dim=351, num_classes=102,
-                           matrix_size=64, scale=0.01, clip=10.0):
-    """打印 baseline 和 m_layer 模型的参数量对比"""
+                           matrix_size=64, scale=0.01, clip=10.0,
+                           basis_dim=64, expm_mode='exact', expm_k=6,
+                           init_std=0.01, model_type='m_layer'):
+    """打印 baseline、m_layer 和 m_layer_paper 模型的参数量对比"""
     # 创建临时模型计算参数量
     baseline = RegModel(input_dim=input_dim, num_classes=num_classes)
-    mlayer = RegModel_MLayer(
-        input_dim=input_dim,
-        num_classes=num_classes,
-        matrix_size=matrix_size,
-        scale=scale,
-        clip=clip
-    )
-
     baseline_params = count_parameters(baseline)
-    mlayer_params = count_parameters(mlayer)
-    diff = baseline_params - mlayer_params  # 正值表示减少
-    diff_ratio = diff / baseline_params * 100
 
-    print(f"\n{'='*60}")
-    print("模型参数量对比 (Operator-based M-Layer)")
-    print(f"{'='*60}")
-    print(f"Baseline (RegModel):       {baseline_params:,} 参数")
-    print(f"M-Layer (RegModel_MLayer): {mlayer_params:,} 参数")
+    print(f"\n{'='*70}")
+    print("模型参数量对比")
+    print(f"{'='*70}")
+    print(f"Baseline (RegModel):              {baseline_params:,} 参数")
 
-    if diff > 0:
-        print(f"参数减少: {diff:,} ({diff_ratio:.1f}%)")
-        print("✅ Operator-based 设计：移除了 from_matrix 层")
-    elif diff == 0:
-        print("参数量完全匹配")
-    else:
-        print(f"参数增加: {abs(diff):,} ({abs(diff_ratio):.1f}%)")
+    if model_type == 'm_layer':
+        mlayer = RegModel_MLayer(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            matrix_size=matrix_size,
+            scale=scale,
+            clip=clip
+        )
+        mlayer_params = count_parameters(mlayer)
+        diff = baseline_params - mlayer_params
+        diff_ratio = diff / baseline_params * 100
 
-    print(f"{'='*60}\n")
+        print(f"M-Layer (Operator):               {mlayer_params:,} 参数")
+        if diff > 0:
+            print(f"  → 相比 Baseline 减少: {diff:,} ({diff_ratio:.1f}%)")
+        elif diff < 0:
+            print(f"  → 相比 Baseline 增加: {abs(diff):,} ({abs(diff_ratio):.1f}%)")
+        del mlayer
+
+    elif model_type == 'm_layer_paper':
+        mlayer_paper = RegModel_MLayerPaper(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            matrix_size=matrix_size,
+            basis_dim=basis_dim,
+            expm_mode=expm_mode,
+            expm_k=expm_k,
+            scale=scale,
+            init_std=init_std
+        )
+        paper_params = count_parameters(mlayer_paper)
+        diff = baseline_params - paper_params
+        diff_ratio = diff / baseline_params * 100
+
+        print(f"M-Layer (Paper, n={matrix_size}, A={basis_dim}): {paper_params:,} 参数")
+        if diff > 0:
+            print(f"  → 相比 Baseline 减少: {diff:,} ({diff_ratio:.1f}%)")
+        elif diff < 0:
+            print(f"  → 相比 Baseline 增加: {abs(diff):,} ({abs(diff_ratio):.1f}%)")
+        print(f"  → expm_mode: {expm_mode}, expm_k: {expm_k}")
+        del mlayer_paper
+
+    print(f"{'='*70}\n")
 
     # 清理
-    del baseline, mlayer
+    del baseline
 
-    return baseline_params, mlayer_params
+    return baseline_params
 
 # ==================== L2正则化 ====================
 
@@ -1059,8 +1236,22 @@ def train_single_fold(
             scale=args.m_scale,
             clip=args.m_clip
         )
-        logger.info(f'使用 M-Layer 模型 (matrix_size={args.m_matrix_size}, '
+        logger.info(f'使用 M-Layer (Operator) 模型 (matrix_size={args.m_matrix_size}, '
                    f'scale={args.m_scale}, clip={args.m_clip})')
+    elif args.model_type == 'm_layer_paper':
+        model = RegModel_MLayerPaper(
+            input_dim=351,
+            num_classes=102,
+            matrix_size=args.m_matrix_size,
+            basis_dim=args.m_basis_dim,
+            expm_mode=args.m_expm_mode,
+            expm_k=args.m_expm_k,
+            scale=args.m_scale,
+            init_std=args.m_init_std
+        )
+        logger.info(f'使用 M-Layer (Paper) 模型 (matrix_size={args.m_matrix_size}, '
+                   f'basis_dim={args.m_basis_dim}, scale={args.m_scale}, '
+                   f'expm_mode={args.m_expm_mode}, expm_k={args.m_expm_k})')
     else:
         raise ValueError(f"不支持的模型类型: {args.model_type}")
 
@@ -1097,8 +1288,12 @@ def train_single_fold(
     # 训练模型
     history = trainer.train(train_loader, test_loader, epochs=args.epochs, patience=args.patience)
 
-    # 保存模型
-    model_path = fold_output_dir / 'model.pth'
+    # 保存模型（根据模型类型使用不同的文件名）
+    if args.model_type == 'm_layer_paper':
+        model_path = fold_output_dir / 'm_layer_paper_model.pth'
+    else:
+        model_path = fold_output_dir / 'model.pth'
+
     save_dict = {
         'model_state_dict': model.state_dict(),
         'history': history,
@@ -1106,12 +1301,22 @@ def train_single_fold(
         'args': vars(args),
         'model_type': args.model_type,  # 保存模型类型
     }
-    # 如果是 M-Layer 模型，保存其配置
+    # 如果是 M-Layer (Operator) 模型，保存其配置
     if args.model_type == 'm_layer':
         save_dict['m_layer_config'] = {
             'matrix_size': args.m_matrix_size,
             'scale': args.m_scale,
             'clip': args.m_clip
+        }
+    # 如果是 M-Layer (Paper) 模型，保存其配置
+    elif args.model_type == 'm_layer_paper':
+        save_dict['m_layer_paper_config'] = {
+            'matrix_size': args.m_matrix_size,
+            'basis_dim': args.m_basis_dim,
+            'expm_mode': args.m_expm_mode,
+            'expm_k': args.m_expm_k,
+            'scale': args.m_scale,
+            'init_std': args.m_init_std
         }
     torch.save(save_dict, model_path)
 
@@ -1197,14 +1402,25 @@ def main():
 
     # ===== M-Layer 模型相关参数 =====
     parser.add_argument('--model_type', type=str, default='m_layer',
-                       choices=['baseline', 'm_layer'],
-                       help='模型类型: baseline (4x4096 MLP) 或 m_layer (矩阵指数层，默认)')
+                       choices=['baseline', 'm_layer', 'm_layer_paper'],
+                       help='模型类型: baseline (4x4096 MLP), m_layer (operator-based), m_layer_paper (论文严格实现)')
     parser.add_argument('--m_matrix_size', type=int, default=64,
-                       help='M-Layer 矩阵大小 (默认64，必须满足 matrix_size^2=4096)')
+                       help='M-Layer 矩阵大小 (m_layer: 默认64，必须满足 matrix_size^2=4096; m_layer_paper: 任意)')
     parser.add_argument('--m_scale', type=float, default=0.01,
                        help='M-Layer 输入缩放因子 (默认0.01，用于数值稳定性)')
     parser.add_argument('--m_clip', type=float, default=10.0,
-                       help='M-Layer 数值裁剪范围 (默认10.0，设为-1表示不裁剪)')
+                       help='M-Layer (operator) 数值裁剪范围 (默认10.0，设为-1表示不裁剪，仅对 m_layer 有效)')
+
+    # ===== Paper-Compliant M-Layer 专用参数 =====
+    parser.add_argument('--m_basis_dim', type=int, default=64,
+                       help='Paper M-Layer 基矩阵数量/嵌入维度 (默认64，仅对 m_layer_paper 有效)')
+    parser.add_argument('--m_expm_mode', type=str, default='exact',
+                       choices=['exact', 'approx'],
+                       help='矩阵指数计算模式: exact (torch.matrix_exp) 或 approx (scaling & squaring)')
+    parser.add_argument('--m_expm_k', type=int, default=6,
+                       help='Scaling & Squaring 平方次数 (默认6，仅对 m_expm_mode=approx 有效)')
+    parser.add_argument('--m_init_std', type=float, default=0.01,
+                       help='Paper M-Layer 参数初始化标准差 (默认0.01)')
 
     args = parser.parse_args()
 
@@ -1222,14 +1438,19 @@ def main():
     # ===== 模型类型配置验证 =====
     logger.info(f'模型类型: {args.model_type}')
     if args.model_type == 'm_layer':
-        # 验证 matrix_size^2 == 4096
+        # Operator-based M-Layer: 验证 matrix_size^2 == 4096
         if args.m_matrix_size * args.m_matrix_size != 4096:
             raise ValueError(
                 f"m_matrix_size^2 ({args.m_matrix_size}^2={args.m_matrix_size**2}) "
                 f"必须等于 4096。请使用 --m_matrix_size 64"
             )
-        logger.info(f'M-Layer 配置: matrix_size={args.m_matrix_size}, '
+        logger.info(f'M-Layer (Operator) 配置: matrix_size={args.m_matrix_size}, '
                    f'scale={args.m_scale}, clip={args.m_clip}')
+    elif args.model_type == 'm_layer_paper':
+        # Paper-Compliant M-Layer: 不需要 matrix_size^2==4096 的约束
+        logger.info(f'M-Layer (Paper) 配置: matrix_size={args.m_matrix_size}, '
+                   f'basis_dim={args.m_basis_dim}, scale={args.m_scale}, '
+                   f'expm_mode={args.m_expm_mode}, expm_k={args.m_expm_k}')
 
     # 打印参数量对比（仅在程序启动时打印一次）
     print_model_comparison(
@@ -1237,7 +1458,12 @@ def main():
         num_classes=102,
         matrix_size=args.m_matrix_size,
         scale=args.m_scale,
-        clip=args.m_clip
+        clip=args.m_clip,
+        basis_dim=args.m_basis_dim,
+        expm_mode=args.m_expm_mode,
+        expm_k=args.m_expm_k,
+        init_std=args.m_init_std,
+        model_type=args.model_type
     )
 
     # 创建输出目录
@@ -1579,8 +1805,22 @@ def main():
             scale=args.m_scale,
             clip=args.m_clip
         )
-        logger.info(f'使用 M-Layer 模型 (matrix_size={args.m_matrix_size}, '
+        logger.info(f'使用 M-Layer (Operator) 模型 (matrix_size={args.m_matrix_size}, '
                    f'scale={args.m_scale}, clip={args.m_clip})')
+    elif args.model_type == 'm_layer_paper':
+        model = RegModel_MLayerPaper(
+            input_dim=351,
+            num_classes=102,
+            matrix_size=args.m_matrix_size,
+            basis_dim=args.m_basis_dim,
+            expm_mode=args.m_expm_mode,
+            expm_k=args.m_expm_k,
+            scale=args.m_scale,
+            init_std=args.m_init_std
+        )
+        logger.info(f'使用 M-Layer (Paper) 模型 (matrix_size={args.m_matrix_size}, '
+                   f'basis_dim={args.m_basis_dim}, scale={args.m_scale}, '
+                   f'expm_mode={args.m_expm_mode}, expm_k={args.m_expm_k})')
     else:
         raise ValueError(f"不支持的模型类型: {args.model_type}")
 
@@ -1680,8 +1920,12 @@ def main():
         # 根据模型类型决定文件名
         if args.model_type == 'baseline':
             model_filename = f'dense_4x4096_model_test{args.test_subject}.pth'
-        else:
+        elif args.model_type == 'm_layer':
             model_filename = f'm_layer_model_test{args.test_subject}.pth'
+        elif args.model_type == 'm_layer_paper':
+            model_filename = f'm_layer_paper_model_test{args.test_subject}.pth'
+        else:
+            model_filename = f'model_test{args.test_subject}.pth'
 
         model_path = output_dir / model_filename
         save_dict = {
@@ -1691,12 +1935,22 @@ def main():
             'args': vars(args),
             'model_type': args.model_type,  # 保存模型类型
         }
-        # 如果是 M-Layer 模型，保存其配置
+        # 如果是 M-Layer (Operator) 模型，保存其配置
         if args.model_type == 'm_layer':
             save_dict['m_layer_config'] = {
                 'matrix_size': args.m_matrix_size,
                 'scale': args.m_scale,
                 'clip': args.m_clip
+            }
+        # 如果是 M-Layer (Paper) 模型，保存其配置
+        elif args.model_type == 'm_layer_paper':
+            save_dict['m_layer_paper_config'] = {
+                'matrix_size': args.m_matrix_size,
+                'basis_dim': args.m_basis_dim,
+                'expm_mode': args.m_expm_mode,
+                'expm_k': args.m_expm_k,
+                'scale': args.m_scale,
+                'init_std': args.m_init_std
             }
         torch.save(save_dict, model_path)
         logger.info(f'模型保存至: {model_path}')
@@ -1766,5 +2020,127 @@ def main():
         logger.info(f'最终测试F1: {history["test_f1"][-1]:.4f}')
         logger.info(f'最终测试Acc: {history["test_acc"][-1]:.4f}')
 
+def smoke_test_paper_model():
+    """
+    Smoke test for the Paper-Compliant M-Layer model.
+
+    验证：
+    1. 模型可以正确创建
+    2. 前向传播不报错
+    3. 输出形状正确
+    4. 唯一非线性只有 matrix_exp（通过代码审查确认）
+
+    使用方法：
+        python train_1d_with_3d_dataset.py --smoke_test
+    或在 Python 中：
+        from train_1d_with_3d_dataset import smoke_test_paper_model
+        smoke_test_paper_model()
+    """
+    print("\n" + "="*60)
+    print("Paper M-Layer Smoke Test")
+    print("="*60)
+
+    # 测试参数
+    batch_size = 8
+    input_dim = 351
+    num_classes = 102
+    matrix_size = 8
+    basis_dim = 64
+
+    # 创建随机输入
+    x = torch.randn(batch_size, input_dim)
+    print(f"输入形状: {x.shape}")
+
+    # 测试 exact 模式
+    print("\n--- 测试 exact 模式 ---")
+    model_exact = RegModel_MLayerPaper(
+        input_dim=input_dim,
+        num_classes=num_classes,
+        matrix_size=matrix_size,
+        basis_dim=basis_dim,
+        expm_mode='exact',
+        scale=1.0
+    )
+    print(f"模型参数量: {count_parameters(model_exact):,}")
+
+    model_exact.eval()
+    with torch.no_grad():
+        logits_exact = model_exact(x)
+    print(f"输出形状: {logits_exact.shape}")
+    assert logits_exact.shape == (batch_size, num_classes), \
+        f"输出形状错误: 期望 ({batch_size}, {num_classes}), 得到 {logits_exact.shape}"
+    print("✅ exact 模式通过")
+
+    # 测试 approx 模式
+    print("\n--- 测试 approx 模式 ---")
+    model_approx = RegModel_MLayerPaper(
+        input_dim=input_dim,
+        num_classes=num_classes,
+        matrix_size=matrix_size,
+        basis_dim=basis_dim,
+        expm_mode='approx',
+        expm_k=6,
+        scale=1.0
+    )
+
+    model_approx.eval()
+    with torch.no_grad():
+        logits_approx = model_approx(x)
+    print(f"输出形状: {logits_approx.shape}")
+    assert logits_approx.shape == (batch_size, num_classes), \
+        f"输出形状错误: 期望 ({batch_size}, {num_classes}), 得到 {logits_approx.shape}"
+    print("✅ approx 模式通过")
+
+    # 测试不同的 matrix_size 和 basis_dim 组合
+    print("\n--- 测试不同参数组合 ---")
+    test_configs = [
+        {'matrix_size': 4, 'basis_dim': 32},
+        {'matrix_size': 16, 'basis_dim': 128},
+        {'matrix_size': 32, 'basis_dim': 64},
+    ]
+
+    for cfg in test_configs:
+        model_test = RegModel_MLayerPaper(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            matrix_size=cfg['matrix_size'],
+            basis_dim=cfg['basis_dim'],
+            expm_mode='exact',
+            scale=1.0
+        )
+        model_test.eval()
+        with torch.no_grad():
+            out = model_test(x)
+        assert out.shape == (batch_size, num_classes)
+        print(f"✅ matrix_size={cfg['matrix_size']}, basis_dim={cfg['basis_dim']} 通过")
+
+    # 验证 expm_approx 函数
+    print("\n--- 测试 expm_approx 近似精度 ---")
+    M_test = torch.randn(4, 8, 8) * 0.1  # 小矩阵，确保收敛
+    E_exact = torch.matrix_exp(M_test)
+    E_approx = expm_approx(M_test, k=10)
+    diff = torch.abs(E_exact - E_approx).max().item()
+    print(f"exact vs approx (k=10) 最大差异: {diff:.6f}")
+    assert diff < 0.01, f"近似误差过大: {diff}"
+    print("✅ expm_approx 精度验证通过")
+
+    print("\n" + "="*60)
+    print("所有 Smoke Test 通过！")
+    print("="*60 + "\n")
+
+    # 打印论文一致性确认
+    print("论文一致性确认:")
+    print("  1) 唯一非线性: torch.matrix_exp / expm_approx ✓")
+    print("  2) M(x) 对 x 是仿射: B + einsum(z, basis) ✓")
+    print("  3) 输出是线性投影: Linear(vec(exp(M))) ✓")
+    print("  4) 无 ReLU/Dropout/clamp/LayerNorm 等非线性 ✓")
+
+    return True
+
+
 if __name__ == '__main__':
-    main()
+    import sys
+    if '--smoke_test' in sys.argv:
+        smoke_test_paper_model()
+    else:
+        main()
