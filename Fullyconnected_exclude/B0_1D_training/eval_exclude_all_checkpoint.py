@@ -202,10 +202,11 @@ def main():
         y_true, y_pred, labels=list(range(n_classes)), average=None, zero_division=0
     ).tolist()
 
+
     for c in range(n_classes):
-        mask = y_true == c
+        mask = (y_true == c)
         if np.sum(mask) == 0:
-            per_class_acc.append(float("nan"))
+            per_class_acc.append(None)  # JSON-safe: null
         else:
             per_class_acc.append(float(np.mean(y_pred[mask] == y_true[mask])))
 
@@ -239,8 +240,10 @@ def main():
         if args.output_json
         else ckpt_path.parent / "eval_metrics_exclude_all.json"
     )
+
     with open(output_json, "w") as f:
-        json.dump(result, f, indent=2)
+        json.dump(result, f, indent=2, allow_nan=False)
+
     print(f"指标已保存到: {output_json}")
 
 
