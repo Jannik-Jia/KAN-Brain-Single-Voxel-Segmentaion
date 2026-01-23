@@ -27,8 +27,23 @@ from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, cohen_ka
 import matplotlib.pyplot as plt
 import sys
 
-# 添加1d-3d-convert模块路径
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'dataset_create' / '1d-3d-convert'))
+# 添加1d-3d-convert模块路径（相对train_runner.py，兼容不同仓库布局，避免硬编码绝对路径）
+_HERE = Path(__file__).resolve().parent
+_MAPPER_REL_PATHS = [
+    Path('..') / '..' / 'dataset_create' / '1d-3d-convert',
+    Path('..') / '..' / '3D_dev' / 'dataset_create' / '1d-3d-convert',
+]
+
+for _rel_path in _MAPPER_REL_PATHS:
+    _candidate = (_HERE / _rel_path).resolve()
+    if _candidate.exists():
+        sys.path.insert(0, str(_candidate))
+        break
+else:
+    raise ImportError(
+        "找不到 data_3d_1d_mapper.py。请确认存在 dataset_create/1d-3d-convert "
+        "或 3D_dev/dataset_create/1d-3d-convert 目录。"
+    )
 
 from data_3d_1d_mapper import Data3D1DMapper
 

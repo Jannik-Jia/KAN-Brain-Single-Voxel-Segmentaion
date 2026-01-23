@@ -430,7 +430,7 @@ pip install -r requirements.txt
 ### 外部模块
 
 - `data_3d_1d_mapper.py`: 3D-1D数据映射工具（自动加载）
-  - 路径: `../dataset_create/1d-3d-convert/data_3d_1d_mapper.py`
+  - 路径: `../dataset_create/1d-3d-convert/data_3d_1d_mapper.py`（若使用3D_dev目录，则为 `../3D_dev/dataset_create/1d-3d-convert/data_3d_1d_mapper.py`）
 
 ---
 
