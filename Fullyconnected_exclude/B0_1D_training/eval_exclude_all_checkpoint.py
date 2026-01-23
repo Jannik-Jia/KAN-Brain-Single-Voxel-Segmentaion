@@ -15,8 +15,9 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from sklearn.metrics import f1_score
 
-from evaluation_metrics import compute_all_metrics_from_loader
+from evaluation_metrics import compute_all_metrics
 from train_1d_with_3d_dataset import (
     RegModel,
     TestDataset,
@@ -108,6 +109,30 @@ def build_test_loader(saved_args: dict, batch_size: int) -> Tuple[DataLoader, st
     return test_loader, test_subject_name
 
 
+def collect_predictions(model: RegModel, loader: DataLoader, device: torch.device):
+    """单次遍历收集预测结果，返回 y_true, y_pred, y_probs"""
+    model.eval()
+    all_true = []
+    all_pred = []
+    all_probs = []
+
+    with torch.no_grad():
+        for data, target in loader:
+            data = data.to(device)
+            output = model(data)
+            probs = torch.softmax(output, dim=1)
+            pred = torch.argmax(output, dim=1)
+
+            all_true.extend(target.cpu().numpy())
+            all_pred.extend(pred.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
+
+    y_true = np.array(all_true)
+    y_pred = np.array(all_pred)
+    y_probs = np.array(all_probs)
+    return y_true, y_pred, y_probs
+
+
 def main():
     parser = argparse.ArgumentParser(description="评估排除全部实验的Checkpoint (Macro F1 & GC)")
     parser.add_argument(
@@ -167,8 +192,22 @@ def main():
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
 
-    # 评估
-    metrics = compute_all_metrics_from_loader(model, test_loader, device=device)
+    # 评估：单次前向收集，再计算整体与逐类指标
+    y_true, y_pred, y_probs = collect_predictions(model, test_loader, device)
+    metrics = compute_all_metrics(y_true, y_pred, y_probs)
+
+    n_classes = y_probs.shape[1]
+    per_class_acc = []
+    per_class_f1 = f1_score(
+        y_true, y_pred, labels=list(range(n_classes)), average=None, zero_division=0
+    ).tolist()
+
+    for c in range(n_classes):
+        mask = y_true == c
+        if np.sum(mask) == 0:
+            per_class_acc.append(float("nan"))
+        else:
+            per_class_acc.append(float(np.mean(y_pred[mask] == y_true[mask])))
 
     result = {
         "checkpoint": str(ckpt_path),
@@ -181,6 +220,8 @@ def main():
         "top5_accuracy": metrics.get("top5_accuracy"),
         "balanced_accuracy": metrics.get("balanced_accuracy"),
         "weighted_f1": metrics.get("weighted_f1"),
+        "per_class_gross_accuracy": per_class_acc,
+        "per_class_f1": per_class_f1,
     }
 
     # 打印核心指标
