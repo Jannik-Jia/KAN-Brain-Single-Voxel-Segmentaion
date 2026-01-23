@@ -10,6 +10,9 @@
 # 配置参数
 # ============================================================================
 
+# 脚本所在目录（用于构造默认相对路径）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # 数据路径
 DATA_ROOT="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/downsampling/3d"  # 数据根目录
 
@@ -18,7 +21,7 @@ OUTPUT_DIR="./runs/leave_one_out"
 
 # 需要排除的被试列表（可为空）。默认使用 Fullyconnected_exclude 中的列表。
 # 列表格式：一行一个关键字，文件名中包含该关键字的被试将被过滤掉。
-EXCLUDE_FILE="/home/jovyan/gpu_space/workspace_jiayi/KAN-git/KAN-Brain-Single-Voxel-Segmentaion/论文复现/hard+cest /exclude_subjects.txt"
+EXCLUDE_FILE="${SCRIPT_DIR}/exclude_subjects.txt"
 # ==================== 关键参数：训练监督模式 ====================
 # soft: 使用软标签 q_i 训练 (Soft+CEST)
 # hard: 使用硬标签 one_hot(argmax(q_i)) 训练 (Hard+CEST)
@@ -237,7 +240,7 @@ EOF
             --ece-n-bins ${ECE_N_BINS}"
 
         if [ -n "$EXCLUDE_FILE" ]; then
-            CMD="${CMD} --exclude-file ${EXCLUDE_FILE}"
+            CMD="${CMD} --exclude-file \"${EXCLUDE_FILE}\""
         fi
 
         # 添加可选参数
