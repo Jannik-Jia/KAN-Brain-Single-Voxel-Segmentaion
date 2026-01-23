@@ -780,12 +780,6 @@ def compute_metrics(pred_probs: np.ndarray,
     # Brier score: E[(p - q)^2]
     brier = np.mean((pred_probs - true_probs) ** 2)
 
-    # Macro/Micro F1 (基于硬标签)
-    macro_f1 = f1_score(true_hard, pred_hard, average='macro', zero_division=0)
-    micro_f1 = f1_score(true_hard, pred_hard, average='micro', zero_division=0)
-    weighted_f1 = f1_score(true_hard, pred_hard, average='weighted', zero_division=0)
-
-    # Balanced accuracy (显式手写版本，避免 sklearn 隐含行为差异)
     n_classes = pred_probs.shape[1]
     cm_counts = confusion_matrix(true_hard, pred_hard, labels=np.arange(n_classes))
     support = cm_counts.sum(axis=1)  # 每类真实样本数
@@ -793,6 +787,17 @@ def compute_metrics(pred_probs: np.ndarray,
         recall_per_class = np.diag(cm_counts) / np.maximum(support, 1)  # support=0 时 recall=0
     present = support > 0
     balanced_acc = float(np.mean(recall_per_class[present])) if np.any(present) else 0.0
+
+    # Macro/Micro F1 (基于硬标签；宏平均仅在真实出现的类上平均，避免分母随fold变化)
+    f1_per_class = f1_score(
+        true_hard, pred_hard,
+        labels=np.arange(n_classes),
+        average=None,
+        zero_division=0
+    )
+    macro_f1 = float(f1_per_class[present].mean()) if np.any(present) else 0.0
+    micro_f1 = f1_score(true_hard, pred_hard, average='micro', zero_division=0)
+    weighted_f1 = f1_score(true_hard, pred_hard, average='weighted', zero_division=0)
 
     # Cohen's Kappa
     kappa = cohen_kappa_score(true_hard, pred_hard, labels=np.arange(n_classes))
@@ -1567,7 +1572,12 @@ def run_single_split(
         'train_loss': [],
         'val_loss': [],
         'val_nll': [],
-        'val_gross_acc': []
+        'val_gross_acc': [],
+        'val_macro_f1': [],
+        'val_balanced_acc': [],
+        'val_top3_acc': [],
+        'val_top5_acc': [],
+        'lr': []
     }
 
     best_val_nll = float('inf')
@@ -1575,6 +1585,7 @@ def run_single_split(
 
     # 训练循环
     for epoch in range(epochs):
+        current_lr = optimizer.param_groups[0].get('lr', lr)
         logger.info(f"\nEpoch {epoch+1}/{epochs}")
         logger.info("-" * 80)
 
@@ -1610,6 +1621,7 @@ def run_single_split(
 
         avg_train_loss = train_loss_accum / len(train_loader)
         history['train_loss'].append(avg_train_loss)
+        history['lr'].append(current_lr)
 
         # 验证阶段（使用软标签评估）
         model.eval()
@@ -1643,13 +1655,21 @@ def run_single_split(
 
         history['val_nll'].append(val_metrics['nll'])
         history['val_gross_acc'].append(val_metrics['gross_accuracy'])
+        history['val_macro_f1'].append(val_metrics['macro_f1'])
+        history['val_balanced_acc'].append(val_metrics['balanced_accuracy'])
+        history['val_top3_acc'].append(val_metrics['top3_accuracy'])
+        history['val_top5_acc'].append(val_metrics['top5_accuracy'])
 
         logger.info(f"Epoch {epoch+1} 结果:")
+        logger.info(f"  LR: {current_lr:.6g}")
         logger.info(f"  训练损失: {avg_train_loss:.4f}")
         logger.info(f"  验证损失: {avg_val_loss:.4f}")
         logger.info(f"  验证NLL: {val_metrics['nll']:.4f}")
         logger.info(f"  验证Gross Acc: {val_metrics['gross_accuracy']:.4f}")
+        logger.info(f"  验证Balanced Acc: {val_metrics['balanced_accuracy']:.4f}")
         logger.info(f"  验证Macro-F1: {val_metrics['macro_f1']:.4f}")
+        logger.info(f"  验证Top-3: {val_metrics['top3_accuracy']:.4f}")
+        logger.info(f"  验证Top-5: {val_metrics['top5_accuracy']:.4f}")
 
         # 保存最优模型（基于 NLL on soft labels）
         if val_metrics['nll'] < best_val_nll:

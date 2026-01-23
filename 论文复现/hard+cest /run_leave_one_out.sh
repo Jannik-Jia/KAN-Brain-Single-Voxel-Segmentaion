@@ -16,6 +16,10 @@ DATA_ROOT="/home/jovyan/gpu_space/workspace_jiayi/alex_datasets/downsampling/3d"
 # 输出目录
 OUTPUT_DIR="./runs/leave_one_out"
 
+# 需要排除的被试列表（可为空）。默认使用 Fullyconnected_exclude 中的列表。
+# 列表格式：一行一个关键字，文件名中包含该关键字的被试将被过滤掉。
+EXCLUDE_FILE="/Users/jannik/KAN-Brain-Single-Voxel-Segmentaion/Fullyconnected_exclude/B0_1D_training/exclude_subjects.txt"
+
 # ==================== 关键参数：训练监督模式 ====================
 # soft: 使用软标签 q_i 训练 (Soft+CEST)
 # hard: 使用硬标签 one_hot(argmax(q_i)) 训练 (Hard+CEST)
@@ -72,7 +76,38 @@ for file in "${SUBJECT_FILES[@]}"; do
     SUBJECTS+=("$basename")
 done
 
+# 读取排除列表（如果提供）
+EXCLUDE_SUBJECTS=()
+if [ -n "$EXCLUDE_FILE" ]; then
+    if [ ! -f "$EXCLUDE_FILE" ]; then
+        echo "错误: 排除列表不存在: ${EXCLUDE_FILE}"
+        exit 1
+    fi
+    mapfile -t EXCLUDE_SUBJECTS < <(grep -v '^#' "${EXCLUDE_FILE}" | grep -v '^[[:space:]]*$')
+    echo "从排除列表读取到 ${#EXCLUDE_SUBJECTS[@]} 个被试: ${EXCLUDE_SUBJECTS[@]}"
+    # 过滤被试列表
+    FILTERED_SUBJECTS=()
+    for sid in "${SUBJECTS[@]}"; do
+        skip=false
+        for excl in "${EXCLUDE_SUBJECTS[@]}"; do
+            if [[ "$sid" == *"$excl"* ]]; then
+                skip=true
+                break
+            fi
+        done
+        if [ "$skip" = false ]; then
+            FILTERED_SUBJECTS+=("$sid")
+        fi
+    done
+    SUBJECTS=("${FILTERED_SUBJECTS[@]}")
+fi
+
 N_SUBJECTS=${#SUBJECTS[@]}
+
+if [ ${N_SUBJECTS} -lt 2 ]; then
+    echo "错误: 排除后被试数量不足以进行Leave-One-Out (当前 ${N_SUBJECTS})"
+    exit 1
+fi
 
 echo "找到 ${N_SUBJECTS} 个被试"
 echo "被试列表: ${SUBJECTS[@]}"
