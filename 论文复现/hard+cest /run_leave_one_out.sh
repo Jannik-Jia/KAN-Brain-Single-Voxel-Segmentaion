@@ -23,7 +23,8 @@ EXCLUDE_FILE="/Users/jannik/KAN-Brain-Single-Voxel-Segmentaion/Fullyconnected_ex
 # ==================== 关键参数：训练监督模式 ====================
 # soft: 使用软标签 q_i 训练 (Soft+CEST)
 # hard: 使用硬标签 one_hot(argmax(q_i)) 训练 (Hard+CEST)
-SUPERVISION="hard"  # 可选: soft, hard
+# 按顺序运行的监督模式列表（默认先hard后soft）
+SUPERVISION_MODES=("hard" "soft")
 
 # 训练超参数
 EPOCHS=25
@@ -113,37 +114,50 @@ echo "找到 ${N_SUBJECTS} 个被试"
 echo "被试列表: ${SUBJECTS[@]}"
 echo ""
 
-# 创建输出目录（包含supervision标记）
-OUTPUT_DIR_FULL="${OUTPUT_DIR}_${SUPERVISION}"
-mkdir -p ${OUTPUT_DIR_FULL}
-
-# ============================================================================
-# 训练配置摘要
-# ============================================================================
-
-echo "训练配置:"
-echo "  - 监督模式: ${SUPERVISION}"
-echo "  - 数据根目录: ${DATA_ROOT}"
-echo "  - 输出目录: ${OUTPUT_DIR_FULL}"
-echo "  - 训练轮数: ${EPOCHS}"
-echo "  - 批大小: ${BATCH_SIZE}"
-echo "  - 学习率: ${LR}"
-echo "  - 权重衰减: ${WEIGHT_DECAY}"
-echo "  - 梯度裁剪: ${GRAD_CLIP_NORM}"
-echo "  - 使用类权重: ${USE_CLASS_WEIGHTS}"
-if [ "$USE_CLASS_WEIGHTS" = true ]; then
-    echo "  - 类权重alpha: ${CLASS_WEIGHT_ALPHA}"
-fi
-echo "  - 标签来源: ${LABELS_SOURCE}"
-echo "  - ECE bins: ${ECE_N_BINS}"
-echo "  - 随机种子: ${SEED}"
-if [ -n "$MAX_VOX_PER_SUBJECT" ]; then
-    echo "  - 每被试最大体素数: ${MAX_VOX_PER_SUBJECT}"
-fi
+echo "按监督模式顺序运行: ${SUPERVISION_MODES[*]}"
 echo ""
 
-# 保存配置到文件
-cat > ${OUTPUT_DIR_FULL}/config.txt <<EOF
+# ============================================================================
+# 按监督模式依次运行
+# ============================================================================
+
+for SUPERVISION in "${SUPERVISION_MODES[@]}"; do
+
+echo "================================================================"
+echo "开始监督模式: ${SUPERVISION}"
+echo "================================================================"
+
+    # 创建输出目录（包含supervision标记）
+    OUTPUT_DIR_FULL="${OUTPUT_DIR}_${SUPERVISION}"
+    mkdir -p ${OUTPUT_DIR_FULL}
+
+    # ============================================================================
+    # 训练配置摘要
+    # ============================================================================
+
+    echo "训练配置:"
+    echo "  - 监督模式: ${SUPERVISION}"
+    echo "  - 数据根目录: ${DATA_ROOT}"
+    echo "  - 输出目录: ${OUTPUT_DIR_FULL}"
+    echo "  - 训练轮数: ${EPOCHS}"
+    echo "  - 批大小: ${BATCH_SIZE}"
+    echo "  - 学习率: ${LR}"
+    echo "  - 权重衰减: ${WEIGHT_DECAY}"
+    echo "  - 梯度裁剪: ${GRAD_CLIP_NORM}"
+    echo "  - 使用类权重: ${USE_CLASS_WEIGHTS}"
+    if [ "$USE_CLASS_WEIGHTS" = true ]; then
+        echo "  - 类权重alpha: ${CLASS_WEIGHT_ALPHA}"
+    fi
+    echo "  - 标签来源: ${LABELS_SOURCE}"
+    echo "  - ECE bins: ${ECE_N_BINS}"
+    echo "  - 随机种子: ${SEED}"
+    if [ -n "$MAX_VOX_PER_SUBJECT" ]; then
+        echo "  - 每被试最大体素数: ${MAX_VOX_PER_SUBJECT}"
+    fi
+    echo ""
+
+    # 保存配置到文件
+    cat > ${OUTPUT_DIR_FULL}/config.txt <<EOF
 Leave-One-Out Cross-Validation Configuration
 =============================================
 
@@ -172,103 +186,103 @@ $(printf '  - %s\n' "${SUBJECTS[@]}")
 Started: $(date)
 EOF
 
-echo "配置已保存到: ${OUTPUT_DIR_FULL}/config.txt"
-echo ""
-
-# ============================================================================
-# Leave-One-Out训练循环
-# ============================================================================
-
-echo "开始Leave-One-Out交叉验证训练 (${SUPERVISION^^})..."
-echo "========================================"
-echo ""
-
-START_TIME=$(date +%s)
-
-for i in "${!SUBJECTS[@]}"; do
-    TEST_SUBJECT="${SUBJECTS[$i]}"
-
-    # 计算验证集被试：循环后继 (i+1) % N
-    VAL_IDX=$(( (i + 1) % N_SUBJECTS ))
-    VAL_SUBJECT="${SUBJECTS[$VAL_IDX]}"
-
-    FOLD_NUM=$((i + 1))
-    FOLD_NAME="fold_${FOLD_NUM}_test_${TEST_SUBJECT}_${SUPERVISION}"
-
-    echo ""
-    echo ">>> Fold ${FOLD_NUM}/${N_SUBJECTS} (${SUPERVISION^^})"
-    echo ">>> 测试被试: ${TEST_SUBJECT}"
-    echo ">>> 验证被试: ${VAL_SUBJECT}"
-    echo ">>> 保存目录: ${OUTPUT_DIR_FULL}/${FOLD_NAME}"
-    echo "----------------------------------------"
-
-    # 构建训练命令
-    CMD="python train_runner.py \
-        --data-root ${DATA_ROOT} \
-        --test-id ${TEST_SUBJECT} \
-        --val-id ${VAL_SUBJECT} \
-        --seed ${SEED} \
-        --epochs ${EPOCHS} \
-        --batch-size ${BATCH_SIZE} \
-        --lr ${LR} \
-        --weight-decay ${WEIGHT_DECAY} \
-        --grad-clip-norm ${GRAD_CLIP_NORM} \
-        --save-dir ${OUTPUT_DIR_FULL} \
-        --fold-name ${FOLD_NAME} \
-        --supervision ${SUPERVISION} \
-        --labels-source ${LABELS_SOURCE} \
-        --ece-n-bins ${ECE_N_BINS}"
-
-    # 添加可选参数
-    if [ "$USE_CLASS_WEIGHTS" = true ]; then
-        CMD="${CMD} --use-class-weights --class-weight-alpha ${CLASS_WEIGHT_ALPHA}"
-    fi
-
-    if [ -n "$MAX_VOX_PER_SUBJECT" ]; then
-        CMD="${CMD} --max-vox-per-subject ${MAX_VOX_PER_SUBJECT}"
-    fi
-
-    if [ "$SAVE_PREPOST_PREDS" = true ]; then
-        CMD="${CMD} --save-prepost-preds"
-    else
-        CMD="${CMD} --no-save-prepost-preds"
-    fi
-
-    # 执行训练
-    echo "执行命令: ${CMD}"
+    echo "配置已保存到: ${OUTPUT_DIR_FULL}/config.txt"
     echo ""
 
-    eval ${CMD}
+    # ============================================================================
+    # Leave-One-Out训练循环
+    # ============================================================================
 
-    if [ $? -eq 0 ]; then
-        echo "Fold ${FOLD_NUM} 训练完成"
-    else
-        echo "Fold ${FOLD_NUM} 训练失败"
-        echo "错误发生在测试被试: ${TEST_SUBJECT}"
-        # 可选：继续训练其他fold，或者退出
-        # exit 1
-    fi
-
+    echo "开始Leave-One-Out交叉验证训练 (${SUPERVISION^^})..."
+    echo "========================================"
     echo ""
 
-    # 可选：只运行前几个fold进行测试
-    # if [ ${FOLD_NUM} -eq 3 ]; then
-    #     echo "测试模式：只运行前3个fold"
-    #     break
-    # fi
-done
+    START_TIME=$(date +%s)
 
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-HOURS=$((DURATION / 3600))
-MINUTES=$(((DURATION % 3600) / 60))
+    for i in "${!SUBJECTS[@]}"; do
+        TEST_SUBJECT="${SUBJECTS[$i]}"
 
-echo ""
-echo "========================================"
-echo "所有训练完成！"
-echo "总耗时: ${HOURS}小时 ${MINUTES}分钟"
-echo "结果保存在: ${OUTPUT_DIR_FULL}"
-echo ""
+        # 计算验证集被试：循环后继 (i+1) % N
+        VAL_IDX=$(( (i + 1) % N_SUBJECTS ))
+        VAL_SUBJECT="${SUBJECTS[$VAL_IDX]}"
+
+        FOLD_NUM=$((i + 1))
+        FOLD_NAME="fold_${FOLD_NUM}_test_${TEST_SUBJECT}_${SUPERVISION}"
+
+        echo ""
+        echo ">>> Fold ${FOLD_NUM}/${N_SUBJECTS} (${SUPERVISION^^})"
+        echo ">>> 测试被试: ${TEST_SUBJECT}"
+        echo ">>> 验证被试: ${VAL_SUBJECT}"
+        echo ">>> 保存目录: ${OUTPUT_DIR_FULL}/${FOLD_NAME}"
+        echo "----------------------------------------"
+
+        # 构建训练命令
+        CMD="python train_runner.py \
+            --data-root ${DATA_ROOT} \
+            --test-id ${TEST_SUBJECT} \
+            --val-id ${VAL_SUBJECT} \
+            --seed ${SEED} \
+            --epochs ${EPOCHS} \
+            --batch-size ${BATCH_SIZE} \
+            --lr ${LR} \
+            --weight-decay ${WEIGHT_DECAY} \
+            --grad-clip-norm ${GRAD_CLIP_NORM} \
+            --save-dir ${OUTPUT_DIR_FULL} \
+            --fold-name ${FOLD_NAME} \
+            --supervision ${SUPERVISION} \
+            --labels-source ${LABELS_SOURCE} \
+            --ece-n-bins ${ECE_N_BINS}"
+
+        # 添加可选参数
+        if [ "$USE_CLASS_WEIGHTS" = true ]; then
+            CMD="${CMD} --use-class-weights --class-weight-alpha ${CLASS_WEIGHT_ALPHA}"
+        fi
+
+        if [ -n "$MAX_VOX_PER_SUBJECT" ]; then
+            CMD="${CMD} --max-vox-per-subject ${MAX_VOX_PER_SUBJECT}"
+        fi
+
+        if [ "$SAVE_PREPOST_PREDS" = true ]; then
+            CMD="${CMD} --save-prepost-preds"
+        else
+            CMD="${CMD} --no-save-prepost-preds"
+        fi
+
+        # 执行训练
+        echo "执行命令: ${CMD}"
+        echo ""
+
+        eval ${CMD}
+
+        if [ $? -eq 0 ]; then
+            echo "Fold ${FOLD_NUM} 训练完成"
+        else
+            echo "Fold ${FOLD_NUM} 训练失败"
+            echo "错误发生在测试被试: ${TEST_SUBJECT}"
+            # 可选：继续训练其他fold，或者退出
+            # exit 1
+        fi
+
+        echo ""
+
+        # 可选：只运行前几个fold进行测试
+        # if [ ${FOLD_NUM} -eq 3 ]; then
+        #     echo "测试模式：只运行前3个fold"
+        #     break
+        # fi
+    done
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    HOURS=$((DURATION / 3600))
+    MINUTES=$(((DURATION % 3600) / 60))
+
+    echo ""
+    echo "========================================"
+    echo "所有训练完成！"
+    echo "总耗时: ${HOURS}小时 ${MINUTES}分钟"
+    echo "结果保存在: ${OUTPUT_DIR_FULL}"
+    echo ""
 
 # ============================================================================
 # 生成汇总报告
@@ -572,3 +586,10 @@ echo "  - soft_ece = ECE^soft (calibration against q)"
 echo "  - nll = NLL(q, p) (soft cross-entropy)"
 echo "  - 所有指标基于温度缩放校准后的预测"
 echo "========================================"
+
+echo ""
+echo "================================================================"
+echo "模式 ${SUPERVISION} 全部完成"
+echo "================================================================"
+
+done
