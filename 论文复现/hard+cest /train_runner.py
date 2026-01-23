@@ -1283,6 +1283,7 @@ class TemperatureScaler:
 
 def run_single_split(
     data_root: str,
+    exclude_file: Optional[str] = None,
     val_id: Optional[str] = None,
     test_id: Optional[str] = None,
     seed: int = 42,
@@ -1307,6 +1308,7 @@ def run_single_split(
 
     Args:
         data_root: 数据根目录（包含1d/和3d/子目录）
+        exclude_file: 可选，包含需要排除的被试关键字的文件（每行一个，支持部分匹配，忽略空行/注释）
         val_id: 验证集被试ID（可选）
         test_id: 测试集被试ID（可选）
         seed: 随机种子
@@ -1391,10 +1393,44 @@ def run_single_split(
     all_npz_files = sorted(dir_1d.glob('*_1d.npz'))
     all_subject_ids = [f.stem.replace('_1d', '') for f in all_npz_files]
 
-    logger.info(f"找到 {len(all_subject_ids)} 个被试")
+    logger.info(f"初始找到 {len(all_subject_ids)} 个被试")
+
+    # 应用排除列表（可选）
+    if exclude_file is not None:
+        exclude_path = Path(exclude_file)
+        if not exclude_path.exists():
+            raise FileNotFoundError(f"排除列表不存在: {exclude_path}")
+
+        with open(exclude_path, 'r') as f:
+            exclude_keywords = [
+                line.strip() for line in f
+                if line.strip() and not line.strip().startswith('#')
+            ]
+
+        if exclude_keywords:
+            filtered_ids = []
+            excluded_ids = []
+            for sid in all_subject_ids:
+                if any(keyword in sid for keyword in exclude_keywords):
+                    excluded_ids.append(sid)
+                else:
+                    filtered_ids.append(sid)
+
+            logger.info(f"应用排除列表 {exclude_path}，过滤掉 {len(excluded_ids)} 个被试: {excluded_ids}")
+            all_subject_ids = filtered_ids
+        else:
+            logger.warning(f"排除列表 {exclude_path} 为空，未过滤任何被试")
+
+    logger.info(f"过滤后保留 {len(all_subject_ids)} 个被试: {all_subject_ids}")
 
     if len(all_subject_ids) < 3:
         raise ValueError(f"被试数不足3个，无法划分36/1/1")
+
+    # 确认指定的测试/验证被试未被排除
+    if test_id is not None and test_id not in all_subject_ids:
+        raise ValueError(f"指定的测试被试 {test_id} 不在过滤后的被试列表中")
+    if val_id is not None and val_id not in all_subject_ids:
+        raise ValueError(f"指定的验证被试 {val_id} 不在过滤后的被试列表中")
 
     # 划分被试
     split_info = split_subjects(all_subject_ids, test_id=test_id, val_id=val_id, seed=seed)
@@ -2185,6 +2221,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='单轮训练脚本 (36/1/1 Split) - 支持 Soft/Hard CEST')
     parser.add_argument('--data-root', type=str, required=True,
                        help='数据根目录（包含1d/和3d/子目录）')
+    parser.add_argument('--exclude-file', type=str, default=None,
+                       help='可选，包含需排除的被试关键字的文件路径（每行一个，忽略空行和#注释）')
     parser.add_argument('--val-id', type=str, default=None,
                        help='验证集被试ID（可选）')
     parser.add_argument('--test-id', type=str, default=None,
@@ -2229,6 +2267,7 @@ if __name__ == '__main__':
 
     run_single_split(
         data_root=args.data_root,
+        exclude_file=args.exclude_file,
         val_id=args.val_id,
         test_id=args.test_id,
         seed=args.seed,

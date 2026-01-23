@@ -139,6 +139,7 @@ echo "================================================================"
     echo "  - 监督模式: ${SUPERVISION}"
     echo "  - 数据根目录: ${DATA_ROOT}"
     echo "  - 输出目录: ${OUTPUT_DIR_FULL}"
+    echo "  - 排除列表: ${EXCLUDE_FILE:-"(未设置)"}"
     echo "  - 训练轮数: ${EPOCHS}"
     echo "  - 批大小: ${BATCH_SIZE}"
     echo "  - 学习率: ${LR}"
@@ -165,6 +166,9 @@ Supervision Mode: ${SUPERVISION}
 Data Root: ${DATA_ROOT}
 Output Directory: ${OUTPUT_DIR_FULL}
 Number of Subjects: ${N_SUBJECTS}
+Exclude File: ${EXCLUDE_FILE:-"(none)"}
+Excluded Keywords (${#EXCLUDE_SUBJECTS[@]}):
+$(printf '  - %s\n' "${EXCLUDE_SUBJECTS[@]}")
 
 Training Parameters:
   - Epochs: ${EPOCHS}
@@ -232,6 +236,10 @@ EOF
             --supervision ${SUPERVISION} \
             --labels-source ${LABELS_SOURCE} \
             --ece-n-bins ${ECE_N_BINS}"
+
+        if [ -n "$EXCLUDE_FILE" ]; then
+            CMD="${CMD} --exclude-file ${EXCLUDE_FILE}"
+        fi
 
         # 添加可选参数
         if [ "$USE_CLASS_WEIGHTS" = true ]; then
