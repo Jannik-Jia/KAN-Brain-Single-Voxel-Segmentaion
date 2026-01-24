@@ -10,13 +10,15 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
+import h5py
 import numpy as np
 import torch
 from sklearn.metrics import precision_recall_fscore_support
-from torch.utils.data import DataLoader
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from train_1d_with_3d_dataset import RegModel, Brain1D_Dataset, TestDataset
+from train_1d_with_3d_dataset import RegModel
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,6 +72,154 @@ def parse_args() -> argparse.Namespace:
         help="DataLoader workers.",
     )
     return parser.parse_args()
+
+
+def infer_input_dim(state_dict: Dict[str, torch.Tensor]) -> int:
+    """Infer input dimension from the first linear layer weight shape."""
+    fc1_keys = [k for k in state_dict.keys() if k.endswith("fc1.weight")]
+    if not fc1_keys:
+        raise ValueError("Cannot find fc1.weight in checkpoint to infer input_dim.")
+    fc1_weight = state_dict[fc1_keys[0]]
+    return int(fc1_weight.shape[1])
+
+
+class FlexibleBrain1DDataset(Dataset):
+    """
+    1D dataset loader with configurable input_dim (uses scaler if provided).
+    Mirrors Brain1D_Dataset but allows arbitrary input_dim inferred from checkpoint.
+    """
+
+    def __init__(
+        self,
+        mat_files: list,
+        is_train: bool,
+        scaler: Optional[StandardScaler],
+        input_dim: int,
+    ):
+        self.mat_files = mat_files
+        self.is_train = is_train
+        self.scaler = scaler
+        self.input_dim = input_dim
+
+        self.all_data = []
+        self.all_labels = []
+
+        for mat_file in mat_files:
+            with h5py.File(mat_file, "r") as f:
+                multidim_data = f["multidim_data"][()]
+                seg_one_hot = f["seg_one_hot"][()]
+
+                if multidim_data.shape[0] == 351:
+                    multidim_data = multidim_data.T
+                if seg_one_hot.shape[0] == 102:
+                    seg_one_hot = seg_one_hot.T
+
+                if multidim_data.shape[1] < input_dim:
+                    raise ValueError(
+                        f"{mat_file} has only {multidim_data.shape[1]} features, "
+                        f"but model expects {input_dim}"
+                    )
+
+                multidim_data = multidim_data[:, :input_dim]
+                labels = np.argmax(seg_one_hot, axis=1)
+
+                self.all_data.append(multidim_data.astype(np.float32))
+                self.all_labels.append(labels.astype(np.int64))
+
+        self.all_data = np.vstack(self.all_data)
+        self.all_labels = np.concatenate(self.all_labels)
+
+        if self.scaler is None:
+            if not is_train:
+                raise ValueError("Scaler is required for eval; checkpoint should contain it.")
+            self.scaler = StandardScaler()
+            self.all_data = self.scaler.fit_transform(self.all_data).astype(np.float32)
+        else:
+            if hasattr(self.scaler, "mean_") and self.scaler.mean_.shape[0] != input_dim:
+                raise ValueError(
+                    f"Scaler feature dim {self.scaler.mean_.shape[0]} != input_dim {input_dim}"
+                )
+            self.all_data = self.scaler.transform(self.all_data).astype(np.float32)
+
+    def __len__(self):
+        return len(self.all_data)
+
+    def __getitem__(self, idx):
+        return self.all_data[idx], self.all_labels[idx]
+
+
+class FlexibleTestDataset(Dataset):
+    """
+    Test dataset with configurable input_dim; loads 1D features and 3D labels for alignment.
+    """
+
+    def __init__(
+        self,
+        mat_file_1d: Path,
+        mat_file_3d: Path,
+        scaler: StandardScaler,
+        input_dim: int,
+    ):
+        if scaler is None:
+            raise ValueError("Scaler is required for test dataset.")
+
+        with h5py.File(mat_file_1d, "r") as f:
+            multidim_data = f["multidim_data"][()]
+            seg_one_hot = f["seg_one_hot"][()]
+
+            if multidim_data.shape[0] == 351:
+                multidim_data = multidim_data.T
+            if seg_one_hot.shape[0] == 102:
+                seg_one_hot = seg_one_hot.T
+
+            if multidim_data.shape[1] < input_dim:
+                raise ValueError(
+                    f"{mat_file_1d} has only {multidim_data.shape[1]} features, "
+                    f"but model expects {input_dim}"
+                )
+
+            multidim_data = multidim_data[:, :input_dim]
+            self.features = multidim_data.astype(np.float32)
+            self.labels = np.argmax(seg_one_hot, axis=1).astype(np.int64)
+
+        with h5py.File(mat_file_3d, "r") as f:
+            region_mask = f["region_mask"][()]
+            region_labels = f["region_labels"][()]
+
+            assert region_mask.shape == (384, 336, 256), (
+                f"region_mask shape {region_mask.shape} invalid for {mat_file_3d}"
+            )
+            assert region_labels.shape == (384, 336, 256), (
+                f"region_labels shape {region_labels.shape} invalid for {mat_file_3d}"
+            )
+
+            self.region_mask = region_mask
+            self.region_labels = region_labels
+
+        if hasattr(scaler, "mean_") and scaler.mean_.shape[0] != input_dim:
+            raise ValueError(
+                f"Scaler feature dim {scaler.mean_.shape[0]} != input_dim {input_dim}"
+            )
+        self.features = scaler.transform(self.features).astype(np.float32)
+
+        # Label alignment check
+        mask = self.region_mask.astype(bool)
+        labels_3d = self.region_labels[mask]
+        if len(labels_3d) != len(self.labels):
+            raise ValueError(
+                f"Label count mismatch: 1D={len(self.labels)} vs 3D={len(labels_3d)}"
+            )
+        if not np.array_equal(labels_3d, self.labels):
+            mismatch = np.sum(labels_3d != self.labels)
+            raise AssertionError(
+                f"1D/3D labels mismatch: {mismatch}/{len(self.labels)} voxels differ"
+            )
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        return self.features[idx], self.labels[idx]
 
 
 def build_split_files(
@@ -214,21 +364,33 @@ def run_full_evaluation(
     checkpoint = torch.load(ckpt_path, map_location="cpu")
     saved_args = checkpoint.get("args", {})
     test_subject = int(saved_args.get("test_subject", 1))
+    state_dict = checkpoint["model_state_dict"]
+    input_dim = infer_input_dim(state_dict)
 
     scaler = checkpoint.get("scaler")
     if scaler is None:
         raise ValueError(f"Checkpoint {ckpt_path} does not contain a scaler.")
 
-    model = RegModel(input_dim=341, num_classes=102)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model = RegModel(input_dim=input_dim, num_classes=102)
+    model.load_state_dict(state_dict)
     model = model.to(device)
 
     train_files_1d, test_file_1d, test_file_3d, test_subject_name, subject_names = build_split_files(
         data_dir_1d, data_dir_3d, test_subject
     )
 
-    train_dataset = Brain1D_Dataset(train_files_1d, is_train=False, scaler=scaler)
-    test_dataset = TestDataset(test_file_1d, test_file_3d, scaler)
+    train_dataset = FlexibleBrain1DDataset(
+        train_files_1d,
+        is_train=False,
+        scaler=scaler,
+        input_dim=input_dim,
+    )
+    test_dataset = FlexibleTestDataset(
+        test_file_1d,
+        test_file_3d,
+        scaler,
+        input_dim=input_dim,
+    )
 
     train_metrics = evaluate_split(
         model,
@@ -257,6 +419,7 @@ def run_full_evaluation(
         "data_dir_1d": str(data_dir_1d),
         "data_dir_3d": str(data_dir_3d),
         "batch_size": batch_size,
+        "input_dim": input_dim,
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
         "gc": gc_metrics,
