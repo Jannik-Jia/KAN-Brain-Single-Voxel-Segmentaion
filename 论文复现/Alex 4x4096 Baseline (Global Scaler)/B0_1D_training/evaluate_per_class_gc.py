@@ -504,15 +504,23 @@ def main():
     else:
         ckpt_paths = [Path(args.checkpoint)]
 
+    print(f"Found {len(ckpt_paths)} checkpoint(s)")
+
     if not ckpt_paths:
         raise SystemExit("No checkpoints found to evaluate.")
 
     for ckpt_path in ckpt_paths:
+        print(f"\nLoading {ckpt_path.name}...")
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         saved_args = checkpoint.get("args", {})
         if not saved_args:
-            print(f"Skipping {ckpt_path} (missing args).")
+            print(f"  Skipping (missing args).")
             continue
+
+        print(f"  test_subject: {saved_args.get('test_subject')}")
+        print(f"  data_dir_1d: {saved_args.get('data_dir_1d')}")
+        print(f"  data_dir_3d: {saved_args.get('data_dir_3d')}")
+        print("  Starting evaluation...")
 
         result = evaluate_with_fallback(ckpt_path, args, saved_args, device)
 
